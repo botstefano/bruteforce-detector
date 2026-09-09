@@ -6,13 +6,17 @@ decisiones tomadas por los detectores (reglas y ML).
 import sqlite3
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
-DB_PATH = "data/eventos.db"
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+DB_PATH = DATA_DIR / "eventos.db"
 
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     try:
         yield conn

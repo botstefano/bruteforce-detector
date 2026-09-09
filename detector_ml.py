@@ -79,9 +79,10 @@ class DetectorML:
 
         pred = self.modelo.predict([features])[0]  # -1 anomalía, 1 normal
         score = float(self.modelo.decision_function([features])[0])
+        alerta = bool(pred == -1)
 
         return {
-            "alerta": pred == -1,
+            "alerta": alerta,
             "score": round(score, 4),
             "features": features,
         }
