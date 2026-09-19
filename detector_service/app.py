@@ -198,6 +198,13 @@ detector_reglas = DetectorReglas()
 detector_ml = DetectorML()
 detector_ml.entrenar_con_datos_normales(generar_muestras_normales())
 
+# Inicializar la base de datos al cargar el módulo (crucial para Gunicorn en Render)
+try:
+    db.init_db()
+except Exception as _e:
+    import sys
+    print(f"[ERROR] Error al inicializar la base de datos SQLite: {_e}", file=sys.stderr, flush=True)
+
 estado_modelo = {
     "fuente": "sintetico",
     "detalle": "Entrenado con datos sintéticos generados al arrancar el servidor. "
