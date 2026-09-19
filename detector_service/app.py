@@ -64,7 +64,56 @@ from entrenar_con_cicids import (
 load_dotenv()
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY") or secrets.token_urlsafe(48)
+
+_SECRET_KEY_CARGADA = os.getenv("SECRET_KEY")
+if not _SECRET_KEY_CARGADA or len(_SECRET_KEY_CARGADA.strip()) < 16:
+    # IMPORTANTE (Render / cualquier PaaS):
+    # Si SECRET_KEY NO está definida como env var fija, cada restart
+    # del proceso inventa una nueva key y TODAS las cookies session
+    # de los usuarios quedan invalidadas -> "contraseña correcta
+    # pero no ingresa a nada". Registramos warning en stderr.
+    import sys as _sys
+    print(
+        "[WARN] SECRET_KEY no está configurada (o tiene <16 chars). "
+        "Generando una efímera — cada restart invalidará las cookies del dashboard. "
+        "Configura SECRET_KEY=32+chars como variable de entorno fija para producción.",
+        file=_sys.stderr,
+        flush=True,
+    )
+    app.config["SECRET_KEY"] = secrets.token_urlsafe(48)
+else:
+    app.config["SECRET_KEY"] = _SECRET_KEY_CARGADA.strip()
+
+# -----------------------------------------------------------------
+# Configuración robusta de cookies de sesión para Render (HTTPS)
+#   - ProxyFix con x_proto=1 ya convierte request.is_secure=True cuando
+#     Render envía X-Forwarded-Proto: https.
+#   - SESSION_COOKIE_SECURE=True => navegador SÓLO envía la cookie por HTTPS
+#     (sin esto, algunos navegadores la borran al hacer redirects 30x
+#      mixto http/https y parece que el login "no hace nada").
+#   - SameSite=Lax => permite que la cookie viaje en el primer GET después
+#     de un redirect externo.
+#   - HttpOnly=True => JS no puede leerla (mitiga XSS contra la session).
+# -----------------------------------------------------------------
+_FORZAR_HTTPS_COOKIES = os.getenv("SESSION_COOKIE_SECURE", "").strip().lower()
+if _FORZAR_HTTPS_COOKIES in ("1", "true", "yes", "on"):
+    app.config["SESSION_COOKIE_SECURE"] = True
+elif _FORZAR_HTTPS_COOKIES in ("0", "false", "no", "off"):
+    app.config["SESSION_COOKIE_SECURE"] = False
+else:
+    # Autodetección segura para entornos con proxy tipo Render:
+    # Si TRUSTED_PROXIES está activo, asumimos HTTPS en producción.
+    if bool(os.getenv("TRUSTED_PROXIES", "").strip()):
+        app.config["SESSION_COOKIE_SECURE"] = True
+    else:
+        app.config["SESSION_COOKIE_SECURE"] = False
+
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+_SAMESITE = os.getenv("SESSION_COOKIE_SAMESITE", "Lax").strip() or "Lax"
+app.config["SESSION_COOKIE_SAMESITE"] = _SAMESITE
+app.config["PREFERRED_URL_SCHEME"] = (
+    "https" if app.config["SESSION_COOKIE_SECURE"] else "http"
+)
 
 # =====================================================================
 # ProxyFix para entornos detrás de balanceadores (Render, Cloudflare, etc.)
@@ -214,7 +263,10 @@ def login_dashboard():
             session["admin_autenticado"] = True
             session["admin_expira"] = time.time() + DASHBOARD_TOKEN_EXPIRY_SEG
             if request.is_json:
-                return jsonify({"status": "ok"})
+                return jsonify({
+                    "status": "ok",
+                    "redirect": url_for("dashboard"),
+                })
             return redirect(url_for("dashboard"))
         if request.is_json:
             return jsonify({"error": "contraseña incorrecta"}), 401

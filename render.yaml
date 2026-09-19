@@ -70,6 +70,10 @@ services:
         value: render
       - key: SOCKETIO_ASYNC_MODE
         value: eventlet
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
+      - key: SESSION_COOKIE_SAMESITE
+        value: "Lax"
       - key: PERMITIR_LOCALHOST_BOT
         value: "0"
       - key: DB_PATH

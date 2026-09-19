@@ -74,11 +74,14 @@ document.getElementById('form-login').addEventListener('submit', async (e) => {
     const res = await fetch('/login-admin', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
+      credentials: 'same-origin',
       body: JSON.stringify({password})
     });
     const data = await res.json().catch(()=> ({}));
     if (res.ok && data && data.status === 'ok') {
-      location.reload();
+      // Redirige explícitamente al dashboard (no location.reload) para
+      // forzar un GET limpio con la cookie session recién guardada.
+      window.location.href = data.redirect || '/';
     } else {
       errEl.textContent = (data && data.error) ? data.error : 'Error al autenticar';
       errEl.classList.add('visible');
