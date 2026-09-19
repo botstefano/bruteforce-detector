@@ -9,7 +9,7 @@
 #     a sintético (no hay persistencia).
 #   · Socket.IO del dashboard se desconecta al dormir; refresca
 #     manualmente la página cuando reingreses.
-#   · El build tarda ~3-5 min (numpy + scikit-learn).
+#   · El build tarda ~2-3 min (usa wheels pre-compiladas manylinux, no requiere compilar).
 #
 # Si luego quieres pasar a plan Starter ($7/mes) y recuperar la
 # persistencia real, usa la plantilla render.plan_starter.yaml
@@ -45,8 +45,16 @@ services:
         value: 3.11.9          # Hint a Render para NO usar Python 3.14/3.13 (gevent no compila ahí)
       - key: PYTHONUNBUFFERED
         value: "1"
-      - key: PIP_NO_BINARY
-        value: ":all:"         # Evita wheels pre-compiladas que no coincidan con la arch de Render si las hay
+      # ------------------------------------------------------------------
+      # IMPORTANTE: NO definir PIP_NO_BINARY=:all: aquí.
+      # scipy 1.14.x requiere compilador Fortran (gfortran) para compilar
+      # desde sdist, y el buildpack Python estándar de Render NO lo incluye.
+      # Render usa x86_64 Debian 12 → wheels manylinux2014_x86_64/cp311
+      # publicados oficialmente por numpy/scipy/scikit-learn/pandas sí
+      # funcionan perfectamente y evitan la fase de compilación completa.
+      # Si algún día necesitas build desde fuente, migra al deploy Dockerfile
+      # (ya incluido en el repo) y apt install gfortran libopenblas-dev.
+      # ------------------------------------------------------------------
       - key: FLASK_ENV
         value: production
       - key: SECRET_KEY
