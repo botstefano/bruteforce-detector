@@ -28,7 +28,18 @@ services:
     plan: free              # FREE TIER — sin tarjeta, pero con idle + sin persistencia
     numInstances: 1          # IMPRESCINDIBLE: 1 sola instancia para Socket.IO
     buildCommand: |
-      pip install --upgrade pip && pip install -r requirements.txt
+      unset PIP_NO_BINARY ;
+      export PIP_PREFER_BINARY=1 ;
+      export PIP_ONLY_BINARY=numpy,scipy,scikit-learn,pandas ;
+      python --version ;
+      echo "PIP env BEFORE pip install:" ;
+      printenv | grep -i PIP || true ;
+      pip install --upgrade pip && \
+      pip install \
+        --only-binary=numpy,scipy,scikit-learn,pandas \
+        --prefer-binary \
+        --disable-pip-version-check \
+        -r requirements.txt
     startCommand: |
       cd detector_service && gunicorn \
         -k eventlet \
@@ -46,15 +57,32 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
       # ------------------------------------------------------------------
-      # IMPORTANTE: NO definir PIP_NO_BINARY=:all: aquí.
-      # scipy 1.14.x requiere compilador Fortran (gfortran) para compilar
-      # desde sdist, y el buildpack Python estándar de Render NO lo incluye.
-      # Render usa x86_64 Debian 12 → wheels manylinux2014_x86_64/cp311
-      # publicados oficialmente por numpy/scipy/scikit-learn/pandas sí
-      # funcionan perfectamente y evitan la fase de compilación completa.
-      # Si algún día necesitas build desde fuente, migra al deploy Dockerfile
-      # (ya incluido en el repo) y apt install gfortran libopenblas-dev.
+      # FORTIFICACIÓN MULTI-CAPA CONTRA EL FALLO "gfortran not found" en scipy:
+      #
+      # · Layer 1 (buildCommand): `unset PIP_NO_BINARY` + --only-binary en CLI
+      #   para ANULAR cualquier variable persistente que quedara guardada en
+      #   el UI de Render tras un deploy anterior (Blueprint no borra env vars
+      #   eliminadas del YAML — es un gotcha conocido).
+      #
+      # · Layer 2 (envVars): declaramos PIP_ONLY_BINARY y PIP_PREFER_BINARY
+      #   en el propio servicio, por si el buildCommand heredara env vars del
+      #   entorno del dyno antes de ejecutarse.
+      #
+      # · Layer 3 (requerimientos): versiones pinneadas 100% compatibles con
+      #   wheels manylinux2014_x86_64/cp311 publicados oficialmente en PyPI.
+      #
+      # Render usa x86_64 Debian 12 / glibc 2.36; los wheels manylinux2014
+      # requieren glibc >=2.17 así que matchean perfectamente y evitan por
+      # completo la compilación sdist (meson + gfortran + libopenblas).
+      # Si algún día necesitas build-from-fuente, pasa al Dockerfile del repo
+      # y apt install gfortran libopenblas-dev liblapack-dev.
       # ------------------------------------------------------------------
+      - key: PIP_NO_BINARY
+        value: ""                # String vacío = sobrescribe en Blueprint valores persistentes del UI
+      - key: PIP_ONLY_BINARY
+        value: "numpy,scipy,scikit-learn,pandas"
+      - key: PIP_PREFER_BINARY
+        value: "1"
       - key: FLASK_ENV
         value: production
       - key: SECRET_KEY
