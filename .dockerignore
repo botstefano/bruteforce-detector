@@ -1,0 +1,63 @@
+# Virtual environments (NUNCA se copian a la imagen)
+venv/
+.venv/
+env/
+ENV/
+venv_*/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+.Python
+
+# Env files (NUNCA se copian — podrían contener SECRET_KEYs reales)
+.env
+.env.*
+!.env.*.example
+
+# Bases de datos y datos efímeros locales
+*.db
+*.sqlite
+*.sqlite3
+detector_service/data/
+data/
+
+# Artifacts entrenamiento ML locales
+*.joblib
+*.pkl
+modelos_entrenados/
+resultados_*.csv
+
+# Logs
+logs/
+*.log
+_pip_*.txt
+_chk_pip.py
+pip_report.json
+_check_pip_*.json
+_chk_pip2.py
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# MD / Docs no necesarios en runtime
+README.md
+*.md

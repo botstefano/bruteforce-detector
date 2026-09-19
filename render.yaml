@@ -1,19 +1,25 @@
 # ============================================================
 # Blueprint Render — Centinela v2 Detector (PLAN FREE)
+# MODO DOCKER: evita 100% los comportamientos ocultos del
+# buildpack Python de Render (pip install automático previo
+# al buildCommand, variables persistidas no sincronizables,
+# falta de gfortran en imagen base sdist-build, etc.)
 #
 # NOTAS SOBRE FREE TIER (léelas antes de desplegar):
 #   · Render Free NO admite "disk:" persistente → la DB SQLite vive
-#     en el filesystem efímero de la instancia.
+#     en /data del contenedor (efímero: se borra al dormir/reiniciar).
 #   · Idle timeout: 15 min SIN tráfico → la instancia se duerme.
 #     Al despertar: se BORRAN bloqueos, eventos y el modelo ML vuelve
 #     a sintético (no hay persistencia).
 #   · Socket.IO del dashboard se desconecta al dormir; refresca
 #     manualmente la página cuando reingreses.
-#   · El build tarda ~2-3 min (usa wheels pre-compiladas manylinux, no requiere compilar).
+#   · El build Docker tarda ~4-7 min la PRIMERA vez (descarga imagen
+#     python slim + wheels manylinux). Los siguientes builds usan
+#     layer cache y tardan ~1-2 min.
 #
 # Si luego quieres pasar a plan Starter ($7/mes) y recuperar la
-# persistencia real, usa la plantilla render.plan_starter.yaml
-# o vuelve a añadir la sección "disk:" + DB_PATH=/data/...
+# persistencia real, añade la sección "disk:" abajo indicada y
+# reinicia el servicio.
 #
 # USO: Render > New + > Blueprint > selecciona tu repo
 # IMPORTANTE: después del primer deploy entra al servicio y
@@ -23,72 +29,41 @@
 services:
   - type: web
     name: centinela-v2-detector
-    env: python
+    # -----------------------------
+    # MODO DOCKER (en vez de env:python)
+    # -----------------------------
+    env: docker
+    dockerfilePath: ./Dockerfile         # Dockerfile en la raíz
+    dockerContext: .                     # Contexto de build = raíz del repo
+
     region: oregon
     plan: free              # FREE TIER — sin tarjeta, pero con idle + sin persistencia
-    numInstances: 1          # IMPRESCINDIBLE: 1 sola instancia para Socket.IO
-    buildCommand: |
-      unset PIP_NO_BINARY ;
-      export PIP_PREFER_BINARY=1 ;
-      export PIP_ONLY_BINARY=numpy,scipy,scikit-learn,pandas ;
-      python --version ;
-      echo "PIP env BEFORE pip install:" ;
-      printenv | grep -i PIP || true ;
-      pip install --upgrade pip && \
-      pip install \
-        --only-binary=numpy,scipy,scikit-learn,pandas \
-        --prefer-binary \
-        --disable-pip-version-check \
-        -r requirements.txt
-    startCommand: |
-      cd detector_service && gunicorn \
-        -k eventlet \
-        -w 1 \
-        --worker-connections 1000 \
-        --timeout 180 \
-        --keep-alive 60 \
-        --access-logfile - \
-        --error-logfile - \
-        -b 0.0.0.0:$PORT \
-        app:app
+    numInstances: 1          # IMPRESCINDIBLE: 1 sola instancia para Socket.IO (sin Redis pub/sub)
+
+    # ------------------------------------------------------------------
+    # ⚠️ En modo DOCKER se IGNORA buildCommand / startCommand del YAML:
+    #    - Build se toma de los "RUN ..." del Dockerfile (incluyendo
+    #      pip install con --only-binary para numpy/scipy/sklearn/pandas).
+    #    - Runtime se toma del CMD/ENTRYPOINT del Dockerfile (el CMD
+    #      ya usa ${PORT:-5050} para respetar el puerto dinámico de Render).
+    # ------------------------------------------------------------------
+
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.9          # Hint a Render para NO usar Python 3.14/3.13 (gevent no compila ahí)
       - key: PYTHONUNBUFFERED
         value: "1"
       # ------------------------------------------------------------------
-      # FORTIFICACIÓN MULTI-CAPA CONTRA EL FALLO "gfortran not found" en scipy:
-      #
-      # · Layer 1 (buildCommand): `unset PIP_NO_BINARY` + --only-binary en CLI
-      #   para ANULAR cualquier variable persistente que quedara guardada en
-      #   el UI de Render tras un deploy anterior (Blueprint no borra env vars
-      #   eliminadas del YAML — es un gotcha conocido).
-      #
-      # · Layer 2 (envVars): declaramos PIP_ONLY_BINARY y PIP_PREFER_BINARY
-      #   en el propio servicio, por si el buildCommand heredara env vars del
-      #   entorno del dyno antes de ejecutarse.
-      #
-      # · Layer 3 (requerimientos): versiones pinneadas 100% compatibles con
-      #   wheels manylinux2014_x86_64/cp311 publicados oficialmente en PyPI.
-      #
-      # Render usa x86_64 Debian 12 / glibc 2.36; los wheels manylinux2014
-      # requieren glibc >=2.17 así que matchean perfectamente y evitan por
-      # completo la compilación sdist (meson + gfortran + libopenblas).
-      # Si algún día necesitas build-from-fuente, pasa al Dockerfile del repo
-      # y apt install gfortran libopenblas-dev liblapack-dev.
+      # Runtime env vars (el Dockerfile ya tiene defaults en ENV pero
+      # el Blueprint/Sync puede sobreescribirlas aquí si hace falta).
+      # NOTA: PIP_* no hace falta aquí en modo Docker — los seteamos
+      # dentro del propio Dockerfile para que se apliquen DURANTE el
+      # build de la imagen (cuando pip realmente corre).
       # ------------------------------------------------------------------
-      - key: PIP_NO_BINARY
-        value: ""                # String vacío = sobrescribe en Blueprint valores persistentes del UI
-      - key: PIP_ONLY_BINARY
-        value: "numpy,scipy,scikit-learn,pandas"
-      - key: PIP_PREFER_BINARY
-        value: "1"
       - key: FLASK_ENV
         value: production
       - key: SECRET_KEY
         generateValue: true
       - key: DASHBOARD_PASSWORD
-        sync: false            # Configúrala manualmente tras el deploy
+        sync: false            # Configúrala manualmente tras el deploy (NUNCA la comitees)
       - key: DURACION_BLOQUEO_SEGUNDOS
         value: 300
       - key: TRUSTED_PROXIES
@@ -98,8 +73,22 @@ services:
       - key: PERMITIR_LOCALHOST_BOT
         value: "0"
       - key: DB_PATH
-        value: /opt/render/project/src/detector_service/data/centinela_eventos.db   # Free tier: carpeta local (efímera)
+        value: /data/centinela_eventos.db   # Free tier: /data del container (efímero)
       - key: ALLOWED_ORIGINS
         value: "*"             # Cambia por https://TU_SUBDOMINIO.onrender.com para mayor seguridad
+
+    # ------------------------------------------------------------------
+    # PERSISTENCIA OPCIONAL (SÓLO PLAN STARTER $7/mes O SUPERIOR):
+    # Descomenta el bloque de abajo para disco 1GB persistente y
+    # recuerda que DB_PATH ya apunta a /data para esto.
+    # En plan FREE Render ignora silenciosamente la sección "disk:"
+    # y /data seguirá siendo efímero.
+    #
+    # disk:
+    #   name: centinela-data
+    #   mountPath: /data
+    #   sizeGB: 1
+    # ------------------------------------------------------------------
+
     autoDeploy: true
     healthCheckPath: /health
