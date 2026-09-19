@@ -19,15 +19,22 @@ USO:
     python app_login_demo.py
     (Centinela debe estar corriendo en http://localhost:5050)
 """
+import os
+import secrets
+from dotenv import load_dotenv
+
 import requests
 from flask import Flask, request, jsonify, render_template
 
+load_dotenv()
+
 app = Flask(__name__)
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY") or secrets.token_urlsafe(32)
+DEBUG_MODE = os.getenv("FLASK_ENV", "production").lower() == "development"
 
-DETECTOR_URL = "http://localhost:5050"
+DETECTOR_URL = os.getenv("DETECTOR_URL", "http://localhost:5050").rstrip("/")
+CENTINELA_TIMEOUT = float(os.getenv("CENTINELA_TIMEOUT", "2"))
 
-# Base de usuarios de ESTE sistema (nada que ver con Centinela).
-# En un caso real, esto sería tu base de datos de usuarios de siempre.
 USUARIOS_DEL_SITIO = {
     "admin": "S3guro#2026",
     "carla": "MiClave!789",
@@ -42,12 +49,16 @@ def _ip_del_atacante():
     cabecera existe de verdad, pero solo debe confiarse en ella si el
     proxy está configurado para sobreescribirla correctamente -- de lo
     contrario, un atacante podría falsificarla."""
-    return request.headers.get("X-Forwarded-For", request.remote_addr)
+    trusted_proxies = os.getenv("TRUSTED_PROXIES")
+    xff = request.headers.get("X-Forwarded-For")
+    if trusted_proxies and xff:
+        return xff.split(",")[0].strip() or request.remote_addr
+    return xff or request.remote_addr or "0.0.0.0"
 
 
 @app.route("/login", methods=["POST"])
 def login():
-    data = request.get_json(force=True) or {}
+    data = request.get_json(force=True, silent=True) or {}
     ip = _ip_del_atacante()
     usuario = data.get("usuario", "")
     password = data.get("password", "")
@@ -55,7 +66,8 @@ def login():
     # ---- PASO 1: preguntarle a Centinela si esta IP ya está bloqueada ----
     try:
         resp = requests.post(f"{DETECTOR_URL}/evaluar",
-                              json={"ip": ip, "usuario": usuario}, timeout=2)
+                              json={"ip": ip, "usuario": usuario},
+                              timeout=CENTINELA_TIMEOUT)
         resultado = resp.json()
     except requests.exceptions.RequestException:
         # Si Centinela no responde, este demo NO bloquea (fail-open).
@@ -69,6 +81,7 @@ def login():
         return jsonify({
             "status": "rechazado",
             "mensaje": "Demasiados intentos sospechosos. Intenta más tarde.",
+            "segundos_restantes": resultado.get("segundos_restantes"),
         }), 403
 
     # ---- PASO 2: tu lógica de login de siempre, sin cambios ----
@@ -78,7 +91,7 @@ def login():
     try:
         requests.post(f"{DETECTOR_URL}/registrar_intento",
                       json={"ip": ip, "usuario": usuario, "exitoso": exitoso},
-                      timeout=2)
+                      timeout=CENTINELA_TIMEOUT)
     except requests.exceptions.RequestException:
         pass  # si Centinela no responde, el login sigue funcionando igual
 
@@ -95,6 +108,6 @@ def home():
 if __name__ == "__main__":
     print("\nLogin demo corriendo en http://localhost:5000")
     print("Abre esa URL en el navegador para ver el formulario de login.")
-    print("Este login consulta a Centinela en http://localhost:5050")
+    print(f"Este login consulta a Centinela en {DETECTOR_URL}")
     print("Asegúrate de tener Centinela corriendo antes de probar ataques.\n")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=DEBUG_MODE)

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+venv_*/
+.venv/
+env/
+ENV/
+
+# Environment variables
+.env
+.env.local
+.*.env
+
+# Data / databases
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Jupyter / notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Resultados experimentos
+resultados_*.csv
+modelos_entrenados/
+*.joblib
+*.pkl

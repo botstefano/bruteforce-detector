@@ -1,0 +1,58 @@
+# ============================================================
+# Blueprint oficial Render — Centinela v2 Detector
+# USO: Render > New + > Blueprint > selecciona tu repo
+# IMPORTANTE: después del primer deploy entra al servicio y
+# configura "DASHBOARD_PASSWORD" manualmente en Environment
+# (el blueprint la marca sync:false para que no se pierda).
+# ============================================================
+services:
+  - type: web
+    name: centinela-v2-detector
+    env: python
+    region: oregon
+    plan: starter       # Mejor que free para Socket.IO (free tiene idle)
+    numInstances: 1      # IMPRESCINDIBLE: 1 sola instancia para Socket.IO
+    buildCommand: |
+      pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: |
+      cd detector_service && gunicorn \
+        -k eventlet \
+        -w 1 \
+        --worker-connections 1000 \
+        --timeout 180 \
+        --keep-alive 60 \
+        --access-logfile - \
+        --error-logfile - \
+        -b 0.0.0.0:$PORT \
+        app:app
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DASHBOARD_PASSWORD
+        sync: false       # Configúrala manualmente tras el deploy
+      - key: DURACION_BLOQUEO_SEGUNDOS
+        value: 300
+      - key: TRUSTED_PROXIES
+        value: render
+      - key: SOCKETIO_ASYNC_MODE
+        value: eventlet
+      - key: PERMITIR_LOCALHOST_BOT
+        value: "0"
+      - key: DB_PATH
+        value: /data/centinela_eventos.db
+      - key: ALLOWED_ORIGINS
+        value: "*"        # Cambia por https://TU_SUBDOMINIO.onrender.com para mayor seguridad
+    disk:
+      name: centinela-data
+      mountPath: /data
+      sizeGB: 1          # 1 GB es suficiente para SQLite + modelo ML
+    autoDeploy: true
+    healthCheckPath: /health
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
