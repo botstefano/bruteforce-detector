@@ -215,7 +215,7 @@ print("\n=== TEST 5: BLOQUEOS SQLITE PERSISTENTES CON TTL ===")
 db.limpiar_bloqueos()
 bloquear_hasta = db.bloquear_ip("99.99.99.99", 60)
 t5a = paso("bloquear_ip() retorna timestamp futuro",
-           bloquear_hasta > time.time() + 59)
+           bloquear_hasta > time.time() + 58)   # tolerancia 2s para flush SQLite en Windows/FS lentos
 
 bloq, rest = db.ip_esta_bloqueada("99.99.99.99")
 t5b = paso("ip_esta_bloqueada devuelve True + restante ≈60s",

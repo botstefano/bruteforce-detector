@@ -41,8 +41,12 @@ services:
         -b 0.0.0.0:$PORT \
         app:app
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9          # Hint a Render para NO usar Python 3.14/3.13 (gevent no compila ahí)
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: PIP_NO_BINARY
+        value: ":all:"         # Evita wheels pre-compiladas que no coincidan con la arch de Render si las hay
       - key: FLASK_ENV
         value: production
       - key: SECRET_KEY

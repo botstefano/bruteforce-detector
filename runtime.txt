@@ -1,1 +1,9 @@
+# IMPORTANTE RENDER FREE TIER:
+# La primera vez Render puede ignorar runtime.txt y usar Python 3.14.
+# Para forzar la versión 3.11.9 hemos añadido también
+#   PYTHON_VERSION=3.11.9
+# como variable de entorno en render.yaml sección envVars.
+#
+# Lista de versiones Python soportadas por Render (Buildpack Python):
+#   https://render.com/docs/python-version
 python-3.11.9
