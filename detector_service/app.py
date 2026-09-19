@@ -669,14 +669,32 @@ def entrenar_cicids():
 
     if not carpeta:
         return jsonify({"error": "falta la ruta de la carpeta"}), 400
-    if not os.path.isdir(carpeta):
-        return jsonify({"error": f"la carpeta '{carpeta}' no existe en el servidor"}), 400
+
+    # Buscar carpeta considerando posibles ubicaciones relativas al directorio raíz del proyecto
+    candidatas = [
+        carpeta,
+        os.path.abspath(carpeta),
+        os.path.join(os.path.dirname(__file__), "..", carpeta),
+        os.path.join(os.path.dirname(__file__), carpeta),
+        os.path.join(os.path.dirname(__file__), "..", "cicids", "cicids"),
+        os.path.join(os.path.dirname(__file__), "..", "cicids"),
+    ]
+
+    ruta_encontrada = None
+    for cand in candidatas:
+        if cand and os.path.isdir(cand):
+            if glob.glob(os.path.join(cand, "*.csv")):
+                ruta_encontrada = cand
+                break
+
+    if not ruta_encontrada:
+        return jsonify({"error": f"la carpeta '{carpeta}' no existe o no contiene archivos .csv en el servidor"}), 400
 
     hilo = threading.Thread(target=_entrenar_con_cicids_en_segundo_plano,
-                             args=(carpeta, max_benignos))
+                             args=(ruta_encontrada, max_benignos))
     hilo.daemon = True
     hilo.start()
-    return jsonify({"status": "entrenamiento_iniciado"})
+    return jsonify({"status": "entrenamiento_iniciado", "ruta_utilizada": ruta_encontrada})
 
 
 @app.route("/entrenar/upload_cicids", methods=["POST"])

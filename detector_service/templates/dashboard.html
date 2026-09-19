@@ -524,7 +524,7 @@
         Entrenado con datos sintéticos generados al arrancar el servidor.
       </div>
       <div style="margin-top:6px;">
-        <div style="font-size:11px; color:var(--text-dim); margin-bottom:4px;">Selecciona archivo(s) CSV de tu PC:</div>
+        <div style="font-size:11px; color:var(--text-dim); margin-bottom:4px;">Selecciona archivo(s) CSV de CICIDS2017 desde tu PC:</div>
         <input type="file" id="in-file-cicids" accept=".csv" multiple style="font-size:11px; width:100%; margin-bottom:8px; color:var(--text-main);">
       </div>
       <div class="fila">
@@ -693,6 +693,8 @@ function agregarLog(msg){
   const hora = new Date().toLocaleTimeString('es-PE', {hour12:false});
   logEntrenamiento.textContent = `[${hora}] ${msg}\n` + logEntrenamiento.textContent;
 }
+
+
 
 async function subirYEntrenarCicids(){
   const fileInput = document.getElementById('in-file-cicids');
