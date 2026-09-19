@@ -79,10 +79,9 @@ class DetectorML:
 
         pred = self.modelo.predict([features])[0]  # -1 anomalía, 1 normal
         score = float(self.modelo.decision_function([features])[0])
-        alerta = bool(pred == -1)
 
         return {
-            "alerta": alerta,
+            "alerta": bool(pred == -1),  # castear desde numpy.bool_ para que sea JSON-serializable
             "score": round(score, 4),
             "features": features,
         }
@@ -94,11 +93,14 @@ class DetectorML:
 def generar_muestras_normales(n=300, semilla=42, ventana_features=120):
     """Genera vectores de features sintéticos representando
     comportamiento de login LEGÍTIMO (usuarios humanos): pocos
-    intentos, intervalos irregulares y largos, horario laboral.
+    intentos, intervalos irregulares y largos, cualquier hora del día.
 
-    Replica exactamente la lógica de _extraer_features para que el
-    modelo generalice bien al caso de 0 o 1 intentos fallidos, que
-    es el escenario más común de tráfico legítimo."""
+    Nota de diseño: una versión anterior restringía la 'hora' a un
+    horario laboral (7am-10pm), asumiendo que el tráfico normal solo
+    ocurre en esa ventana. Esto generaba falsos positivos severos
+    (bloquear un login legítimo único solo por ocurrir de madrugada),
+    poco realista para un sistema accesible globalmente a cualquier
+    hora. Se generaliza a las 24 horas del día."""
     rng = np.random.default_rng(semilla)
     muestras = []
     for _ in range(n):
@@ -114,7 +116,7 @@ def generar_muestras_normales(n=300, semilla=42, ventana_features=120):
             intervalo_prom = ventana_features
             intervalo_std = 0.0
 
-        hora = rng.integers(7, 22)                  # horario humano típico
+        hora = rng.integers(0, 24)                  # cualquier hora del día
         muestras.append([num_intentos, num_usuarios, intervalo_prom,
                           intervalo_std, hora])
     return muestras

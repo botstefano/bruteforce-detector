@@ -213,7 +213,7 @@
   <div class="brand">
     <div class="pulse"></div>
     <h1>Centinela</h1>
-    <span class="sub">Detección de fuerza bruta en tiempo real — reglas adaptativas vs. Isolation Forest</span>
+    <span class="sub">Microservicio de protección · /evaluar + /registrar_intento protegen cualquier login externo</span>
   </div>
   <div class="status" id="status-conexion">conectando...</div>
 </div>
@@ -265,6 +265,35 @@
     <div class="section-desc" style="margin-bottom:10px;">
       <span class="tag reglas" style="margin-right:6px;">REGLAS</span> alerta por umbral / patrón &nbsp;·&nbsp;
       <span class="tag ml">ML</span> anomalía de comportamiento
+    </div>
+
+    <div class="section-title">Origen de datos del modelo ML</div>
+    <div class="section-desc">El detector de reglas no requiere entrenamiento; esto solo afecta al Isolation Forest.</div>
+    <div class="login-manual">
+      <div class="metrica-row" style="margin-bottom:10px;">
+        <span>Modelo actual:</span>
+        <b id="modelo-fuente" style="color:var(--warn-ml);">sintético</b>
+      </div>
+      <div class="section-desc" id="modelo-detalle" style="margin-bottom:14px;">
+        Entrenado con datos sintéticos generados al arrancar el servidor.
+      </div>
+      <div class="fila">
+        <input id="in-carpeta-cicids" placeholder="ruta a la carpeta de CICIDS2017 (ej: ./MachineLearningCSV)">
+      </div>
+      <div class="fila">
+        <button onclick="entrenarConCicids()" style="flex:1;">Entrenar con CICIDS2017</button>
+        <button onclick="volverASintetico()" style="border-color: var(--text-dim); color: var(--text-dim);">Volver a sintético</button>
+      </div>
+      <div id="log-entrenamiento" class="section-desc" style="margin-top:10px; white-space: pre-line;"></div>
+    </div>
+
+    <div class="section-title">Protección en vivo</div>
+    <div class="section-desc">IPs bloqueadas ahora mismo y tráfico real recibido vía /registrar_intento (logins externos protegidos por Centinela, no simulaciones).</div>
+    <div class="login-manual">
+      <div class="metrica-row"><span>Tráfico real recibido:</span><b id="prod-total">0</b></div>
+      <div class="metrica-row" style="margin-bottom:12px;"><span>De ese tráfico, con alerta:</span><b id="prod-alertas">0</b></div>
+      <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;">IPs bloqueadas activas:</div>
+      <div id="lista-bloqueadas" style="font-size:12px; color:var(--text-dim);">Ninguna por ahora.</div>
     </div>
   </div>
 </div>
@@ -364,6 +393,92 @@ async function actualizarMetricas(){
 }
 
 actualizarMetricas();
+
+// ---------- Entrenamiento del modelo ML con CICIDS2017 ----------
+const logEntrenamiento = document.getElementById('log-entrenamiento');
+const modeloFuenteEl = document.getElementById('modelo-fuente');
+const modeloDetalleEl = document.getElementById('modelo-detalle');
+
+function agregarLog(msg){
+  const hora = new Date().toLocaleTimeString('es-PE', {hour12:false});
+  logEntrenamiento.textContent = `[${hora}] ${msg}\n` + logEntrenamiento.textContent;
+}
+
+async function entrenarConCicids(){
+  const carpeta = document.getElementById('in-carpeta-cicids').value.trim();
+  if(!carpeta){
+    agregarLog('Escribe primero la ruta a la carpeta de CICIDS2017.');
+    return;
+  }
+  agregarLog(`Solicitando entrenamiento con carpeta: ${carpeta} ...`);
+  const res = await fetch('/entrenar/cicids', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({carpeta, max_benignos: 5000})
+  });
+  const data = await res.json();
+  if(!res.ok){
+    agregarLog('Error: ' + (data.error || 'no se pudo iniciar el entrenamiento'));
+  }
+}
+
+async function volverASintetico(){
+  agregarLog('Volviendo al modelo entrenado con datos sintéticos...');
+  await fetch('/entrenar/reset_sintetico', {method: 'POST'});
+}
+
+socket.on('entrenamiento_progreso', (data) => {
+  agregarLog(data.mensaje);
+});
+
+socket.on('entrenamiento_completo', (estado) => {
+  agregarLog('Entrenamiento completo.');
+  modeloFuenteEl.textContent = estado.fuente === 'cicids2017' ? 'CICIDS2017 (real)' : 'sintético';
+  modeloFuenteEl.style.color = estado.fuente === 'cicids2017' ? 'var(--safe)' : 'var(--warn-ml)';
+  modeloDetalleEl.textContent = estado.detalle;
+});
+
+socket.on('entrenamiento_error', (data) => {
+  agregarLog('ERROR: ' + data.mensaje);
+});
+
+async function cargarEstadoModeloInicial(){
+  const res = await fetch('/api/estado_modelo');
+  const estado = await res.json();
+  modeloFuenteEl.textContent = estado.fuente === 'cicids2017' ? 'CICIDS2017 (real)' : 'sintético';
+  modeloFuenteEl.style.color = estado.fuente === 'cicids2017' ? 'var(--safe)' : 'var(--warn-ml)';
+  modeloDetalleEl.textContent = estado.detalle;
+}
+cargarEstadoModeloInicial();
+
+// ---------- Protección en vivo: IPs bloqueadas y tráfico real ----------
+async function actualizarProteccionEnVivo(){
+  try {
+    const [resBloqueadas, resProduccion] = await Promise.all([
+      fetch('/api/bloqueadas'), fetch('/api/produccion')
+    ]);
+    const bloqueadas = await resBloqueadas.json();
+    const produccion = await resProduccion.json();
+
+    document.getElementById('prod-total').textContent = produccion.total;
+    document.getElementById('prod-alertas').textContent = produccion.alertas;
+
+    const contenedor = document.getElementById('lista-bloqueadas');
+    const ips = Object.keys(bloqueadas);
+    if(ips.length === 0){
+      contenedor.textContent = 'Ninguna por ahora.';
+    } else {
+      contenedor.innerHTML = ips.map(ip =>
+        `<div style="display:flex; justify-content:space-between; padding:3px 0;">
+           <span style="color:var(--danger);">${ip}</span>
+           <span>${bloqueadas[ip]}s restantes</span>
+         </div>`
+      ).join('');
+    }
+  } catch(e) { /* servidor podría estar reiniciando, no hacer ruido */ }
+}
+setInterval(actualizarProteccionEnVivo, 3000);
+actualizarProteccionEnVivo();
 </script>
 
 </body>
