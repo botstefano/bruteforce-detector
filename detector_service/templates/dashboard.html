@@ -523,17 +523,13 @@
       <div class="section-desc" id="modelo-detalle" style="margin-bottom:10px;">
         Entrenado con datos sintéticos generados al arrancar el servidor.
       </div>
-      <div class="fila">
-        <input id="in-carpeta-cicids" placeholder="ruta carpeta servidor CICIDS2017">
+      <div style="margin-top:6px;">
+        <div style="font-size:11px; color:var(--text-dim); margin-bottom:4px;">Selecciona archivo(s) CSV de tu PC:</div>
+        <input type="file" id="in-file-cicids" accept=".csv" multiple style="font-size:11px; width:100%; margin-bottom:8px; color:var(--text-main);">
       </div>
       <div class="fila">
-        <button onclick="entrenarConCicids()" style="flex:1;">Entrenar con carpeta servidor</button>
-        <button onclick="volverASintetico()" style="border-color: var(--text-dim); color: var(--text-dim);">Volver a sintético</button>
-      </div>
-      <div style="margin-top:10px; border-top:1px dashed var(--border); padding-top:8px;">
-        <div style="font-size:11px; color:var(--text-dim); margin-bottom:4px;">O subir archivo(s) CSV desde tu computadora:</div>
-        <input type="file" id="in-file-cicids" accept=".csv" multiple style="font-size:11px; width:100%; margin-bottom:6px; color:var(--text-main);">
-        <button onclick="subirYEntrenarCicids()" style="width:100%; background:var(--accent-ml); color:#000; font-weight:600; padding:6px;">📤 Subir y Entrenar CSV desde mi PC</button>
+        <button onclick="subirYEntrenarCicids()" style="flex:2; background:var(--accent-ml); color:#000; font-weight:600;">📤 Subir y Entrenar con CICIDS2017</button>
+        <button onclick="volverASintetico()" style="flex:1; border-color: var(--text-dim); color: var(--text-dim);">Reset sintético</button>
       </div>
       <div class="log-entrenamiento" id="log-entrenamiento"></div>
     </div>
@@ -697,18 +693,7 @@ function agregarLog(msg){
   const hora = new Date().toLocaleTimeString('es-PE', {hour12:false});
   logEntrenamiento.textContent = `[${hora}] ${msg}\n` + logEntrenamiento.textContent;
 }
-async function entrenarConCicids(){
-  const carpeta = document.getElementById('in-carpeta-cicids').value.trim();
-  if(!carpeta){ agregarLog('Escribe primero la ruta a la carpeta de CICIDS2017.'); return; }
-  agregarLog(`Solicitando entrenamiento con carpeta: ${carpeta} ...`);
-  const res = await fetch('/entrenar/cicids', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({carpeta, max_benignos: 5000})
-  });
-  const data = await res.json().catch(()=>({}));
-  if(!res.ok){ agregarLog('Error: ' + (data.error || 'no se pudo iniciar')); }
-}
+
 async function subirYEntrenarCicids(){
   const fileInput = document.getElementById('in-file-cicids');
   if(!fileInput.files || fileInput.files.length === 0){
