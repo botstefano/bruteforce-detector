@@ -52,7 +52,3 @@ services:
       sizeGB: 1          # 1 GB es suficiente para SQLite + modelo ML
     autoDeploy: true
     healthCheckPath: /health
-    headers:
-      - path: /*
-        name: X-Content-Type-Options
-        value: nosniff

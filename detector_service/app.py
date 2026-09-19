@@ -86,6 +86,28 @@ elif _trusted:
         pass
 
 
+@app.after_request
+def aplicar_headers_seguridad(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "connect-src 'self' https: wss: ws:; "
+        "img-src 'self' data:; "
+        "frame-ancestors 'none';"
+    )
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), interest-cohort=(), "
+        "fullscreen=(self), payment=()"
+    )
+    return response
+
+
 def _ip_del_cliente(data_override=None):
     """Devuelve la IP real del cliente priorizando:
     1) Campo 'ip' del body JSON (si el login externo ya la resolvió).
