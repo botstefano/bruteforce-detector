@@ -3,7 +3,11 @@
 # COMPATIBILIDAD: Python 3.11.x (Render Blueprint)
 # --------------------------------------------------------------------------
 # - NO instalar gevent: usamos eventlet como único async worker en startCommand
-#   (gevent 24.x no compila en Python 3.12+)
+#   (gevent 24.x no compila en Python 3.12+).
+# - NO usar gunicorn >=24: el worker -k eventlet introdujo un check duro
+#   RuntimeError("eventlet worker requires eventlet 0.40.3 or higher")
+#   pero eventlet 0.40+ REQUIRES_PYTHON>=3.10 y a veces rompe en entornos
+#   con greenlet pre-instalados antiguos. Nos quedamos en la LTS 23.0.
 # - Top-level: versiones pinneadas de paquetes que importamos DIRECTAMENTE.
 # - Sub-dependencias (subpackages): SIN pinnear, para que pip resuelva las
 #   versiones compatibles existentes en PyPI (evita "No matching distribution")
@@ -18,7 +22,10 @@ Werkzeug==3.1.8
 Flask-SocketIO==5.6.1
 
 # === Workers Gunicorn ===
-gunicorn==24.1.0
+#   Versión 23.x LTS: compatible 100% con eventlet 0.39.1.
+#   NO subir a 24.x hasta que Render/PyPI ofrezcan eventlet 0.40.3+
+#   estable y con wheels manylinux probadas para cp311.
+gunicorn==23.0.0
 eventlet==0.39.1
 
 # === Machine Learning ===
