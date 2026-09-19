@@ -1,5 +1,20 @@
 # ============================================================
-# Blueprint oficial Render — Centinela v2 Detector
+# Blueprint Render — Centinela v2 Detector (PLAN FREE)
+#
+# NOTAS SOBRE FREE TIER (léelas antes de desplegar):
+#   · Render Free NO admite "disk:" persistente → la DB SQLite vive
+#     en el filesystem efímero de la instancia.
+#   · Idle timeout: 15 min SIN tráfico → la instancia se duerme.
+#     Al despertar: se BORRAN bloqueos, eventos y el modelo ML vuelve
+#     a sintético (no hay persistencia).
+#   · Socket.IO del dashboard se desconecta al dormir; refresca
+#     manualmente la página cuando reingreses.
+#   · El build tarda ~3-5 min (numpy + scikit-learn).
+#
+# Si luego quieres pasar a plan Starter ($7/mes) y recuperar la
+# persistencia real, usa la plantilla render.plan_starter.yaml
+# o vuelve a añadir la sección "disk:" + DB_PATH=/data/...
+#
 # USO: Render > New + > Blueprint > selecciona tu repo
 # IMPORTANTE: después del primer deploy entra al servicio y
 # configura "DASHBOARD_PASSWORD" manualmente en Environment
@@ -10,8 +25,8 @@ services:
     name: centinela-v2-detector
     env: python
     region: oregon
-    plan: starter       # Mejor que free para Socket.IO (free tiene idle)
-    numInstances: 1      # IMPRESCINDIBLE: 1 sola instancia para Socket.IO
+    plan: free              # FREE TIER — sin tarjeta, pero con idle + sin persistencia
+    numInstances: 1          # IMPRESCINDIBLE: 1 sola instancia para Socket.IO
     buildCommand: |
       pip install --upgrade pip && pip install -r requirements.txt
     startCommand: |
@@ -33,7 +48,7 @@ services:
       - key: SECRET_KEY
         generateValue: true
       - key: DASHBOARD_PASSWORD
-        sync: false       # Configúrala manualmente tras el deploy
+        sync: false            # Configúrala manualmente tras el deploy
       - key: DURACION_BLOQUEO_SEGUNDOS
         value: 300
       - key: TRUSTED_PROXIES
@@ -43,12 +58,8 @@ services:
       - key: PERMITIR_LOCALHOST_BOT
         value: "0"
       - key: DB_PATH
-        value: /data/centinela_eventos.db
+        value: /opt/render/project/src/detector_service/data/centinela_eventos.db   # Free tier: carpeta local (efímera)
       - key: ALLOWED_ORIGINS
-        value: "*"        # Cambia por https://TU_SUBDOMINIO.onrender.com para mayor seguridad
-    disk:
-      name: centinela-data
-      mountPath: /data
-      sizeGB: 1          # 1 GB es suficiente para SQLite + modelo ML
+        value: "*"             # Cambia por https://TU_SUBDOMINIO.onrender.com para mayor seguridad
     autoDeploy: true
     healthCheckPath: /health
