@@ -75,7 +75,7 @@ services:
       - key: SESSION_COOKIE_SAMESITE
         value: "Lax"
       - key: PERMITIR_LOCALHOST_BOT
-        value: "0"
+        value: "1"
       - key: DB_PATH
         value: /data/centinela_eventos.db   # Free tier: /data del container (efímero)
       - key: ALLOWED_ORIGINS

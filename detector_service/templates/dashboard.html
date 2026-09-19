@@ -524,11 +524,16 @@
         Entrenado con datos sintéticos generados al arrancar el servidor.
       </div>
       <div class="fila">
-        <input id="in-carpeta-cicids" placeholder="ruta carpeta CICIDS2017">
+        <input id="in-carpeta-cicids" placeholder="ruta carpeta servidor CICIDS2017">
       </div>
       <div class="fila">
-        <button onclick="entrenarConCicids()" style="flex:1;">Entrenar con CICIDS2017</button>
+        <button onclick="entrenarConCicids()" style="flex:1;">Entrenar con carpeta servidor</button>
         <button onclick="volverASintetico()" style="border-color: var(--text-dim); color: var(--text-dim);">Volver a sintético</button>
+      </div>
+      <div style="margin-top:10px; border-top:1px dashed var(--border); padding-top:8px;">
+        <div style="font-size:11px; color:var(--text-dim); margin-bottom:4px;">O subir archivo(s) CSV desde tu computadora:</div>
+        <input type="file" id="in-file-cicids" accept=".csv" multiple style="font-size:11px; width:100%; margin-bottom:6px; color:var(--text-main);">
+        <button onclick="subirYEntrenarCicids()" style="width:100%; background:var(--accent-ml); color:#000; font-weight:600; padding:6px;">📤 Subir y Entrenar CSV desde mi PC</button>
       </div>
       <div class="log-entrenamiento" id="log-entrenamiento"></div>
     </div>
@@ -704,6 +709,37 @@ async function entrenarConCicids(){
   const data = await res.json().catch(()=>({}));
   if(!res.ok){ agregarLog('Error: ' + (data.error || 'no se pudo iniciar')); }
 }
+async function subirYEntrenarCicids(){
+  const fileInput = document.getElementById('in-file-cicids');
+  if(!fileInput.files || fileInput.files.length === 0){
+    agregarLog('Por favor selecciona al menos un archivo .csv desde tu computadora.');
+    return;
+  }
+  const formData = new FormData();
+  for(let i=0; i<fileInput.files.length; i++){
+    formData.append('archivos', fileInput.files[i]);
+  }
+  formData.append('max_benignos', '5000');
+
+  agregarLog(`Subiendo ${fileInput.files.length} archivo(s) CSV al servidor de Render...`);
+  try {
+    const res = await fetch('/entrenar/upload_cicids', {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json().catch(()=>({}));
+    if(res.status === 401){
+      agregarLog('Error 401: autenticación requerida.');
+    } else if(!res.ok){
+      agregarLog('Error: ' + (data.error || 'fallo en la subida'));
+    } else {
+      agregarLog(`Subida exitosa (${data.archivos_guardados} CSV). Procesando entrenamiento en segundo plano...`);
+    }
+  } catch(e){
+    agregarLog('Error de conexión al subir archivos: ' + e.message);
+  }
+}
+
 async function volverASintetico(){
   agregarLog('Volviendo al modelo entrenado con datos sintéticos...');
   const res = await fetch('/entrenar/reset_sintetico', {method: 'POST'});

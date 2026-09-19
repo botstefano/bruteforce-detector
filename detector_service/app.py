@@ -47,7 +47,8 @@ import threading
 import time
 import ipaddress
 from urllib.parse import urlparse
-from functools import wraps
+import tempfile
+from werkzeug.utils import secure_filename
 
 from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 from flask_socketio import SocketIO, emit, disconnect
@@ -325,7 +326,8 @@ def _es_url_segura(url):
         if not host:
             return False
         if host in ("localhost", "127.0.0.1", "::1"):
-            return DEBUG_MODE or os.getenv("PERMITIR_LOCALHOST_BOT", "1") == "1"
+            permitir = os.getenv("PERMITIR_LOCALHOST_BOT", "1").strip().lower()
+            return DEBUG_MODE or permitir not in ("0", "false", "no", "off")
         try:
             ip = ipaddress.ip_address(host)
             if (ip.is_private or ip.is_loopback or ip.is_link_local
@@ -674,6 +676,36 @@ def entrenar_cicids():
     hilo.daemon = True
     hilo.start()
     return jsonify({"status": "entrenamiento_iniciado"})
+
+
+@app.route("/entrenar/upload_cicids", methods=["POST"])
+@requiere_admin
+def entrenar_upload_cicids():
+    if estado_modelo["cargando"]:
+        return jsonify({"error": "ya hay un entrenamiento en curso"}), 409
+
+    archivos = request.files.getlist("archivos")
+    if not archivos or all(f.filename == "" for f in archivos):
+        return jsonify({"error": "No se seleccionó ningún archivo CSV"}), 400
+
+    temp_dir = tempfile.mkdtemp(prefix="cicids_upload_")
+    guardados = 0
+    for f in archivos:
+        if f and f.filename and f.filename.lower().endswith(".csv"):
+            fname = secure_filename(f.filename) or f"uploaded_{guardados}.csv"
+            f.save(os.path.join(temp_dir, fname))
+            guardados += 1
+
+    if guardados == 0:
+        return jsonify({"error": "Ningún archivo tenía extensión .csv"}), 400
+
+    max_benignos = int(request.form.get("max_benignos", 5000))
+
+    hilo = threading.Thread(target=_entrenar_con_cicids_en_segundo_plano,
+                            args=(temp_dir, max_benignos))
+    hilo.daemon = True
+    hilo.start()
+    return jsonify({"status": "entrenamiento_iniciado", "archivos_guardados": guardados})
 
 
 @app.route("/entrenar/reset_sintetico", methods=["POST"])

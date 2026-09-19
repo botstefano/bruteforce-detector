@@ -274,7 +274,7 @@ t6e = paso("callback on_progreso recibe al menos 1 mensaje",
 import subprocess
 res = subprocess.run(
     [sys.executable, bot_path, "--help"],
-    capture_output=True, text=True, timeout=15, cwd=ROOT,
+    capture_output=True, text=True, timeout=15, cwd=ROOT, stdin=subprocess.DEVNULL
 )
 t6f = paso("CLI bot_ataque.py --help retorna 0", res.returncode == 0,
            detalle=f"stdout primeros100: {res.stdout[:100]}")
@@ -282,7 +282,7 @@ t6f = paso("CLI bot_ataque.py --help retorna 0", res.returncode == 0,
 # CLI --tipo rapido (sin ejecutar realmente) para parsear args
 res = subprocess.run(
     [sys.executable, bot_path, "--tipo", "rapido", "--intentos", "0"],
-    capture_output=True, text=True, timeout=10, cwd=ROOT,
+    capture_output=True, text=True, timeout=10, cwd=ROOT, stdin=subprocess.DEVNULL
 )
 t6g = paso("CLI parámetros --tipo y --intentos son válidos",
            res.returncode in (0,), detalle=f"rc={res.returncode}")
