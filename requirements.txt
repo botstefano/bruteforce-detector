@@ -1,49 +1,32 @@
 # ==========================================================================
-# Centinela v2 — requirements.txt compatible con Python 3.11 (Render / local)
-# ==========================================================================
-# - NO instalamos gevent: usamos eventlet como único async worker
-#   (gevent 24.10.x no compila en Python 3.13+ y no lo necesitamos)
-# - Flask-SocketIO + python-socketio + python-engineio versiones pinneadas
-#   para evitar resolvers que traigan dependencias incompatibles
+# Centinela v2 — requirements.txt
+# COMPATIBILIDAD: Python 3.11.x (Render Blueprint)
+# --------------------------------------------------------------------------
+# - NO instalar gevent: usamos eventlet como único async worker en startCommand
+#   (gevent 24.x no compila en Python 3.12+)
+# - Top-level: versiones pinneadas de paquetes que importamos DIRECTAMENTE.
+# - Sub-dependencias (subpackages): SIN pinnear, para que pip resuelva las
+#   versiones compatibles existentes en PyPI (evita "No matching distribution")
+# - numpy <2 + scikit-learn 1.5.x + pandas 2.x: matriz probada en Render.
 # ==========================================================================
 
 # === Core web ===
 Flask==3.1.3
 Werkzeug==3.1.8
-Jinja2==3.1.6
-itsdangerous==2.2.0
-click==8.2.1
-MarkupSafe==2.1.5
 
-# === Socket.IO (async mode: eventlet) ===
+# === Socket.IO (async_mode=eventlet) ===
 Flask-SocketIO==5.6.1
-python-socketio==5.13.1
-python-engineio==4.12.1
-bidict==0.24.1
-simple-websocket==1.1.0
-wsproto==1.2.0
 
 # === Workers Gunicorn ===
 gunicorn==24.1.0
 eventlet==0.39.1
-dnspython==2.7.2
-greenlet==3.1.1
 
 # === Machine Learning ===
 numpy==1.26.4
 scipy==1.14.1
 scikit-learn==1.5.2
-joblib==1.4.2
-threadpoolctl==3.5.0
 pandas==2.2.3
-python-dateutil==2.9.0.post0
-pytz==2025.1
-tzdata==2025.1
 
 # === Utilidades ===
 requests==2.32.3
-urllib3==2.3.0
-certifi==2025.7.28
-charset-normalizer==3.4.1
-idna==3.10
 python-dotenv==1.1.1
