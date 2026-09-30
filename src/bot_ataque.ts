@@ -1,6 +1,6 @@
 /**
- * bot_ataque.ts — Bot de prueba de fuerza bruta para atacar el login demo
- * y verificar la protección de Centinela de punta a punta.
+ * bot_ataque.ts — Bot de prueba de fuerza bruta para atacar los diferentes logins
+ * y verificar la respuesta frente a Reglas, Machine Learning, CAPTCHA y 2FA.
  */
 
 export const USUARIOS_COMUNES = ['admin', 'carla', 'roberto', 'root', 'test'];
@@ -31,7 +31,7 @@ async function intentar(
   ip: string,
   usuario: string,
   password: string
-): Promise<{ status: number | null; mensaje: string }> {
+): Promise<{ status: number | null; mensaje: string; score_ml?: number; modelos?: any }> {
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -41,9 +41,14 @@ async function intentar(
       },
       body: JSON.stringify({ usuario, password, ip }),
     });
-    const data = (await res.json().catch(() => ({}))) as { mensaje?: string; error?: string };
+    const data = (await res.json().catch(() => ({}))) as {
+      mensaje?: string;
+      error?: string;
+      score_ml?: number;
+      modelos?: any;
+    };
     const mensaje = data.mensaje || data.error || '';
-    return { status: res.status, mensaje };
+    return { status: res.status, mensaje, score_ml: data.score_ml, modelos: data.modelos };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return { status: null, mensaje: msg };
@@ -71,11 +76,15 @@ export async function ataqueRapido(
     const pwd = pwList[Math.floor(Math.random() * pwList.length)];
     const { status, mensaje } = await intentar(url, ip, targetUser, pwd);
     realizados = i;
-    reportar(`  intento ${String(i).padStart(2, ' ')}: password='${pwd.padEnd(12, ' ')}' -> HTTP ${status}  ${mensaje}`);
+    reportar(`  intento ${String(i).padStart(2, ' ')}: pwd='${pwd.padEnd(10, ' ')}' -> HTTP ${status}  ${mensaje}`);
 
     if (status === 403) {
-      reportar(`  >>> BLOQUEADO en el intento ${i}. Deteniendo ataque.`);
+      reportar(`  >>> [CORTE PERIMETRAL] IP BLOQUEADA en el intento ${i}. El bot no puede continuar.`);
       bloqueado = true;
+      break;
+    }
+    if (status === 400 && mensaje.toLowerCase().includes('captcha')) {
+      reportar(`  >>> [INTERCEPTADO POR CAPTCHA] El bot no puede interpretar el reto visual.`);
       break;
     }
     if (i < numIntentos) {
@@ -99,7 +108,7 @@ export async function ataqueLento(
   const targetUser = usuario || USUARIOS_COMUNES[Math.floor(Math.random() * USUARIOS_COMUNES.length)];
   const ip = ipAleatoria();
 
-  reportar(`[ATAQUE LENTO] ip=${ip} usuario=${targetUser} (${numIntentos} intentos, ${intervalo}s entre cada uno)`);
+  reportar(`[ATAQUE LENTO · LOW-AND-SLOW] ip=${ip} usuario=${targetUser} (${numIntentos} intentos, ${intervalo}s de intervalo para burlar reglas fijas)`);
   let realizados = 0;
   let bloqueado = false;
 
@@ -107,11 +116,15 @@ export async function ataqueLento(
     const pwd = pwList[Math.floor(Math.random() * pwList.length)];
     const { status, mensaje } = await intentar(url, ip, targetUser, pwd);
     realizados = i;
-    reportar(`  intento ${String(i).padStart(2, ' ')}: password='${pwd.padEnd(12, ' ')}' -> HTTP ${status}  ${mensaje}`);
+    reportar(`  intento ${String(i).padStart(2, ' ')}: pwd='${pwd.padEnd(10, ' ')}' -> HTTP ${status}  ${mensaje}`);
 
     if (status === 403) {
-      reportar(`  >>> BLOQUEADO en el intento ${i}. Deteniendo ataque.`);
+      reportar(`  >>> [DETECCIÓN ML] IP neutralizada por anomalía en el intento ${i} (la regularidad del intervalo fue captada por los modelos).`);
       bloqueado = true;
+      break;
+    }
+    if (status === 400 && mensaje.toLowerCase().includes('captcha')) {
+      reportar(`  >>> [INTERCEPTADO POR CAPTCHA] El bot no puede interpretar el reto visual.`);
       break;
     }
     if (i < numIntentos) {
@@ -134,18 +147,18 @@ export async function ataqueDistribuido(
   const pwList = passwords && passwords.length > 0 ? passwords : PASSWORDS_COMUNES;
   const targetUser = usuario || USUARIOS_COMUNES[Math.floor(Math.random() * USUARIOS_COMUNES.length)];
 
-  reportar(`[ATAQUE DISTRIBUIDO] usuario=${targetUser} (${numIps} IPs distintas, 1 intento cada una)`);
+  reportar(`[ATAQUE DISTRIBUIDO] usuario objetivo=${targetUser} (${numIps} IPs distintas, rotación de origen)`);
   let ipsBloqueadas = 0;
 
   for (let i = 1; i <= numIps; i++) {
     const ip = ipAleatoria();
     const pwd = pwList[Math.floor(Math.random() * pwList.length)];
     const { status, mensaje } = await intentar(url, ip, targetUser, pwd);
-    reportar(`  IP ${i}/${numIps} (${ip}): password='${pwd.padEnd(12, ' ')}' -> HTTP ${status}  ${mensaje}`);
+    reportar(`  IP ${i}/${numIps} (${ip}): pwd='${pwd.padEnd(10, ' ')}' -> HTTP ${status}  ${mensaje}`);
 
     if (status === 403) {
       ipsBloqueadas++;
-      reportar('  >>> Esta IP fue bloqueada, pero el ataque sigue con nuevas IPs (intento de evasión distribuida)');
+      reportar('  >>> [CORTE] IP bloqueada por correlación de cuenta objetivo en Centinela.');
     }
     if (i < numIps) {
       await sleep(intervalo * 1000);

@@ -251,38 +251,45 @@
   .metricas-grid{
     display:grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-bottom: 18px;
+    gap: 8px;
+    margin-bottom: 14px;
   }
   .metrica-card{
     background: var(--bg-panel);
     border: 1px solid var(--line);
     border-radius: 4px;
-    padding: 12px 12px 10px;
+    padding: 10px 10px 8px;
   }
   .metrica-card h3{
     font-family: var(--font-head);
-    font-size: 11.5px;
+    font-size: 11px;
     font-weight: 600;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
+    display: flex; justify-content: space-between; align-items: center;
   }
   .metrica-card.reglas h3{ color: var(--warn-rules); }
-  .metrica-card.ml h3{ color: var(--warn-ml); }
+  .metrica-card.ml-iforest h3{ color: var(--warn-ml); }
+  .metrica-card.ml-ocsvm h3{ color: #BB80E3; }
+  .metrica-card.ml-lof h3{ color: #E6B450; }
+  .metrica-card.ml-ensamble h3{ color: var(--safe); }
   .metrica-row{
     display:flex; justify-content:space-between;
-    font-size: 10.5px;
-    padding: 2px 0;
+    font-size: 10px;
+    padding: 1.5px 0;
     color: var(--text-dim);
   }
   .metrica-row b{ color: var(--text); font-weight: 600; }
   .f1-badge{
-    margin-top: 6px;
-    font-size: 17px;
+    margin-top: 5px;
+    font-size: 14.5px;
     font-weight: 700;
     font-family: var(--font-head);
   }
   .metrica-card.reglas .f1-badge{ color: var(--warn-rules); }
-  .metrica-card.ml .f1-badge{ color: var(--warn-ml); }
+  .metrica-card.ml-iforest .f1-badge{ color: var(--warn-ml); }
+  .metrica-card.ml-ocsvm .f1-badge{ color: #BB80E3; }
+  .metrica-card.ml-lof .f1-badge{ color: #E6B450; }
+  .metrica-card.ml-ensamble .f1-badge{ color: var(--safe); }
 
   .contador-total{
     font-size: 11px; color: var(--text-dim); margin-top: -10px; margin-bottom: 14px;
@@ -377,7 +384,13 @@
     <span class="sub">Microservicio · /evaluar + /registrar_intento protegen cualquier login</span>
   </div>
   <div class="right">
-    <a href="/demo" target="_blank" class="btn-mini" style="color:var(--safe); border-color:var(--safe); font-weight:600;">🚀 Abrir Login Demo</a>
+    <div style="display:flex; align-items:center; gap:6px; background:var(--bg-panel-raised); border:1px solid var(--line); border-radius:4px; padding:4px 8px;">
+      <span style="font-size:10.5px; color:var(--text-dim);">🎯 Abrir Logins:</span>
+      <a href="/demo/vulnerable" target="_blank" class="btn-mini" style="color:var(--danger); border-color:rgba(240,113,120,0.4);" title="Sin defensas, vulnerable">1. Vulnerable</a>
+      <a href="/demo/captcha" target="_blank" class="btn-mini" style="color:var(--warn-rules); border-color:rgba(255,180,84,0.4);" title="Con reto visual anti-bot">2. CAPTCHA</a>
+      <a href="/demo/2fa" target="_blank" class="btn-mini" style="color:var(--warn-ml); border-color:rgba(57,186,230,0.4);" title="Doble factor de autenticación">3. 2FA (TOTP)</a>
+      <a href="/demo" target="_blank" class="btn-mini" style="color:var(--safe); border-color:var(--safe); font-weight:600;" title="Protegido por reglas y Machine Learning">4. Centinela</a>
+    </div>
     <div class="status" id="status-conexion">conectando...</div>
     <button class="btn-mini" id="btn-logout" style="display:none;">Cerrar sesión</button>
   </div>
@@ -432,8 +445,13 @@
         <input type="number" step="0.1" id="bot-intervalo" value="0.3" min="0.05" max="30">
       </div>
       <div class="field">
-        <label>URL login</label>
-        <input type="text" id="bot-url" value="/demo/login" placeholder="/demo/login">
+        <label>Objetivo del Ataque</label>
+        <select id="bot-url">
+          <option value="/demo/login" selected>4. Centinela (WAF/ML)</option>
+          <option value="/demo/vulnerable/login">1. Sin Protección</option>
+          <option value="/demo/captcha/login">2. Con CAPTCHA</option>
+          <option value="/demo/2fa/login-paso1">3. Con 2FA (Paso 1)</option>
+        </select>
       </div>
     </div>
 
@@ -491,32 +509,60 @@
 
     <div class="metricas-grid">
       <div class="metrica-card reglas">
-        <h3>Reglas adaptativas</h3>
+        <h3>Reglas Fijas <span>Heurística</span></h3>
         <div class="metrica-row"><span>Precisión</span><b id="r-precision">—</b></div>
         <div class="metrica-row"><span>Recall</span><b id="r-recall">—</b></div>
-        <div class="metrica-row"><span>Falsos positivos</span><b id="r-fp">—</b></div>
-        <div class="metrica-row"><span>Falsos negativos</span><b id="r-fn">—</b></div>
+        <div class="metrica-row"><span>Falsos Pos.</span><b id="r-fp">—</b></div>
+        <div class="metrica-row"><span>Falsos Neg.</span><b id="r-fn">—</b></div>
         <div class="f1-badge" id="r-f1">F1 —</div>
       </div>
-      <div class="metrica-card ml">
-        <h3>Isolation Forest</h3>
-        <div class="metrica-row"><span>Precisión</span><b id="m-precision">—</b></div>
-        <div class="metrica-row"><span>Recall</span><b id="m-recall">—</b></div>
-        <div class="metrica-row"><span>Falsos positivos</span><b id="m-fp">—</b></div>
-        <div class="metrica-row"><span>Falsos negativos</span><b id="m-fn">—</b></div>
-        <div class="f1-badge" id="m-f1">F1 —</div>
+      <div class="metrica-card ml-iforest">
+        <h3>Isolation Forest <span>Árboles</span></h3>
+        <div class="metrica-row"><span>Precisión</span><b id="if-precision">—</b></div>
+        <div class="metrica-row"><span>Recall</span><b id="if-recall">—</b></div>
+        <div class="metrica-row"><span>Falsos Pos.</span><b id="if-fp">—</b></div>
+        <div class="metrica-row"><span>Falsos Neg.</span><b id="if-fn">—</b></div>
+        <div class="f1-badge" id="if-f1">F1 —</div>
+      </div>
+      <div class="metrica-card ml-ocsvm">
+        <h3>One-Class SVM <span>Frontera RBF</span></h3>
+        <div class="metrica-row"><span>Precisión</span><b id="svm-precision">—</b></div>
+        <div class="metrica-row"><span>Recall</span><b id="svm-recall">—</b></div>
+        <div class="metrica-row"><span>Falsos Pos.</span><b id="svm-fp">—</b></div>
+        <div class="metrica-row"><span>Falsos Neg.</span><b id="svm-fn">—</b></div>
+        <div class="f1-badge" id="svm-f1">F1 —</div>
+      </div>
+      <div class="metrica-card ml-lof">
+        <h3>LOF <span>Densidad KNN</span></h3>
+        <div class="metrica-row"><span>Precisión</span><b id="lof-precision">—</b></div>
+        <div class="metrica-row"><span>Recall</span><b id="lof-recall">—</b></div>
+        <div class="metrica-row"><span>Falsos Pos.</span><b id="lof-fp">—</b></div>
+        <div class="metrica-row"><span>Falsos Neg.</span><b id="lof-fn">—</b></div>
+        <div class="f1-badge" id="lof-f1">F1 —</div>
+      </div>
+      <div class="metrica-card ml-ensamble" style="grid-column: 1 / -1; background: rgba(111,207,151,0.06); border-color: rgba(111,207,151,0.3);">
+        <h3>⭐ Ensamble Multi-ML <span>Consenso de Votación (IF + SVM + LOF)</span></h3>
+        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 4px;">
+          <div class="metrica-row" style="flex-direction:column;"><span>Precisión</span><b id="m-precision">—</b></div>
+          <div class="metrica-row" style="flex-direction:column;"><span>Recall</span><b id="m-recall">—</b></div>
+          <div class="metrica-row" style="flex-direction:column;"><span>Falsos Pos.</span><b id="m-fp">—</b></div>
+          <div class="metrica-row" style="flex-direction:column;"><span>Falsos Neg.</span><b id="m-fn">—</b></div>
+        </div>
+        <div class="f1-badge" id="m-f1" style="margin-top: 6px;">F1 —</div>
       </div>
     </div>
 
-    <div class="section-title"><span>Leyenda</span></div>
+    <div class="section-title"><span>Leyenda de Modelos</span></div>
     <div class="section-desc" style="margin-bottom:12px;">
-      <span class="tag reglas" style="margin-right:6px;">REGLAS</span> umbral/patrón &nbsp;·&nbsp;
-      <span class="tag ml">ML</span> anomalía comportamiento &nbsp;·&nbsp;
-      <span class="tag ok">OK</span> éxito
+      <span class="tag reglas" style="margin-right:4px;">REGLAS</span>
+      <span class="tag ml" style="margin-right:4px;">IForest</span>
+      <span class="tag" style="background:rgba(187,128,227,0.18); color:#BB80E3; margin-right:4px;">OC-SVM</span>
+      <span class="tag" style="background:rgba(230,180,80,0.18); color:#E6B450; margin-right:4px;">LOF</span>
+      <span class="tag ok">OK Éxito</span>
     </div>
 
     <div class="panel-entrenamiento">
-      <div class="section-title" style="font-size:12px; margin-bottom:6px;">Origen de datos del modelo ML</div>
+      <div class="section-title" style="font-size:12px; margin-bottom:6px;">Origen de datos del entrenamiento ML</div>
       <div class="metrica-row" style="margin-bottom:6px;">
         <span>Modelo actual:</span>
         <b id="modelo-fuente" style="color:var(--warn-ml);">sintético</b>
@@ -524,13 +570,16 @@
       <div class="section-desc" id="modelo-detalle" style="margin-bottom:10px;">
         Entrenado con datos sintéticos generados al arrancar el servidor.
       </div>
-      <div style="margin-top:6px;">
-        <div style="font-size:11px; color:var(--text-dim); margin-bottom:4px;">Selecciona archivo(s) CSV de CICIDS2017 desde tu PC:</div>
-        <input type="file" id="in-file-cicids" accept=".csv" multiple style="font-size:11px; width:100%; margin-bottom:8px; color:var(--text);">
-      </div>
-      <div class="fila">
-        <button onclick="subirYEntrenarCicids()" style="flex:2; background:var(--accent); color:#000; font-weight:600;">📤 Subir y Entrenar con CICIDS2017</button>
+      <div class="fila" style="margin-bottom:6px;">
+        <button onclick="cargarCicidsPrecargado()" style="flex:1; background:var(--accent); color:#000; font-weight:700;">⚡ Cargar CICIDS2017 (1-Click)</button>
         <button onclick="volverASintetico()" style="flex:1; border-color: var(--text-dim); color: var(--text-dim);">Reset sintético</button>
+      </div>
+      <div style="margin-top:8px;">
+        <div style="font-size:10.5px; color:var(--text-dim); margin-bottom:4px;">O sube tus propios archivos CSV de CICIDS2017:</div>
+        <div class="fila">
+          <input type="file" id="in-file-cicids" accept=".csv" multiple style="font-size:10px; color:var(--text);">
+          <button onclick="subirYEntrenarCicids()" style="font-size:10.5px;">Subir CSV</button>
+        </div>
       </div>
       <div class="log-entrenamiento" id="log-entrenamiento"></div>
     </div>
@@ -606,13 +655,28 @@ socket.on('nuevo_evento', (ev) => {
   if(ev.bloqueado_ahora) fila.classList.add('bloqueado');
 
   const tagOk = ev.exitoso ? '<span class="tag ok" style="margin-right:4px;">OK</span>' : '';
+  
+  // Detalle de votos de modelos si están disponibles
+  let tagsModelos = '';
+  if(ev.modelos_ml){
+    const ifAlerta = ev.modelos_ml.isolation_forest.alerta;
+    const svmAlerta = ev.modelos_ml.one_class_svm.alerta;
+    const lofAlerta = ev.modelos_ml.lof.alerta;
+    tagsModelos = `
+      <span class="tag ${ifAlerta ? 'ml' : 'off'}" title="Isolation Forest">${ifAlerta ? 'IF' : '—'}</span>
+      <span class="tag ${svmAlerta ? 'ml' : 'off'}" style="${svmAlerta ? 'background:rgba(187,128,227,0.2); color:#BB80E3;' : ''}" title="One-Class SVM">${svmAlerta ? 'SVM' : '—'}</span>
+      <span class="tag ${lofAlerta ? 'ml' : 'off'}" style="${lofAlerta ? 'background:rgba(230,180,80,0.2); color:#E6B450;' : ''}" title="LOF">${lofAlerta ? 'LOF' : '—'}</span>
+    `;
+  } else {
+    tagsModelos = `<span class="tag ${ev.alerta_ml ? 'ml' : 'off'}">${ev.alerta_ml ? 'ML' : '—'}</span>`;
+  }
 
   fila.innerHTML = `
     <span class="hora">${formatHora(ev.timestamp)}</span>
     <span class="ip">${ev.ip}</span>
     <span class="detalle" title="${detalle.replace(/"/g,'&quot;')}">${tagOk}${detalle}</span>
     <span class="tag ${ev.alerta_reglas ? 'reglas' : 'off'}">${ev.alerta_reglas ? 'REGLAS' : '—'}</span>
-    <span class="tag ${ev.alerta_ml ? 'ml' : 'off'}">${ev.alerta_ml ? 'ML' : '—'}</span>
+    ${tagsModelos}
   `;
   stream.prepend(fila);
   while(stream.children.length > 200){ stream.removeChild(stream.lastChild); }
@@ -666,12 +730,47 @@ async function actualizarMetricas(){
     const m = await res.json();
     if(!m){ return; }
     document.getElementById('contador-total').textContent = `${m.total_intentos} intentos registrados`;
-    const r = m.alerta_reglas, ml = m.alerta_ml;
+    
+    // 1. Reglas
+    const r = m.alerta_reglas;
     document.getElementById('r-precision').textContent = pct(r.precision);
     document.getElementById('r-recall').textContent = pct(r.recall);
     document.getElementById('r-fp').textContent = r.falsos_positivos;
     document.getElementById('r-fn').textContent = r.falsos_negativos;
     document.getElementById('r-f1').textContent = 'F1 ' + r.f1.toFixed(3);
+
+    // 2. Isolation Forest
+    if(m.alerta_iforest){
+      const iforest = m.alerta_iforest;
+      document.getElementById('if-precision').textContent = pct(iforest.precision);
+      document.getElementById('if-recall').textContent = pct(iforest.recall);
+      document.getElementById('if-fp').textContent = iforest.falsos_positivos;
+      document.getElementById('if-fn').textContent = iforest.falsos_negativos;
+      document.getElementById('if-f1').textContent = 'F1 ' + iforest.f1.toFixed(3);
+    }
+
+    // 3. One-Class SVM
+    if(m.alerta_ocsvm){
+      const svm = m.alerta_ocsvm;
+      document.getElementById('svm-precision').textContent = pct(svm.precision);
+      document.getElementById('svm-recall').textContent = pct(svm.recall);
+      document.getElementById('svm-fp').textContent = svm.falsos_positivos;
+      document.getElementById('svm-fn').textContent = svm.falsos_negativos;
+      document.getElementById('svm-f1').textContent = 'F1 ' + svm.f1.toFixed(3);
+    }
+
+    // 4. LOF
+    if(m.alerta_lof){
+      const lof = m.alerta_lof;
+      document.getElementById('lof-precision').textContent = pct(lof.precision);
+      document.getElementById('lof-recall').textContent = pct(lof.recall);
+      document.getElementById('lof-fp').textContent = lof.falsos_positivos;
+      document.getElementById('lof-fn').textContent = lof.falsos_negativos;
+      document.getElementById('lof-f1').textContent = 'F1 ' + lof.f1.toFixed(3);
+    }
+
+    // 5. Ensamble Multi-ML
+    const ml = m.alerta_ml;
     document.getElementById('m-precision').textContent = pct(ml.precision);
     document.getElementById('m-recall').textContent = pct(ml.recall);
     document.getElementById('m-fp').textContent = ml.falsos_positivos;
@@ -680,6 +779,21 @@ async function actualizarMetricas(){
   } catch(e){}
 }
 actualizarMetricas();
+
+async function cargarCicidsPrecargado(){
+  agregarLog('Entrenando suite de modelos (Isolation Forest, OC-SVM, LOF) con dataset CICIDS2017...');
+  try {
+    const res = await fetch('/entrenar/cargar_cicids_precargado', {method: 'POST'});
+    if(res.status === 401){
+      agregarLog('Error 401: autenticación requerida.');
+    } else {
+      const data = await res.json();
+      agregarLog(`¡Éxito! Suite entrenada con ${data.fuente}.`);
+    }
+  } catch(e) {
+    agregarLog('Error al cargar dataset: ' + e.message);
+  }
+}
 
 // ================== ENTRENAMIENTO ==================
 const logEntrenamiento = document.getElementById('log-entrenamiento');

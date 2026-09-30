@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login con Desafío CAPTCHA — Verificación Anti-Bot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #0A0E14;
+    --bg-panel: #0F141C;
+    --bg-panel-raised: #141B25;
+    --line: #22303F;
+    --text: #D6E1EA;
+    --text-dim: #6E828F;
+    --safe: #6FCF97;
+    --warn: #FFB454;
+    --danger: #F07178;
+    --accent: #FFB454;
+    --font-head: 'Space Grotesk', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background: var(--bg); color: var(--text); font-family: var(--font-mono);
+    min-height: 100vh; display:flex; align-items:center; justify-content:center;
+    padding: 24px; flex-direction: column;
+  }
+  .nav-header{
+    position: fixed; top: 16px; left: 20px; right: 20px;
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 10px;
+  }
+  .badge-sitio{
+    font-size: 11px; color: var(--text-dim);
+    border: 1px solid var(--line); padding: 5px 12px; border-radius: 4px;
+    background: var(--bg-panel);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .badge-proteccion{
+    font-size: 11px; color: var(--warn);
+    border: 1px solid var(--warn); padding: 5px 12px; border-radius: 4px;
+    background: var(--bg-panel);
+    display:flex; align-items:center; gap:6px;
+  }
+  .card{
+    width: 100%; max-width: 440px;
+    background: var(--bg-panel); border: 1px solid rgba(255,180,84,0.4); border-radius: 8px;
+    padding: 32px 28px; margin-top: 60px;
+    box-shadow: 0 0 25px rgba(255,180,84,0.08);
+  }
+  .nivel-tag{
+    display: inline-block; font-size: 10px; font-weight: 700;
+    background: rgba(255,180,84,0.15); color: var(--warn);
+    padding: 3px 8px; border-radius: 3px; margin-bottom: 12px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .card h1{
+    font-family: var(--font-head); font-size: 21px; font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .card p.sub{
+    font-size: 12px; color: var(--text-dim); margin-bottom: 22px; line-height: 1.5;
+  }
+  .captcha-box{
+    background: var(--bg-panel-raised); border: 1px solid var(--line);
+    border-radius: 6px; padding: 14px; margin-bottom: 18px;
+  }
+  .captcha-challenge{
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .captcha-visual{
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 20px; font-weight: 700; letter-spacing: 6px;
+    background: #000; padding: 8px 14px; border-radius: 4px;
+    color: var(--warn); user-select: none;
+    text-decoration: line-through; text-shadow: 2px 2px 4px rgba(255,180,84,0.4);
+  }
+  .btn-refresh{
+    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+    border-radius: 4px; padding: 6px 10px; font-size: 11px; cursor: pointer;
+  }
+  .btn-refresh:hover{ color: var(--text); border-color: var(--text); }
+  label{ font-size: 11.5px; color: var(--text-dim); display:block; margin-bottom: 6px; }
+  input{
+    width: 100%; background: var(--bg-panel-raised); border: 1px solid var(--line);
+    color: var(--text); font-family: var(--font-mono); font-size: 13px;
+    padding: 10px 12px; border-radius: 4px; margin-bottom: 16px;
+  }
+  input:focus{ outline: none; border-color: var(--warn); }
+  button.submit-btn{
+    width: 100%; background: var(--warn); color: #0A0E14; border: none;
+    font-family: var(--font-head); font-size: 13.5px; font-weight: 700;
+    padding: 11px; border-radius: 4px; cursor: pointer; transition: opacity .15s ease;
+  }
+  button.submit-btn:hover{ opacity: 0.9; }
+  button.submit-btn:disabled{ opacity: 0.5; cursor: not-allowed; }
+  #resultado{
+    margin-top: 16px; font-size: 12.5px; padding: 10px 12px; border-radius: 4px;
+    display: none; line-height: 1.5;
+  }
+  #resultado.ok{ display:block; background: rgba(111,207,151,0.1); color: var(--safe); border: 1px solid rgba(111,207,151,0.3); }
+  #resultado.fallo{ display:block; background: rgba(255,180,84,0.1); color: var(--warn); border: 1px solid rgba(255,180,84,0.3); }
+  #resultado.bloqueado{ display:block; background: rgba(240,113,120,0.1); color: var(--danger); border: 1px solid rgba(240,113,120,0.3); }
+  .nav-pills{
+    margin-top: 24px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+  }
+  .nav-pills a{
+    font-size: 11px; padding: 6px 12px; border-radius: 4px; text-decoration: none;
+    border: 1px solid var(--line); background: var(--bg-panel); color: var(--text-dim);
+  }
+  .nav-pills a:hover, .nav-pills a.active{
+    color: var(--text); border-color: var(--text-dim);
+  }
+</style>
+</head>
+<body>
+
+<div class="nav-header">
+  <div class="badge-sitio">
+    demo_captcha
+    <a href="/" style="color:var(--safe); text-decoration:none; margin-left:8px;">← Panel de Centinela</a>
+  </div>
+  <div class="badge-proteccion">🛡️ DESAFÍO CAPTCHA ACTIVO</div>
+</div>
+
+<div class="card">
+  <div class="nivel-tag">Escenario 2 · CAPTCHA</div>
+  <h1>Login con Verificación Humana</h1>
+  <p class="sub">Exige resolver un desafío tokenizado. Los scripts y bots automatizados que solo envían JSON fallan al no interpretar el código visual.</p>
+
+  <form id="form-login">
+    <label for="usuario">Usuario</label>
+    <input id="usuario" name="usuario" autocomplete="username" value="admin">
+
+    <label for="password">Contraseña</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" value="S3guro#2026">
+
+    <div class="captcha-box">
+      <div class="captcha-challenge">
+        <div>
+          <span style="font-size:10.5px; color:var(--text-dim); display:block; margin-bottom:4px;">RETO DE SEGURIDAD</span>
+          <div class="captcha-visual" id="captcha-code">4K9W2</div>
+        </div>
+        <button type="button" class="btn-refresh" id="btn-refresh-captcha">↻ Nuevo código</button>
+      </div>
+      <label for="captcha-input" style="margin-top:8px;">Escribe el código mostrado arriba:</label>
+      <input id="captcha-input" name="captcha" placeholder="Código de 5 caracteres" autocomplete="off" style="margin-bottom:0; text-transform:uppercase;">
+    </div>
+
+    <button type="submit" class="submit-btn" id="btn-submit">Validar Humano & Entrar</button>
+  </form>
+
+  <div id="resultado"></div>
+</div>
+
+<div class="nav-pills">
+  <a href="/demo/vulnerable">1. Sin Protección</a>
+  <a href="/demo/captcha" class="active" style="border-color:var(--warn); color:var(--warn);">2. Con CAPTCHA</a>
+  <a href="/demo/2fa">3. Con Doble Factor (2FA)</a>
+  <a href="/demo">4. Protegido por Centinela</a>
+</div>
+
+<script>
+let currentCaptcha = '';
+function generarCaptcha() {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let s = '';
+  for(let i=0; i<5; i++){
+    s += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  currentCaptcha = s;
+  document.getElementById('captcha-code').textContent = s;
+}
+generarCaptcha();
+document.getElementById('btn-refresh-captcha').addEventListener('click', generarCaptcha);
+
+const form = document.getElementById('form-login');
+const resultado = document.getElementById('resultado');
+const btn = document.getElementById('btn-submit');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const usuario = document.getElementById('usuario').value.trim();
+  const password = document.getElementById('password').value;
+  const captcha = document.getElementById('captcha-input').value.trim().toUpperCase();
+
+  btn.disabled = true;
+  btn.textContent = 'Verificando reto...';
+  resultado.className = '';
+  resultado.style.display = 'none';
+
+  try {
+    const res = await fetch('/demo/captcha/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({usuario, password, captcha, captchaEsperado: currentCaptcha})
+    });
+    const data = await res.json();
+
+    if (res.status === 200) {
+      resultado.className = 'ok';
+      resultado.textContent = '✓ ' + data.mensaje;
+    } else if (res.status === 400 && data.es_captcha) {
+      resultado.className = 'bloqueado';
+      resultado.textContent = '🚫 Bot interceptado: ' + data.mensaje;
+      generarCaptcha();
+      document.getElementById('captcha-input').value = '';
+    } else {
+      resultado.className = 'fallo';
+      resultado.textContent = '✗ ' + data.mensaje;
+      generarCaptcha();
+    }
+  } catch (err) {
+    resultado.className = 'fallo';
+    resultado.textContent = 'Error de conexión.';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Validar Humano & Entrar';
+});
+</script>
+
+</body>
+</html>

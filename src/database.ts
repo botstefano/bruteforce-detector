@@ -1,11 +1,7 @@
 /**
- * database.ts — Capa de persistencia en memoria para intentos e IPs bloqueadas.
- * 
- * Separa:
- *   - es_simulado = 1 -> tráfico generado por botones de simulación o experimentos
- *     (tiene es_ataque_real confiable para calcular precisión, recall, F1)
- *   - es_simulado = 0 -> tráfico real que llegó desde un login externo (/registrar_intento)
- *     (no contamina las métricas experimentales)
+ * database.ts — Almacén en memoria de eventos, auditoría, métricas comparativas
+ * y estado de bloqueos temporales por IP.
+ * Registra veredictos individuales por cada algoritmo de Machine Learning.
  */
 
 export interface Intento {
@@ -17,6 +13,10 @@ export interface Intento {
   es_ataque_real: number;
   alerta_reglas: number;
   alerta_ml: number;
+  alerta_iforest: number;
+  alerta_ocsvm: number;
+  alerta_lof: number;
+  score_ml: number;
   origen: string;
   es_simulado: number;
 }
@@ -39,7 +39,10 @@ export interface MetricaMetodo {
 
 export interface MetricasResumen {
   alerta_reglas: MetricaMetodo;
-  alerta_ml: MetricaMetodo;
+  alerta_iforest: MetricaMetodo;
+  alerta_ocsvm: MetricaMetodo;
+  alerta_lof: MetricaMetodo;
+  alerta_ml: MetricaMetodo; // Ensamble
   total_intentos: number;
 }
 
@@ -63,6 +66,10 @@ class Database {
     es_ataque_real = 0,
     alerta_reglas = 0,
     alerta_ml = 0,
+    alerta_iforest = 0,
+    alerta_ocsvm = 0,
+    alerta_lof = 0,
+    score_ml = 0,
     origen = 'simulador',
     timestamp?: number,
     es_simulado = 1
@@ -78,11 +85,14 @@ class Database {
       es_ataque_real,
       alerta_reglas,
       alerta_ml,
+      alerta_iforest,
+      alerta_ocsvm,
+      alerta_lof,
+      score_ml,
       origen,
       es_simulado,
     };
     this.intentos.push(intento);
-    // Limitar tamaño en memoria para estabilidad
     if (this.intentos.length > 5000) {
       this.intentos.splice(0, 1000);
     }
@@ -105,7 +115,9 @@ class Database {
     const simulados = this.intentos.filter((i) => i.es_simulado === 1);
     if (simulados.length === 0) return null;
 
-    const calcular = (campo: 'alerta_reglas' | 'alerta_ml'): MetricaMetodo => {
+    const calcular = (
+      campo: 'alerta_reglas' | 'alerta_ml' | 'alerta_iforest' | 'alerta_ocsvm' | 'alerta_lof'
+    ): MetricaMetodo => {
       let vp = 0, fn = 0, fp = 0, vn = 0;
       for (const i of simulados) {
         const predicho = i[campo] === 1;
@@ -132,6 +144,9 @@ class Database {
 
     return {
       alerta_reglas: calcular('alerta_reglas'),
+      alerta_iforest: calcular('alerta_iforest'),
+      alerta_ocsvm: calcular('alerta_ocsvm'),
+      alerta_lof: calcular('alerta_lof'),
       alerta_ml: calcular('alerta_ml'),
       total_intentos: simulados.length,
     };
@@ -160,7 +175,7 @@ class Database {
     const b = this.ipBloqueadas.get(ip);
     if (!b) return [false, 0];
     const ahora = Date.now() / 1000;
-    const restante = Math.ceil(b.hasta - ahora);
+    const restante = Math.max(0, Math.ceil(b.hasta - ahora));
     if (restante <= 0) {
       this.ipBloqueadas.delete(ip);
       return [false, 0];
@@ -168,33 +183,33 @@ class Database {
     return [true, restante];
   }
 
-  public bloquearIp(ip: string, segundos: number): number {
+  public bloquearIp(ip: string, duracionSegundos = 300): void {
     const ahora = Date.now() / 1000;
-    const hasta = ahora + segundos;
     this.ipBloqueadas.set(ip, {
       ip,
-      hasta,
       creada_en: ahora,
+      hasta: ahora + duracionSegundos,
     });
-    return hasta;
   }
 
-  public listarIpsBloqueadas(): Record<string, number> {
-    this.purgarExpiradas();
-    const ahora = Date.now() / 1000;
-    const res: Record<string, number> = {};
-    for (const [ip, b] of this.ipBloqueadas.entries()) {
-      const rem = Math.ceil(b.hasta - ahora);
-      if (rem > 0) {
-        res[ip] = rem;
-      }
-    }
-    return res;
+  public desbloquearIp(ip: string): void {
+    this.ipBloqueadas.delete(ip);
   }
 
   public limpiarBloqueos(): void {
     this.ipBloqueadas.clear();
   }
+
+  public listarIpsBloqueadas(): Record<string, number> {
+    this.purgarExpiradas();
+    const ahora = Date.now() / 1000;
+    const resultado: Record<string, number> = {};
+    for (const [ip, b] of this.ipBloqueadas.entries()) {
+      resultado[ip] = Math.max(0, Math.ceil(b.hasta - ahora));
+    }
+    return resultado;
+  }
 }
 
 export const db = new Database();
+db.initDb();

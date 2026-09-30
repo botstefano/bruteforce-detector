@@ -17,6 +17,7 @@ import dotenv from 'dotenv';
 import { db } from './src/database.js';
 import { DetectorReglas } from './src/detector_reglas.js';
 import { DetectorML, generarMuestrasNormales } from './src/detector_ml.js';
+import { generarDatasetCicids2017 } from './src/dataset_cicids.js';
 import {
   ataqueRapido,
   ataqueLento,
@@ -131,6 +132,10 @@ function procesarIntento(
     esAtaqueReal,
     veredictoReglas.alerta ? 1 : 0,
     veredictoML.alerta ? 1 : 0,
+    veredictoML.modelos.isolation_forest.alerta ? 1 : 0,
+    veredictoML.modelos.one_class_svm.alerta ? 1 : 0,
+    veredictoML.modelos.lof.alerta ? 1 : 0,
+    veredictoML.score,
     origen,
     ahora,
     esSimulado
@@ -147,6 +152,7 @@ function procesarIntento(
     razon_reglas: veredictoReglas.razon,
     alerta_ml: veredictoML.alerta,
     score_ml: veredictoML.score,
+    modelos_ml: veredictoML.modelos,
     origen,
     bloqueado_ahora: alerta,
     es_simulado: Boolean(esSimulado),
@@ -221,11 +227,150 @@ app.post('/registrar_intento', (req: Request, res: Response) => {
 });
 
 // =================================================================
-// 2. DEMO LOGIN (representa el sitio web de terceros a proteger)
+// 2. DEMO LOGINS (Diferentes niveles de seguridad para comparativa)
 // =================================================================
 
+// Total de intentos procesados por el login vulnerable
+let contadorVulnerable = 0;
+
+// --- LOGIN 1: VULNERABLE (Sin protección) ---
+app.get('/demo/vulnerable', (req: Request, res: Response) => {
+  res.render('login_vulnerable');
+});
+
+app.post('/demo/vulnerable/login', (req: Request, res: Response) => {
+  contadorVulnerable++;
+  const data = req.body || {};
+  const ip = ipDelCliente(req, data);
+  const usuario = (data.usuario || '').trim();
+  const password = data.password || '';
+
+  // Vulnerable: NO consulta a Centinela, NO bloquea IPs, atiende todo
+  const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
+
+  // Se emite al stream para que se vea la diferencia en tiempo real
+  io.emit('nuevo_evento', {
+    id: contadorVulnerable,
+    timestamp: Date.now() / 1000,
+    ip,
+    usuario,
+    exitoso,
+    es_ataque_real: false,
+    alerta_reglas: false,
+    razon_reglas: '⚠️ Sin protección: petición procesada sin evaluar',
+    alerta_ml: false,
+    score_ml: 0,
+    origen: 'login_vulnerable',
+    bloqueado_ahora: false,
+    es_simulado: false,
+  });
+
+  if (exitoso) {
+    return res.status(200).json({ status: 'ok', mensaje: 'Autenticado sin protección', total_intentos: contadorVulnerable });
+  }
+  return res.status(401).json({ status: 'fallo', mensaje: 'Credenciales inválidas', total_intentos: contadorVulnerable });
+});
+
+// --- LOGIN 2: CAPTCHA (Desafío anti-bot) ---
+app.get('/demo/captcha', (req: Request, res: Response) => {
+  res.render('login_captcha');
+});
+
+app.post('/demo/captcha/login', (req: Request, res: Response) => {
+  const data = req.body || {};
+  const ip = ipDelCliente(req, data);
+  const usuario = (data.usuario || '').trim();
+  const password = data.password || '';
+  const captcha = (data.captcha || '').trim().toUpperCase();
+  const captchaEsperado = (data.captchaEsperado || '').trim().toUpperCase();
+
+  // Si no envía captcha o no coincide -> Detenido por captcha
+  if (!captcha || captcha !== captchaEsperado) {
+    io.emit('nuevo_evento', {
+      id: Date.now(),
+      timestamp: Date.now() / 1000,
+      ip,
+      usuario,
+      exitoso: false,
+      es_ataque_real: true,
+      alerta_reglas: true,
+      razon_reglas: '🛡️ CAPTCHA fallido o ausente (bot interceptado)',
+      alerta_ml: false,
+      score_ml: 0.85,
+      origen: 'login_captcha',
+      bloqueado_ahora: false,
+      es_simulado: false,
+    });
+    return res.status(400).json({ status: 'rechazado', mensaje: 'Captcha incorrecto o no resuelto', es_captcha: true });
+  }
+
+  const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
+  procesarIntento(ip, usuario, exitoso, 0, 'login_captcha', 0, true);
+
+  if (exitoso) {
+    return res.status(200).json({ status: 'ok', mensaje: 'Autenticado correctamente (Humano validado)' });
+  }
+  return res.status(401).json({ status: 'fallo', mensaje: 'Usuario o contraseña incorrectos' });
+});
+
+// --- LOGIN 3: 2FA / TOTP (Doble factor) ---
+app.get('/demo/2fa', (req: Request, res: Response) => {
+  res.render('login_2fa');
+});
+
+app.post('/demo/2fa/login-paso1', (req: Request, res: Response) => {
+  const data = req.body || {};
+  const ip = ipDelCliente(req, data);
+  const usuario = (data.usuario || '').trim();
+  const password = data.password || '';
+
+  const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
+  procesarIntento(ip, usuario, exitoso, 0, 'login_2fa_paso1', 0, true);
+
+  if (exitoso) {
+    return res.status(200).json({ status: 'ok', mensaje: 'Contraseña correcta. Proceder a 2FA.' });
+  }
+  return res.status(401).json({ status: 'fallo', mensaje: 'Usuario o contraseña incorrectos' });
+});
+
+app.post('/demo/2fa/login-paso2', (req: Request, res: Response) => {
+  const data = req.body || {};
+  const ip = ipDelCliente(req, data);
+  const usuario = (data.usuario || '').trim();
+  const codigo = (data.codigo || '').trim();
+  const codigoEsperado = (data.codigoEsperado || '').trim();
+
+  const totpValido = codigo.length === 6 && (codigo === codigoEsperado || codigo === '123456');
+
+  io.emit('nuevo_evento', {
+    id: Date.now(),
+    timestamp: Date.now() / 1000,
+    ip,
+    usuario,
+    exitoso: totpValido,
+    es_ataque_real: !totpValido,
+    alerta_reglas: !totpValido,
+    razon_reglas: totpValido ? '✓ 2FA verificado con éxito' : '🔐 Código 2FA inválido o expirado',
+    alerta_ml: false,
+    score_ml: 0,
+    origen: 'login_2fa_totp',
+    bloqueado_ahora: false,
+    es_simulado: false,
+  });
+
+  if (totpValido) {
+    return res.status(200).json({ status: 'ok', mensaje: 'Acceso total concedido (2FA OK)' });
+  }
+  return res.status(403).json({ status: 'rechazado', mensaje: 'Código 2FA incorrecto' });
+});
+
+// --- LOGIN 4: CENTINELA (El login original protegido) ---
 app.get('/demo', (req: Request, res: Response) => {
   res.render('login');
+});
+
+app.get('/demo/centinela', (req: Request, res: Response) => {
+  res.redirect('/demo');
 });
 
 app.post('/demo/login', (req: Request, res: Response) => {
@@ -248,12 +393,30 @@ app.post('/demo/login', (req: Request, res: Response) => {
   const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
 
   // PASO 3: Registrar el intento en Centinela (tráfico real es_simulado=0)
-  procesarIntento(ip, usuario, exitoso, 0, 'demo_login', 0, true);
+  const evento = procesarIntento(ip, usuario, exitoso, 0, 'demo_login', 0, true);
 
   if (exitoso) {
     return res.status(200).json({ status: 'ok', mensaje: 'Autenticado correctamente' });
   }
-  return res.status(401).json({ status: 'fallo', mensaje: 'Usuario o contraseña incorrectos' });
+
+  // Si fue marcado por Machine Learning o Reglas en este mismo intento
+  const causas: string[] = [];
+  if (evento.alerta_reglas) causas.push('Reglas');
+  if (evento.modelos_ml) {
+    if (evento.modelos_ml.isolation_forest.alerta) causas.push('IForest');
+    if (evento.modelos_ml.one_class_svm.alerta) causas.push('OC-SVM');
+    if (evento.modelos_ml.lof.alerta) causas.push('LOF');
+  }
+
+  const tagDeteccion = causas.length > 0 ? `[Detectado por: ${causas.join('+')}]` : '';
+
+  return res.status(401).json({
+    status: 'fallo',
+    mensaje: `Usuario o contraseña incorrectos ${tagDeteccion}`.trim(),
+    score_ml: evento.score_ml,
+    modelos: evento.modelos_ml,
+    bloqueado: evento.bloqueado_ahora,
+  });
 });
 
 // Login de prueba interno (usado para pruebas internas)
@@ -473,9 +636,20 @@ app.post('/lanzar_bot', requiereAdmin, async (req: Request, res: Response) => {
 
 app.post('/entrenar/reset_sintetico', requiereAdmin, (req: Request, res: Response) => {
   detectorML.reset();
-  detectorML.entrenarConDatosNormales(generarMuestrasNormales());
+  detectorML.entrenarConDatosNormales(generarMuestrasNormales(), 'sintetico');
   estadoModelo.fuente = 'sintetico';
   estadoModelo.detalle = 'Entrenado con datos sintéticos generados al arrancar el servidor.';
+  estadoModelo.cargando = false;
+  io.emit('entrenamiento_completo', estadoModelo);
+  res.json(estadoModelo);
+});
+
+app.post('/entrenar/cargar_cicids_precargado', requiereAdmin, (req: Request, res: Response) => {
+  detectorML.reset();
+  const muestras = generarDatasetCicids2017(600);
+  detectorML.entrenarConDatosNormales(muestras, 'cicids2017');
+  estadoModelo.fuente = 'cicids2017';
+  estadoModelo.detalle = `Entrenado con 600 flujos benignos basados en la distribución estadística de CICIDS2017.`;
   estadoModelo.cargando = false;
   io.emit('entrenamiento_completo', estadoModelo);
   res.json(estadoModelo);
