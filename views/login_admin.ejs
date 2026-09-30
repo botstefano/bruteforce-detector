@@ -61,7 +61,11 @@
     <input id="password" name="password" type="password" autocomplete="current-password" autofocus>
     <button type="submit" id="btn-submit">Acceder</button>
   </form>
-  {% if error %}<div id="error" class="visible">{{ error }}</div>{% else %}<div id="error"></div>{% endif %}
+  <% if (typeof error !== 'undefined' && error) { %>
+    <div id="error" class="visible"><%= error %></div>
+  <% } else { %>
+    <div id="error"></div>
+  <% } %>
 </div>
 <script>
 document.getElementById('form-login').addEventListener('submit', async (e) => {
@@ -79,8 +83,6 @@ document.getElementById('form-login').addEventListener('submit', async (e) => {
     });
     const data = await res.json().catch(()=> ({}));
     if (res.ok && data && data.status === 'ok') {
-      // Redirige explícitamente al dashboard (no location.reload) para
-      // forzar un GET limpio con la cookie session recién guardada.
       window.location.href = data.redirect || '/';
     } else {
       errEl.textContent = (data && data.error) ? data.error : 'Error al autenticar';

@@ -1,0 +1,9 @@
+{
+  "name": "Centinela — Brute Force Detector",
+  "description": "Adaptive rule-based and machine-learning brute force attack detector and mitigation microservice with real-time dashboard and live attack simulator.",
+  "version": "1.0.0",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
