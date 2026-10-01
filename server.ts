@@ -590,13 +590,32 @@ app.post('/lanzar_bot', requiereAdmin, async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'tipo invalido' });
   }
 
-  // URL objetivo: si es relativa o localhost, mapearla a la app local
-  let targetUrl = (data.url || '/demo/login').trim();
-  if (targetUrl.startsWith('/')) {
-    targetUrl = `http://127.0.0.1:${PORT}${targetUrl}`;
-  } else if (targetUrl.includes('localhost:5000')) {
-    targetUrl = targetUrl.replace('localhost:5000', `localhost:${PORT}/demo`);
+  // URL objetivo: asegurar que siempre se ejecute contra el endpoint interno en loopback
+  let rawUrl = (data.url || '/demo/login').trim();
+  let path = '/demo/login';
+
+  try {
+    if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+      const parsed = new URL(rawUrl);
+      path = parsed.pathname;
+    } else if (rawUrl.startsWith('/')) {
+      path = rawUrl;
+    } else {
+      path = '/' + rawUrl;
+    }
+  } catch {
+    path = '/demo/login';
   }
+
+  // Filtrar prefijos inválidos
+  if (!path.startsWith('/demo')) {
+    if (path.includes('vulnerable')) path = '/demo/vulnerable/login';
+    else if (path.includes('captcha')) path = '/demo/captcha/login';
+    else if (path.includes('2fa')) path = '/demo/2fa/login-paso1';
+    else path = '/demo/login';
+  }
+
+  const targetUrl = `http://127.0.0.1:${PORT}${path}`;
 
   const usuario = data.usuario || undefined;
   const intentos = parseInt(data.intentos || '10', 10);
