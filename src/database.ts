@@ -107,6 +107,10 @@ class Database {
     return list.slice(-limite).reverse();
   }
 
+  public obtenerTodosIntentos(): Intento[] {
+    return [...this.intentos];
+  }
+
   public limpiar(): void {
     this.intentos = [];
   }

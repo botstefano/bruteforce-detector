@@ -459,9 +459,44 @@
       </div>
     </div>
 
-    <div class="field">
-      <label>Contraseñas personalizadas (una por línea, opcional)</label>
-      <textarea id="bot-passwords" placeholder="Deja vacío para usar la lista por defecto&#10;123456&#10;password&#10;qwerty"></textarea>
+    <div class="field" style="margin-bottom:12px; background:rgba(0,217,255,0.04); padding:10px; border-radius:6px; border:1px solid rgba(0,217,255,0.25);">
+      <div style="font-weight:600; font-size:11.5px; color:var(--accent); margin-bottom:6px; display:flex; align-items:center; gap:6px;">
+        <span>🧠 Modo de Ataque y Deducción:</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:6px;">
+        <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:11.5px; margin:0; text-transform:none; letter-spacing:normal;">
+          <input type="radio" name="bot-estrategia" id="strat-inteligente" value="inteligente" checked style="margin-top:2px; accent-color:var(--accent); cursor:pointer;">
+          <div>
+            <strong>Ataque Heurístico Inteligente (Mutación Semántica & Leetspeak)</strong>
+            <div style="color:var(--text-dim); font-size:10px; margin-top:2px;">
+              El bot perfila al objetivo y deduce progresivamente variantes (<code>S3guro#2026</code>, <code>MiClave!789</code>, años, sustitución leet <code>3->e</code>, <code>@->a</code>, símbolos). Encontrará la credencial de forma orgánica si el sistema no lo bloquea antes.
+            </div>
+          </div>
+        </label>
+
+        <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:11.5px; margin:0; text-transform:none; letter-spacing:normal;">
+          <input type="radio" name="bot-estrategia" id="strat-diccionario" value="diccionario" style="margin-top:2px; accent-color:var(--accent); cursor:pointer;">
+          <div>
+            <strong>Diccionario Estático Tradicional</strong>
+            <div style="color:var(--text-dim); font-size:10px; margin-top:2px;">
+              Prueba la lista fija o personalizada (123456, password, etc.).
+            </div>
+          </div>
+        </label>
+      </div>
+
+      <div id="box-pistas-contexto" style="margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.08);">
+        <label style="font-size:10px; color:var(--text-dim); margin-bottom:3px; display:block;">Pistas semánticas del objetivo (opcional para el bot inteligente):</label>
+        <input type="text" id="bot-pistas" placeholder="ej. seguro, trujillo, unitru, miclave" style="font-size:11px; width:100%; padding:5px 8px; background:rgba(0,0,0,0.3); border:1px solid var(--line); border-radius:4px; color:var(--text);">
+      </div>
+    </div>
+
+    <div class="field" id="box-passwords-custom" style="display:none;">
+      <label style="display:flex; justify-content:space-between; align-items:center;">
+        <span>Contraseñas a probar (una por línea)</span>
+        <span style="font-size:10px; color:var(--text-dim);">💡 Clave real de admin: <code>S3guro#2026</code></span>
+      </label>
+      <textarea id="bot-passwords" placeholder="Deja vacío para diccionario común (123456, password, etc.)&#10;O escribe una lista personalizada"></textarea>
     </div>
 
     <button class="btn lanzar-big" id="bot-lanzar">▶ Lanzar ataque</button>
@@ -578,11 +613,21 @@
         <button onclick="cargarCicidsPrecargado()" style="flex:1; background:var(--accent); color:#000; font-weight:700;">⚡ Cargar CICIDS2017 (1-Click)</button>
         <button onclick="volverASintetico()" style="flex:1; border-color: var(--text-dim); color: var(--text-dim);">Reset sintético</button>
       </div>
+      <div class="fila" style="margin-bottom:6px;">
+        <button onclick="reentrenarConTrafico()" style="flex:1; background:rgba(111,207,151,0.15); color:var(--safe); border-color:var(--safe); font-weight:600;" title="Usa los intentos reales y benignos registrados para ajustar el modelo">🧠 Re-entrenar con Tráfico Recibido</button>
+      </div>
       <div style="margin-top:8px;">
         <div style="font-size:10.5px; color:var(--text-dim); margin-bottom:4px;">O sube tus propios archivos CSV de CICIDS2017:</div>
         <div class="fila">
           <input type="file" id="in-file-cicids" accept=".csv" multiple style="font-size:10px; color:var(--text);">
           <button onclick="subirYEntrenarCicids()" style="font-size:10.5px;">Subir CSV</button>
+        </div>
+      </div>
+      <div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-size:10.5px; color:var(--text-dim);">📥 Exportar dataset de ataques:</span>
+        <div style="display:flex; gap:6px;">
+          <a href="/api/exportar_dataset?formato=csv" class="btn-mini" download style="color:var(--accent); border-color:var(--accent); text-decoration:none;">CSV</a>
+          <a href="/api/exportar_dataset?formato=json" class="btn-mini" download style="color:var(--text); text-decoration:none;">JSON</a>
         </div>
       </div>
       <div class="log-entrenamiento" id="log-entrenamiento"></div>
@@ -839,6 +884,23 @@ async function subirYEntrenarCicids(){
   }
 }
 
+async function reentrenarConTrafico(){
+  agregarLog('Extrayendo patrones de tráfico benigno capturado para re-entrenar modelos...');
+  try {
+    const res = await fetch('/entrenar/reentrenar_con_trafico', {method: 'POST'});
+    const data = await res.json().catch(()=>({}));
+    if(res.status === 401){
+      agregarLog('Error 401: autenticación requerida.');
+    } else if(!res.ok){
+      agregarLog('Aviso: ' + (data.error || 'No se pudo reentrenar'));
+    } else {
+      agregarLog('¡Modelos re-entrenados con éxito con el tráfico en vivo!');
+    }
+  } catch(e) {
+    agregarLog('Error de conexión: ' + e.message);
+  }
+}
+
 async function volverASintetico(){
   agregarLog('Volviendo al modelo entrenado con datos sintéticos...');
   const res = await fetch('/entrenar/reset_sintetico', {method: 'POST'});
@@ -968,6 +1030,24 @@ function agregarBotLog(mensaje){
 
 socket.on('bot_log', (ev) => agregarBotLog(ev.mensaje));
 
+const stratInteligenteEl = document.getElementById('strat-inteligente');
+const stratDiccionarioEl = document.getElementById('strat-diccionario');
+const boxPistasContextoEl = document.getElementById('box-pistas-contexto');
+const boxPasswordsCustomEl = document.getElementById('box-passwords-custom');
+
+function syncEstrategiaUI(){
+  if(stratInteligenteEl && stratInteligenteEl.checked){
+    if(boxPistasContextoEl) boxPistasContextoEl.style.display = 'block';
+    if(boxPasswordsCustomEl) boxPasswordsCustomEl.style.display = 'none';
+  } else {
+    if(boxPistasContextoEl) boxPistasContextoEl.style.display = 'none';
+    if(boxPasswordsCustomEl) boxPasswordsCustomEl.style.display = 'block';
+  }
+}
+if(stratInteligenteEl) stratInteligenteEl.addEventListener('change', syncEstrategiaUI);
+if(stratDiccionarioEl) stratDiccionarioEl.addEventListener('change', syncEstrategiaUI);
+syncEstrategiaUI();
+
 const botLanzarBtn = document.getElementById('bot-lanzar');
 botLanzarBtn.addEventListener('click', async () => {
   const tipo = botTipoEl.value;
@@ -976,8 +1056,11 @@ botLanzarBtn.addEventListener('click', async () => {
   const ips = parseInt(document.getElementById('bot-ips').value,10) || 6;
   const intervalo = parseFloat(botIntervaloEl.value);
   const url = document.getElementById('bot-url').value.trim() || '/demo/login';
-  const pwdRaw = document.getElementById('bot-passwords').value.trim();
+  const pwdRaw = document.getElementById('bot-passwords') ? document.getElementById('bot-passwords').value.trim() : '';
   const passwords = pwdRaw ? pwdRaw.split(/\r?\n/).map(s=>s.trim()).filter(Boolean) : undefined;
+  const modoInteligente = stratInteligenteEl ? stratInteligenteEl.checked : true;
+  const pistasContexto = document.getElementById('bot-pistas') ? document.getElementById('bot-pistas').value.trim() : undefined;
+  const incluirReal = !modoInteligente;
 
   botLanzarBtn.disabled = true;
   botLanzarBtn.textContent = 'Lanzando...';
@@ -986,7 +1069,7 @@ botLanzarBtn.addEventListener('click', async () => {
     const res = await fetch('/lanzar_bot', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({tipo, usuario, intentos, ips, intervalo, url, passwords})
+      body: JSON.stringify({tipo, usuario, intentos, ips, intervalo, url, passwords, incluirReal, modoInteligente, pistasContexto})
     });
     const data = await res.json().catch(()=>({}));
     if(res.status === 401){

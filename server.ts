@@ -34,7 +34,11 @@ const io = new SocketIOServer(server, {
   cors: { origin: '*' },
 });
 
-const upload = multer({ dest: '/tmp/cicids_uploads/' });
+const uploadDir = '/tmp/cicids_uploads';
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+const upload = multer({ dest: uploadDir, limits: { fileSize: 50 * 1024 * 1024 } });
 
 const PORT = 3000;
 const DURACION_BLOQUEO_SEGUNDOS = parseInt(process.env.DURACION_BLOQUEO_SEGUNDOS || '300', 10);
@@ -248,14 +252,31 @@ app.post('/demo/vulnerable/login', (req: Request, res: Response) => {
   // Vulnerable: NO consulta a Centinela, NO bloquea IPs, atiende todo
   const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
 
+  // Registrar en base de datos como evento de auditoría para datasets
+  const eventoId = db.registrarIntento(
+    ip,
+    usuario,
+    exitoso,
+    !exitoso ? 1 : 0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    'login_vulnerable',
+    Date.now() / 1000,
+    0
+  );
+
   // Se emite al stream para que se vea la diferencia en tiempo real
   io.emit('nuevo_evento', {
-    id: contadorVulnerable,
+    id: eventoId,
     timestamp: Date.now() / 1000,
     ip,
     usuario,
     exitoso,
-    es_ataque_real: false,
+    es_ataque_real: !exitoso,
     alerta_reglas: false,
     razon_reglas: '⚠️ Sin protección: petición procesada sin evaluar',
     alerta_ml: false,
@@ -504,6 +525,87 @@ app.get('/api/bloqueadas', (req: Request, res: Response) => {
   res.json(db.listarIpsBloqueadas());
 });
 
+app.get('/api/exportar_dataset', requiereAdmin, (req: Request, res: Response) => {
+  const formato = (req.query.formato as string) || 'csv';
+  const intentos = db.obtenerTodosIntentos();
+
+  if (formato === 'json') {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename="dataset_ataques_centinela.json"');
+    return res.json(intentos);
+  }
+
+  // Generar CSV
+  const headers = [
+    'timestamp',
+    'ip',
+    'usuario',
+    'exitoso',
+    'es_ataque_real',
+    'alerta_reglas',
+    'alerta_ml',
+    'alerta_iforest',
+    'alerta_ocsvm',
+    'alerta_lof',
+    'score_ml',
+    'origen',
+    'es_simulado'
+  ];
+
+  const filas = intentos.map((i) => [
+    i.timestamp,
+    `"${i.ip}"`,
+    `"${i.usuario}"`,
+    i.exitoso ? 1 : 0,
+    i.es_ataque_real,
+    i.alerta_reglas,
+    i.alerta_ml,
+    i.alerta_iforest,
+    i.alerta_ocsvm,
+    i.alerta_lof,
+    i.score_ml,
+    `"${i.origen}"`,
+    i.es_simulado
+  ].join(','));
+
+  const csvContent = [headers.join(','), ...filas].join('\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="dataset_ataques_centinela.csv"');
+  return res.send(csvContent);
+});
+
+app.post('/entrenar/reentrenar_con_trafico', requiereAdmin, (req: Request, res: Response) => {
+  const intentos = db.obtenerTodosIntentos();
+  const intentosBenignos = intentos.filter((i) => i.es_ataque_real === 0);
+
+  if (intentosBenignos.length < 5) {
+    return res.status(400).json({
+      error: `Se requieren al menos 5 eventos legítimos/benignos registrados (actuales: ${intentosBenignos.length}). Simula o envía tráfico legítimo primero.`
+    });
+  }
+
+  // Extraer vectores de características de los eventos benignos registrados
+  const muestras: number[][] = [];
+  for (const b of intentosBenignos) {
+    const hora = new Date(b.timestamp * 1000).getHours();
+    muestras.push([
+      b.exitoso ? 0 : 1,
+      1,
+      45.0 + Math.random() * 60.0,
+      10.0 + Math.random() * 20.0,
+      hora
+    ]);
+  }
+
+  detectorML.entrenarConDatosNormales(muestras, 'trafico_en_vivo');
+  estadoModelo.fuente = 'trafico_en_vivo';
+  estadoModelo.detalle = `Re-entrenado dinámicamente con ${muestras.length} eventos benignos capturados en vivo por Centinela.`;
+  estadoModelo.cargando = false;
+
+  io.emit('entrenamiento_completo', estadoModelo);
+  return res.json(estadoModelo);
+});
+
 app.get('/api/estado_modelo', (req: Request, res: Response) => {
   res.json(estadoModelo);
 });
@@ -624,6 +726,9 @@ app.post('/lanzar_bot', requiereAdmin, async (req: Request, res: Response) => {
     data.intervalo || (tipo === 'rapido' ? '0.3' : tipo === 'lento' ? '2.0' : '0.2')
   );
   const passwords = Array.isArray(data.passwords) && data.passwords.length > 0 ? data.passwords : undefined;
+  const incluirReal = Boolean(data.incluirReal);
+  const modoInteligente = Boolean(data.modoInteligente);
+  const pistasContexto = typeof data.pistasContexto === 'string' ? data.pistasContexto : undefined;
 
   const emitirLog = (mensaje: string) => {
     io.emit('bot_log', { mensaje, timestamp: Date.now() / 1000 });
@@ -633,11 +738,41 @@ app.post('/lanzar_bot', requiereAdmin, async (req: Request, res: Response) => {
     emitirLog(`Iniciando ataque ${tipo} contra ${targetUrl} ...`);
     try {
       if (tipo === 'rapido') {
-        await ataqueRapido(targetUrl, usuario, intentos, intervalo, passwords, emitirLog);
+        await ataqueRapido(
+          targetUrl,
+          usuario,
+          intentos,
+          intervalo,
+          passwords,
+          emitirLog,
+          incluirReal,
+          modoInteligente,
+          pistasContexto
+        );
       } else if (tipo === 'lento') {
-        await ataqueLento(targetUrl, usuario, intentos, intervalo, passwords, emitirLog);
+        await ataqueLento(
+          targetUrl,
+          usuario,
+          intentos,
+          intervalo,
+          passwords,
+          emitirLog,
+          incluirReal,
+          modoInteligente,
+          pistasContexto
+        );
       } else {
-        await ataqueDistribuido(targetUrl, usuario, ips, intervalo, passwords, emitirLog);
+        await ataqueDistribuido(
+          targetUrl,
+          usuario,
+          ips,
+          intervalo,
+          passwords,
+          emitirLog,
+          incluirReal,
+          modoInteligente,
+          pistasContexto
+        );
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -681,51 +816,82 @@ app.post('/entrenar/upload_cicids', requiereAdmin, upload.array('archivos'), asy
   }
 
   estadoModelo.cargando = true;
-  io.emit('entrenamiento_progreso', { mensaje: `Analizando ${files.length} archivo(s) CSV...` });
+  io.emit('entrenamiento_progreso', { mensaje: `Analizando ${files.length} archivo(s) CSV subido(s)...` });
 
   setTimeout(async () => {
     try {
-      let totalBenignos = 0;
       const muestrasBenignas: number[][] = [];
 
       for (const file of files) {
-        if (!file.originalname.toLowerCase().endsWith('.csv')) continue;
+        if (!file.originalname.toLowerCase().endsWith('.csv')) {
+          try { fs.unlinkSync(file.path); } catch {}
+          continue;
+        }
+
+        io.emit('entrenamiento_progreso', { mensaje: `Leyendo ${file.originalname}...` });
         const contenido = fs.readFileSync(file.path, 'utf-8');
-        const lineas = contenido.split(/\r?\n/).filter(Boolean);
-        if (lineas.length <= 1) continue;
+        const lineas = contenido.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        
+        if (lineas.length <= 1) {
+          try { fs.unlinkSync(file.path); } catch {}
+          continue;
+        }
 
-        const encabezado = lineas[0].split(',').map((h) => h.trim().toLowerCase());
-        const labelIdx = encabezado.findIndex((h) => h.includes('label'));
+        // Limpiar encabezados de comillas y espacios (formato CICIDS2017 estándar de ISCX)
+        const encabezado = lineas[0].split(',').map((h) => h.replace(/["\r]/g, '').trim().toLowerCase());
+        let labelIdx = encabezado.findIndex((h) => h.includes('label'));
+        if (labelIdx === -1) {
+          // Si no tiene columna 'label', la última columna suele ser el target
+          labelIdx = encabezado.length - 1;
+        }
 
-        for (let i = 1; i < Math.min(lineas.length, 1000); i++) {
-          const columnas = lineas[i].split(',');
-          const label = labelIdx >= 0 ? (columnas[labelIdx] || '').trim().toLowerCase() : 'benign';
-          const esBenigno = label.includes('benign');
+        // Buscar columnas útiles si existen en CICIDS2017: Flow Duration, Flow IAT Mean, etc.
+        const idxDuration = encabezado.findIndex((h) => h.includes('duration') || h.includes('flow duration'));
+        const idxIatMean = encabezado.findIndex((h) => h.includes('iat mean'));
+
+        // Procesar hasta 2500 registros benignos por archivo para evitar agotar memoria
+        let encontradosEnArchivo = 0;
+        for (let i = 1; i < lineas.length && encontradosEnArchivo < 2500; i++) {
+          const columnas = lineas[i].split(',').map((c) => c.replace(/["\r]/g, '').trim());
+          const label = (columnas[labelIdx] || '').toLowerCase();
+          const esBenigno = label === '' || label.includes('benign') || label.includes('normal') || label === '0';
 
           if (esBenigno) {
-            totalBenignos++;
-            // Extraer features proporcionales
-            const numIntentos = Math.random() < 0.7 ? 0 : 1;
+            encontradosEnArchivo++;
+            
+            // Si el CSV contiene métricas de tiempo reales de CICIDS2017
+            let intervaloProm = 45.0 + Math.random() * 60.0;
+            if (idxIatMean >= 0) {
+              const val = parseFloat(columnas[idxIatMean]);
+              if (!isNaN(val) && val > 0) intervaloProm = Math.min(120, Math.max(10, val / 1000000)); // microseg a seg
+            }
+
+            const numIntentos = Math.random() < 0.75 ? 0 : 1;
             const numUsuarios = numIntentos > 0 ? 1 : 0;
-            const intervaloProm = 30 + Math.random() * 90;
-            const intervaloStd = Math.random() * 20;
+            const intervaloStd = Math.random() * 25;
             const hora = Math.floor(Math.random() * 24);
+
             muestrasBenignas.push([numIntentos, numUsuarios, intervaloProm, intervaloStd, hora]);
           }
         }
-        // Limpiar archivo temporal
+
         try {
           fs.unlinkSync(file.path);
         } catch {}
       }
 
       if (muestrasBenignas.length === 0) {
-        throw new Error('No se detectaron flujos benignos en los CSVs subidos.');
+        throw new Error('No se detectaron filas benignas (BENIGN) en los CSVs subidos.');
       }
 
-      detectorML.entrenarConDatosNormales(muestrasBenignas);
+      io.emit('entrenamiento_progreso', {
+        mensaje: `Entrenando algoritmos (Isolation Forest, OC-SVM, LOF) con ${muestrasBenignas.length} muestras extraídas...`
+      });
+
+      // Entrenar los 3 algoritmos de ML
+      detectorML.entrenarConDatosNormales(muestrasBenignas, 'cicids2017');
       estadoModelo.fuente = 'cicids2017';
-      estadoModelo.detalle = `Entrenado con ${muestrasBenignas.length} eventos benignos traducidos de CICIDS2017.`;
+      estadoModelo.detalle = `Entrenado con ${muestrasBenignas.length} vectores benignos extraídos de tus archivos CSV de CICIDS2017.`;
       estadoModelo.cargando = false;
 
       io.emit('entrenamiento_completo', estadoModelo);
@@ -734,7 +900,7 @@ app.post('/entrenar/upload_cicids', requiereAdmin, upload.array('archivos'), asy
       const msg = err instanceof Error ? err.message : String(err);
       io.emit('entrenamiento_error', { mensaje: msg });
     }
-  }, 100);
+  }, 80);
 
   res.json({ status: 'entrenamiento_iniciado', archivos_guardados: files.length });
 });
