@@ -3,15 +3,17 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Instalar todas las dependencias para compilar TypeScript
-COPY package*.json tsconfig.json ./
-RUN npm ci
+# Copiar configuraciones y dependencias
+COPY package.json tsconfig.json package-lock.json* ./
+
+# Instalar dependencias para compilar (funciona tanto si hay package-lock como si no)
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 # Copiar código fuente y compilar a dist/
 COPY . .
 RUN npm run build
 
-# Runtime limpio y liviano (sin devDependencies)
+# Runtime limpio y liviano para producción
 FROM node:20-alpine AS runner
 
 WORKDIR /app
@@ -19,8 +21,10 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3000
 
-COPY package*.json ./
-RUN npm ci --only=production
+COPY package.json package-lock.json* ./
+
+# Instalar sólo dependencias de producción
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
 
 # Copiar dist compilado y plantillas views
 COPY --from=builder /app/dist ./dist
