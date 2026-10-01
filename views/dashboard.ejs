@@ -404,7 +404,23 @@
       <span>Panel del atacante</span>
     </div>
     <div class="section-desc">
-      Lanza el bot contra el login demo (<code>/demo/login</code>). Los resultados llegan al stream central vía <code>/registrar_intento</code>.
+      Selecciona en el menú desplegable qué login deseas atacar. El bot enviará las solicitudes automáticamente sin que tengas que escribir URLs.
+    </div>
+
+    <div class="field" style="margin-bottom: 14px;">
+      <label style="color:var(--accent); font-weight:600; display:flex; justify-content:space-between; align-items:center;">
+        <span>🎯 Login Objetivo a Atacar</span>
+        <a id="link-abrir-login" href="/demo" target="_blank" style="font-size:10.5px; color:var(--text-dim); text-decoration:underline;">Abrir login ↗</a>
+      </label>
+      <select id="bot-url" style="border: 1.5px solid var(--accent); background: var(--bg-panel); font-weight: 500; padding: 8px 10px;">
+        <option value="/demo/login" selected>🛡️ 4. Centinela WAF/ML (Detección en tiempo real)</option>
+        <option value="/demo/vulnerable/login">⚠️ 1. Login Vulnerable (Sin protección ni filtros)</option>
+        <option value="/demo/captcha/login">🧩 2. Login con CAPTCHA (Desafío anti-automatización)</option>
+        <option value="/demo/2fa/login-paso1">📱 3. Login con 2FA (TOTP de doble factor)</option>
+      </select>
+      <div id="desc-login-seleccionado" style="font-size:10.5px; color:var(--text-dim); margin-top:5px; line-height:1.4;">
+        Protegido por Reglas fijas + Isolation Forest + One-Class SVM + LOF.
+      </div>
     </div>
 
     <div class="field">
@@ -437,21 +453,9 @@
         <label>N° IPs distintas</label>
         <input type="number" id="bot-ips" value="6" min="1" max="50">
       </div>
-    </div>
-
-    <div class="row-2">
       <div class="field">
         <label>Intervalo (s)</label>
         <input type="number" step="0.1" id="bot-intervalo" value="0.3" min="0.05" max="30">
-      </div>
-      <div class="field">
-        <label>Objetivo del Ataque</label>
-        <select id="bot-url">
-          <option value="/demo/login" selected>4. Centinela (WAF/ML)</option>
-          <option value="/demo/vulnerable/login">1. Sin Protección</option>
-          <option value="/demo/captcha/login">2. Con CAPTCHA</option>
-          <option value="/demo/2fa/login-paso1">3. Con 2FA (Paso 1)</option>
-        </select>
       </div>
     </div>
 
@@ -886,6 +890,36 @@ actualizarProteccionEnVivo();
 
 // ================== PANEL BOT ==================
 const botTipoEl = document.getElementById('bot-tipo');
+const botUrlEl = document.getElementById('bot-url');
+const linkAbrirLoginEl = document.getElementById('link-abrir-login');
+const descLoginEl = document.getElementById('desc-login-seleccionado');
+
+const INFO_LOGINS = {
+  '/demo/login': {
+    link: '/demo',
+    desc: '🛡️ <b>Centinela WAF/ML:</b> Inspección activa con Isolation Forest, OC-SVM, LOF y corte perimetral de IP en HTTP 403.'
+  },
+  '/demo/vulnerable/login': {
+    link: '/demo/vulnerable',
+    desc: '⚠️ <b>Sin Protección:</b> Todas las peticiones van a la DB sin límite ni firewall. El atacante nunca es detenido.'
+  },
+  '/demo/captcha/login': {
+    link: '/demo/captcha',
+    desc: '🧩 <b>Con CAPTCHA:</b> Desafío visual anti-bot. Las peticiones automáticas del bot son rechazadas con HTTP 400.'
+  },
+  '/demo/2fa/login-paso1': {
+    link: '/demo/2fa',
+    desc: '📱 <b>Con 2FA / TOTP:</b> Aunque la contraseña sea correcta, no entrega acceso sin el código temporal del móvil.'
+  }
+};
+
+function syncBotUrlInfo(){
+  const info = INFO_LOGINS[botUrlEl.value] || INFO_LOGINS['/demo/login'];
+  linkAbrirLoginEl.href = info.link;
+  descLoginEl.innerHTML = info.desc;
+}
+botUrlEl.addEventListener('change', syncBotUrlInfo);
+syncBotUrlInfo();
 const fieldIntentosEl = document.getElementById('field-intentos');
 const fieldIpsEl = document.getElementById('field-ips');
 const botIntervaloEl = document.getElementById('bot-intervalo');
