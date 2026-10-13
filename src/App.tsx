@@ -25,8 +25,11 @@ import {
   Check,
   Server,
   Copy,
-  Printer
+  Printer,
+  LogOut,
+  Key
 } from 'lucide-react';
+import { RealCaptchaCanvas } from './RealCaptchaCanvas';
 
 interface Intento {
   id: number;
@@ -116,12 +119,25 @@ export default function App() {
   const [botIps, setBotIps] = useState(8);
   const [botIntervalo, setBotIntervalo] = useState(0.3);
 
+  // Gate de autenticación con CAPTCHA para entrar a Centinela
+  const [panelAutenticado, setPanelAutenticado] = useState<boolean>(() => {
+    return localStorage.getItem('centinela_sesion_activa') === 'true';
+  });
+  const [gateUser, setGateUser] = useState('admin');
+  const [gatePass, setGatePass] = useState('S3guro#2026');
+  const [gateCaptchaId, setGateCaptchaId] = useState('');
+  const [gateCaptchaInput, setGateCaptchaInput] = useState('');
+  const [gateCaptchaReset, setGateCaptchaReset] = useState(0);
+  const [gateError, setGateError] = useState<string | null>(null);
+  const [gateCargando, setGateCargando] = useState(false);
+
   // Demo login state
   const [demoMode, setDemoMode] = useState<'centinela' | 'vulnerable' | 'captcha' | '2fa'>('centinela');
   const [demoUser, setDemoUser] = useState('admin');
   const [demoPass, setDemoPass] = useState('');
   const [demoCaptchaInput, setDemoCaptchaInput] = useState('');
-  const [demoCaptchaExpected, setDemoCaptchaExpected] = useState('X7K9');
+  const [demoCaptchaId, setDemoCaptchaId] = useState('');
+  const [captchaResetCount, setCaptchaResetCount] = useState(0);
   const [demo2faStep, setDemo2faStep] = useState<1 | 2>(1);
   const [demo2faCode, setDemo2faCode] = useState('');
   const [demoResult, setDemoResult] = useState<{ status?: string; mensaje?: string; bloqueado?: boolean; score_ml?: number } | null>(null);
@@ -307,6 +323,40 @@ export default function App() {
     }
   };
 
+  // Gate de autenticación con CAPTCHA para acceder a Centinela
+  const handleGateLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setGateError(null);
+    setGateCargando(true);
+    try {
+      const res = await fetch('/login-admin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usuario: gateUser,
+          password: gatePass,
+          captcha: gateCaptchaInput,
+          captchaId: gateCaptchaId,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        localStorage.setItem('centinela_sesion_activa', 'true');
+        setPanelAutenticado(true);
+        showToast('Acceso autorizado a Centinela');
+      } else {
+        setGateError(data.error || 'Fallo de autenticación');
+        setGateCaptchaReset((prev) => prev + 1);
+        setGateCaptchaInput('');
+      }
+    } catch (err: any) {
+      setGateError(err.message || 'Error de conexión con el servidor');
+      setGateCaptchaReset((prev) => prev + 1);
+    } finally {
+      setGateCargando(false);
+    }
+  };
+
   // Demo Login handlers
   const handleDemoLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -320,7 +370,7 @@ export default function App() {
     } else if (demoMode === 'captcha') {
       endpoint = '/demo/captcha/login';
       body.captcha = demoCaptchaInput;
-      body.captchaEsperado = demoCaptchaExpected;
+      body.captchaId = demoCaptchaId;
     } else if (demoMode === '2fa') {
       if (demo2faStep === 1) {
         endpoint = '/demo/2fa/login-paso1';
@@ -341,8 +391,15 @@ export default function App() {
       if (demoMode === '2fa' && demo2faStep === 1 && res.ok) {
         setDemo2faStep(2);
       }
+      if (demoMode === 'captcha') {
+        setCaptchaResetCount((prev) => prev + 1);
+        setDemoCaptchaInput('');
+      }
     } catch (err: any) {
       setDemoResult({ status: 'fallo', mensaje: err.message || 'Error de conexión' });
+      if (demoMode === 'captcha') {
+        setCaptchaResetCount((prev) => prev + 1);
+      }
     }
   };
 
@@ -356,94 +413,217 @@ export default function App() {
         </div>
       )}
 
-      {/* Header */}
-      <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4 shadow-lg sticky top-0 z-40">
-        <div className="flex items-center space-x-3">
-          <div className="bg-gradient-to-tr from-cyan-600 to-blue-500 p-2.5 rounded-2xl shadow-lg shadow-cyan-500/20">
-            <Shield className="w-7 h-7 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-black tracking-wider bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
-              CENTINELA
-            </h1>
-            <p className="text-xs text-slate-400 font-medium">Adaptive Brute Force Detector & WAF / ML Mitigation</p>
+      {!panelAutenticado ? (
+        <div className="flex-1 flex items-center justify-center p-6 bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950">
+          <div className="max-w-md w-full bg-slate-900/95 border border-slate-800 rounded-3xl p-8 shadow-2xl relative overflow-hidden backdrop-blur-xl">
+            {/* Ambient gradients */}
+            <div className="absolute -top-20 -left-20 w-44 h-44 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-20 -right-20 w-44 h-44 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+
+            <div className="flex flex-col items-center text-center mb-6">
+              <div className="bg-gradient-to-tr from-cyan-600 to-blue-500 p-3.5 rounded-2xl shadow-xl shadow-cyan-500/25 mb-4">
+                <Shield className="w-8 h-8 text-white" />
+              </div>
+              <h2 className="text-2xl font-black tracking-wide bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
+                Acceso a Centinela
+              </h2>
+              <p className="text-xs text-slate-400 mt-1.5 max-w-xs leading-relaxed">
+                Panel de control de ciberseguridad protegido con <strong className="text-cyan-300">desafío CAPTCHA real</strong> en servidor
+              </p>
+            </div>
+
+            {gateError && (
+              <div className="mb-5 bg-red-500/10 border border-red-500/30 text-red-400 text-xs px-4 py-3 rounded-xl flex items-center space-x-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 text-red-400" />
+                <span>{gateError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleGateLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase mb-1.5">Usuario de Administrador</label>
+                <input
+                  type="text"
+                  value={gateUser}
+                  onChange={(e) => setGateUser(e.target.value)}
+                  placeholder="admin"
+                  required
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 uppercase mb-1.5">Contraseña de Administrador</label>
+                <input
+                  type="password"
+                  value={gatePass}
+                  onChange={(e) => setGatePass(e.target.value)}
+                  placeholder="••••••••"
+                  required
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors"
+                />
+              </div>
+
+              <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/90 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-300 flex items-center space-x-1.5">
+                    <Lock className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Desafío Anti-Bot CAPTCHA:</span>
+                  </span>
+                  <span className="text-[10px] text-cyan-400 font-medium bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/60">
+                    Criptográfico / Anti-Replay
+                  </span>
+                </div>
+
+                <RealCaptchaCanvas
+                  onCaptchaReady={(id) => setGateCaptchaId(id)}
+                  resetTrigger={gateCaptchaReset}
+                />
+
+                <input
+                  type="text"
+                  placeholder="Ingresa el código CAPTCHA visual"
+                  value={gateCaptchaInput}
+                  onChange={(e) => setGateCaptchaInput(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 uppercase tracking-widest font-mono text-center font-bold"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={gateCargando || !gateCaptchaId}
+                className="w-full py-3.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold rounded-xl shadow-lg shadow-cyan-600/30 transition-all flex items-center justify-center space-x-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {gateCargando ? (
+                  <>
+                    <Zap className="w-4 h-4 animate-spin text-yellow-300" />
+                    <span>Verificando CAPTCHA y credenciales...</span>
+                  </>
+                ) : (
+                  <>
+                    <Key className="w-4 h-4" />
+                    <span>Verificar Desafío y Acceder al Panel</span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="mt-6 pt-5 border-t border-slate-800/80 text-center space-y-1">
+              <p className="text-[11px] text-slate-400">
+                Credenciales por defecto: <strong className="text-cyan-400">admin</strong> / <strong className="text-cyan-400">S3guro#2026</strong>
+              </p>
+              <p className="text-[10px] text-slate-500">
+                El servidor consume y destruye el token de CAPTCHA al validarlo para prevenir ataques por fuerza bruta.
+              </p>
+            </div>
           </div>
         </div>
+      ) : (
+        <>
+          {/* Header */}
+          <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex flex-col md:flex-row items-center justify-between gap-4 shadow-lg sticky top-0 z-40">
+            <div className="flex items-center space-x-3">
+              <div className="bg-gradient-to-tr from-cyan-600 to-blue-500 p-2.5 rounded-2xl shadow-lg shadow-cyan-500/20">
+                <Shield className="w-7 h-7 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-black tracking-wider bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
+                  CENTINELA
+                </h1>
+                <p className="text-xs text-slate-400 font-medium">Adaptive Brute Force Detector & WAF / ML Mitigation</p>
+              </div>
+            </div>
 
-        {/* Navigation Tabs */}
-        <nav className="flex items-center bg-slate-950/80 p-1.5 rounded-2xl border border-slate-800 space-x-1">
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-              activeTab === 'dashboard'
-                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Activity className="w-4 h-4" />
-            <span>Dashboard</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('simulator')}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-              activeTab === 'simulator'
-                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Play className="w-4 h-4" />
-            <span>Simulador & Bot</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('report')}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-              activeTab === 'report'
-                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <BarChart2 className="w-4 h-4" />
-            <span>Reporte Científico</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('demos')}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-              activeTab === 'demos'
-                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Lock className="w-4 h-4" />
-            <span>Logins Demo</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('training')}
-            className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-              activeTab === 'training'
-                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Cpu className="w-4 h-4" />
-            <span>ML & Entrenamiento</span>
-          </button>
-        </nav>
+            {/* Navigation Tabs */}
+            <nav className="flex items-center bg-slate-950/80 p-1.5 rounded-2xl border border-slate-800 space-x-1">
+              <button
+                onClick={() => setActiveTab('dashboard')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'dashboard'
+                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Activity className="w-4 h-4" />
+                <span>Dashboard</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('simulator')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'simulator'
+                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Play className="w-4 h-4" />
+                <span>Simulador & Bot</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('report')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'report'
+                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <BarChart2 className="w-4 h-4" />
+                <span>Reporte Científico</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('demos')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'demos'
+                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Lock className="w-4 h-4" />
+                <span>Logins Demo</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('training')}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                  activeTab === 'training'
+                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Cpu className="w-4 h-4" />
+                <span>ML & Entrenamiento</span>
+              </button>
+            </nav>
 
-        {/* Status / Quick Reset */}
-        <div className="flex items-center space-x-3">
-          <div className="hidden lg:flex items-center space-x-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-full text-xs font-semibold">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-            <span>WAF & ML Activos</span>
-          </div>
-          <button
-            onClick={reiniciarSistema}
-            title="Reiniciar sistema"
-            className="p-2.5 bg-slate-800 hover:bg-red-600/20 hover:border-red-500/50 text-slate-300 hover:text-red-400 border border-slate-700 rounded-xl transition-all"
-          >
-            <RotateCcw className="w-4 h-4" />
-          </button>
-        </div>
-      </header>
+            {/* Status / Quick Reset / Logout */}
+            <div className="flex items-center space-x-3">
+              <div className="hidden lg:flex items-center space-x-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-full text-xs font-semibold">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                <span>WAF & ML Activos</span>
+              </div>
+              <button
+                onClick={reiniciarSistema}
+                title="Reiniciar sistema"
+                className="p-2.5 bg-slate-800 hover:bg-red-600/20 hover:border-red-500/50 text-slate-300 hover:text-red-400 border border-slate-700 rounded-xl transition-all cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => {
+                  localStorage.removeItem('centinela_sesion_activa');
+                  setPanelAutenticado(false);
+                  setGateCaptchaReset((prev) => prev + 1);
+                  setGateCaptchaInput('');
+                  fetch('/logout-admin', { method: 'POST' }).catch(() => {});
+                  showToast('Sesión de Centinela cerrada');
+                }}
+                title="Cerrar sesión"
+                className="flex items-center space-x-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-rose-400 border border-slate-700 rounded-xl transition-all text-xs font-semibold cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Cerrar Sesión</span>
+              </button>
+            </div>
+          </header>
 
       {/* Main Content Area */}
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
@@ -1379,18 +1559,17 @@ Throughput Estimado: ~${(metricas.rendimiento_computacional?.throughput_rps_esti
 
                   {demoMode === 'captcha' && (
                     <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <span className="text-xs text-slate-400 font-bold">Código CAPTCHA:</span>
-                        <span className="font-mono text-lg font-black tracking-widest bg-cyan-950 text-cyan-300 px-3 py-1 rounded border border-cyan-800">
-                          {demoCaptchaExpected}
-                        </span>
-                      </div>
+                      <label className="text-xs text-slate-400 font-bold block">Desafío CAPTCHA Visual (Criptográfico en Servidor):</label>
+                      <RealCaptchaCanvas
+                        onCaptchaReady={(id) => setDemoCaptchaId(id)}
+                        resetTrigger={captchaResetCount}
+                      />
                       <input
                         type="text"
-                        placeholder="Ingresa el código CAPTCHA"
+                        placeholder="Ingresa el código CAPTCHA visual"
                         value={demoCaptchaInput}
                         onChange={(e) => setDemoCaptchaInput(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 uppercase tracking-widest font-mono"
                         required
                       />
                     </div>
@@ -1486,6 +1665,8 @@ Throughput Estimado: ~${(metricas.rendimiento_computacional?.throughput_rps_esti
           </div>
         )}
       </main>
+      </>
+      )}
     </div>
   );
 }

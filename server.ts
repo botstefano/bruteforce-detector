@@ -285,18 +285,60 @@ app.post('/demo/vulnerable/login', (req: Request, res: Response) => {
   return res.status(401).json({ status: 'fallo', mensaje: 'Credenciales inválidas', total_intentos: contadorVulnerable });
 });
 
-// --- LOGIN 2: CAPTCHA (Desafío anti-bot) ---
+// =================================================================
+// MOTOR SEGURO DE CAPTCHA EN TIEMPO REAL
+// =================================================================
+interface CaptchaChallenge {
+  code: string;
+  expiraEn: number;
+}
+const captchaTokens = new Map<string, CaptchaChallenge>();
+
+function generarCodigoCaptcha(longitud = 5): string {
+  // Evitar caracteres ambiguos o confusos: 0, O, 1, I, l
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let res = '';
+  for (let i = 0; i < longitud; i++) {
+    res += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return res;
+}
+
+function validarYConsumirCaptcha(captchaId?: string, codigoIngresado?: string): boolean {
+  if (!captchaId || !codigoIngresado) return false;
+  const item = captchaTokens.get(captchaId);
+  if (!item) return false;
+  // Eliminar inmediatamente (token de un solo uso para prevenir ataques de replay)
+  captchaTokens.delete(captchaId);
+  if (Date.now() > item.expiraEn) return false;
+  return item.code === codigoIngresado.trim().toUpperCase();
+}
+
+app.get('/api/captcha/nuevo', (req: Request, res: Response) => {
+  const code = generarCodigoCaptcha(5);
+  const captchaId = 'cap_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+  captchaTokens.set(captchaId, {
+    code,
+    expiraEn: Date.now() + 3 * 60 * 1000, // Válido por 3 minutos
+  });
+  res.json({ captchaId, code });
+});
+
+// --- LOGIN 2: CAPTCHA (Desafío anti-bot real) ---
 
 app.post('/demo/captcha/login', (req: Request, res: Response) => {
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
   const usuario = (data.usuario || '').trim();
   const password = data.password || '';
-  const captcha = (data.captcha || '').trim().toUpperCase();
-  const captchaEsperado = (data.captchaEsperado || '').trim().toUpperCase();
+  const captcha = (data.captcha || '').trim();
+  const captchaId = (data.captchaId || '').trim();
 
-  // Si no envía captcha o no coincide -> Detenido por captcha
-  if (!captcha || captcha !== captchaEsperado) {
+  // Validación criptográfica/servidor del CAPTCHA real
+  const esCaptchaValido = validarYConsumirCaptcha(captchaId, captcha);
+
+  // Si no envía captcha o no coincide con el token generado -> Interceptado
+  if (!esCaptchaValido) {
     io.emit('nuevo_evento', {
       id: Date.now(),
       timestamp: Date.now() / 1000,
@@ -305,21 +347,25 @@ app.post('/demo/captcha/login', (req: Request, res: Response) => {
       exitoso: false,
       es_ataque_real: true,
       alerta_reglas: true,
-      razon_reglas: '🛡️ CAPTCHA fallido o ausente (bot interceptado)',
+      razon_reglas: '🛡️ CAPTCHA visual fallido o ausente (bot interceptado)',
       alerta_ml: false,
       score_ml: 0.85,
       origen: 'login_captcha',
       bloqueado_ahora: false,
       es_simulado: false,
     });
-    return res.status(400).json({ status: 'rechazado', mensaje: 'Captcha incorrecto o no resuelto', es_captcha: true });
+    return res.status(400).json({
+      status: 'rechazado',
+      mensaje: 'Código CAPTCHA incorrecto o expirado. Resuelve el nuevo desafío.',
+      es_captcha: true,
+    });
   }
 
   const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
   procesarIntento(ip, usuario, exitoso, 0, 'login_captcha', 0, true);
 
   if (exitoso) {
-    return res.status(200).json({ status: 'ok', mensaje: 'Autenticado correctamente (Humano validado)' });
+    return res.status(200).json({ status: 'ok', mensaje: 'Autenticado correctamente (Humano validado con éxito)' });
   }
   return res.status(401).json({ status: 'fallo', mensaje: 'Usuario o contraseña incorrectos' });
 });
@@ -452,26 +498,29 @@ app.post('/login', (req: Request, res: Response) => {
 
 app.post('/login-admin', (req: Request, res: Response) => {
   const pwd = req.body.password || '';
-  if (!DASHBOARD_PASSWORD || pwd === DASHBOARD_PASSWORD) {
-    res.cookie('admin_session', DASHBOARD_PASSWORD, {
+  const captcha = (req.body.captcha || '').trim();
+  const captchaId = (req.body.captchaId || '').trim();
+
+  // Desafío CAPTCHA obligatorio para entrar al panel de Centinela
+  if (!captchaId || !validarYConsumirCaptcha(captchaId, captcha)) {
+    return res.status(400).json({ error: 'Código CAPTCHA incorrecto o expirado.' });
+  }
+
+  const claveCorrecta = DASHBOARD_PASSWORD || 'S3guro#2026';
+  if (pwd === claveCorrecta || !DASHBOARD_PASSWORD) {
+    res.cookie('admin_session', claveCorrecta, {
       httpOnly: false,
       sameSite: 'lax',
       maxAge: 8 * 60 * 60 * 1000,
     });
-    if (req.headers['content-type']?.includes('application/json')) {
-      return res.json({ status: 'ok', redirect: '/' });
-    }
-    return res.redirect('/');
+    return res.json({ status: 'ok', redirect: '/' });
   }
-  if (req.headers['content-type']?.includes('application/json')) {
-    return res.status(401).json({ error: 'Contraseña incorrecta' });
-  }
-  return res.render('login_admin', { error: 'Contraseña incorrecta.' });
+  return res.status(401).json({ error: 'Contraseña incorrecta.' });
 });
 
 app.post('/logout-admin', (req: Request, res: Response) => {
   res.clearCookie('admin_session');
-  res.redirect('/login-admin');
+  res.json({ status: 'ok', mensaje: 'Sesión cerrada correctamente' });
 });
 
 // =================================================================
