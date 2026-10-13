@@ -13,6 +13,7 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
+import { createServer as createViteServer } from 'vite';
 
 import { db } from './src/database.js';
 import { DetectorReglas } from './src/detector_reglas.js';
@@ -238,9 +239,6 @@ app.post('/registrar_intento', (req: Request, res: Response) => {
 let contadorVulnerable = 0;
 
 // --- LOGIN 1: VULNERABLE (Sin protección) ---
-app.get('/demo/vulnerable', (req: Request, res: Response) => {
-  res.render('login_vulnerable');
-});
 
 app.post('/demo/vulnerable/login', (req: Request, res: Response) => {
   contadorVulnerable++;
@@ -293,9 +291,6 @@ app.post('/demo/vulnerable/login', (req: Request, res: Response) => {
 });
 
 // --- LOGIN 2: CAPTCHA (Desafío anti-bot) ---
-app.get('/demo/captcha', (req: Request, res: Response) => {
-  res.render('login_captcha');
-});
 
 app.post('/demo/captcha/login', (req: Request, res: Response) => {
   const data = req.body || {};
@@ -335,9 +330,6 @@ app.post('/demo/captcha/login', (req: Request, res: Response) => {
 });
 
 // --- LOGIN 3: 2FA / TOTP (Doble factor) ---
-app.get('/demo/2fa', (req: Request, res: Response) => {
-  res.render('login_2fa');
-});
 
 app.post('/demo/2fa/login-paso1', (req: Request, res: Response) => {
   const data = req.body || {};
@@ -386,13 +378,6 @@ app.post('/demo/2fa/login-paso2', (req: Request, res: Response) => {
 });
 
 // --- LOGIN 4: CENTINELA (El login original protegido) ---
-app.get('/demo', (req: Request, res: Response) => {
-  res.render('login');
-});
-
-app.get('/demo/centinela', (req: Request, res: Response) => {
-  res.redirect('/demo');
-});
 
 app.post('/demo/login', (req: Request, res: Response) => {
   const data = req.body || {};
@@ -467,19 +452,8 @@ app.post('/login', (req: Request, res: Response) => {
 });
 
 // =================================================================
-// 3. DASHBOARD Y AUTENTICACIÓN ADMIN
+// 3. AUTENTICACIÓN ADMIN (API)
 // =================================================================
-
-app.get('/', requiereAdmin, (req: Request, res: Response) => {
-  res.render('dashboard', { requiere_auth: Boolean(DASHBOARD_PASSWORD) });
-});
-
-app.get('/login-admin', (req: Request, res: Response) => {
-  if (!DASHBOARD_PASSWORD) {
-    return res.redirect('/');
-  }
-  res.render('login_admin', { error: null });
-});
 
 app.post('/login-admin', (req: Request, res: Response) => {
   const pwd = req.body.password || '';
@@ -525,26 +499,7 @@ app.get('/api/bloqueadas', (req: Request, res: Response) => {
   res.json(db.listarIpsBloqueadas());
 });
 
-app.get('/reporte', (req: Request, res: Response) => {
-  const m = db.metricasResumen();
-  const intentos = db.obtenerTodosIntentos();
-  const simulados = intentos.filter((i) => i.es_simulado === 1);
-  const grupo = simulados.length > 0 ? simulados : intentos;
-  
-  const desglose = {
-    legitimo: grupo.filter((i) => i.origen === 'trafico_legitimo' || (i.es_ataque_real === 0 && !i.origen.includes('bot'))).length,
-    rapido: grupo.filter((i) => i.origen === 'ataque_rapido' || i.origen.includes('rapido')).length,
-    lento: grupo.filter((i) => i.origen === 'ataque_lento' || i.origen.includes('lento')).length,
-    distribuido: grupo.filter((i) => i.origen === 'ataque_distribuido' || i.origen.includes('distribuido') || i.origen.includes('demo') || i.origen.includes('bot')).length,
-  };
-
-  res.render('reporte', {
-    metricas: m,
-    estadoModelo,
-    totalIntentos: grupo.length,
-    desglose,
-  });
-});
+// Reporte manejado por la SPA de React
 
 app.get('/api/exportar_dataset', requiereAdmin, (req: Request, res: Response) => {
   const formato = (req.query.formato as string) || 'csv';
@@ -1099,12 +1054,29 @@ io.on('connection', (socket) => {
   // Conexión exitosa para streaming
 });
 
-// Iniciar servidor en el puerto 3000
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n======================================================`);
-  console.log(`Centinela v2 corriendo en http://0.0.0.0:${PORT}`);
-  console.log(`Dashboard de administración: http://localhost:${PORT}/`);
-  console.log(`Login demo protegido:       http://localhost:${PORT}/demo`);
-  console.log(`Endpoints de protección:    POST /evaluar, POST /registrar_intento`);
-  console.log(`======================================================\n`);
-});
+// Iniciar servidor con middleware de Vite o estáticos en producción
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static(path.join(process.cwd(), 'dist')));
+    app.get('*', (req: Request, res: Response) => {
+      res.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
+    });
+  }
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n======================================================`);
+    console.log(`Centinela v2 corriendo en http://0.0.0.0:${PORT}`);
+    console.log(`Dashboard de administración: http://localhost:${PORT}/`);
+    console.log(`Login demo protegido:       http://localhost:${PORT}/demo`);
+    console.log(`Endpoints de protección:    POST /evaluar, POST /registrar_intento`);
+    console.log(`======================================================\n`);
+  });
+}
+
+startServer();
