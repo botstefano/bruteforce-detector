@@ -13,7 +13,6 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
-import { createServer as createViteServer } from 'vite';
 
 import { db } from './src/database.js';
 import { DetectorReglas } from './src/detector_reglas.js';
@@ -1057,15 +1056,19 @@ io.on('connection', (socket) => {
 // Iniciar servidor con middleware de Vite o estáticos en producción
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(process.cwd(), 'dist')));
+    const clientDist = fs.existsSync(path.join(process.cwd(), 'dist', 'client'))
+      ? path.join(process.cwd(), 'dist', 'client')
+      : path.join(process.cwd(), 'dist');
+    app.use(express.static(clientDist));
     app.get('*', (req: Request, res: Response) => {
-      res.sendFile(path.join(process.cwd(), 'dist', 'index.html'));
+      res.sendFile(path.join(clientDist, 'index.html'));
     });
   }
 

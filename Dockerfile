@@ -26,9 +26,8 @@ COPY package.json package-lock.json* ./
 # Instalar sólo dependencias de producción
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
 
-# Copiar dist compilado y plantillas views
+# Copiar dist compilado (backend en dist/ y frontend React SPA en dist/client/)
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/views ./views
 
 EXPOSE 3000
 
