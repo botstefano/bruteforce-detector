@@ -606,6 +606,37 @@ app.post('/entrenar/reentrenar_con_trafico', requiereAdmin, (req: Request, res: 
   return res.json(estadoModelo);
 });
 
+app.post('/entrenar/con_trafico', requiereAdmin, (req: Request, res: Response) => {
+  const intentos = db.obtenerTodosIntentos();
+  const intentosBenignos = intentos.filter((i) => i.es_ataque_real === 0);
+
+  if (intentosBenignos.length < 5) {
+    return res.status(400).json({
+      error: `Se requieren al menos 5 eventos legítimos/benignos registrados (actuales: ${intentosBenignos.length}). Simula o envía tráfico legítimo primero.`
+    });
+  }
+
+  const muestras: number[][] = [];
+  for (const b of intentosBenignos) {
+    const hora = new Date(b.timestamp * 1000).getHours();
+    muestras.push([
+      b.exitoso ? 0 : 1,
+      1,
+      45.0 + Math.random() * 60.0,
+      10.0 + Math.random() * 20.0,
+      hora
+    ]);
+  }
+
+  detectorML.entrenarConDatosNormales(muestras, 'trafico_en_vivo');
+  estadoModelo.fuente = 'trafico_en_vivo';
+  estadoModelo.detalle = `Re-entrenado dinámicamente con ${muestras.length} eventos benignos capturados en vivo por Centinela.`;
+  estadoModelo.cargando = false;
+
+  io.emit('entrenamiento_completo', estadoModelo);
+  return res.json(estadoModelo);
+});
+
 app.get('/api/estado_modelo', (req: Request, res: Response) => {
   res.json(estadoModelo);
 });
