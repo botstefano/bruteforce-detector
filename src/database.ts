@@ -93,8 +93,8 @@ class Database {
       es_simulado,
     };
     this.intentos.push(intento);
-    if (this.intentos.length > 5000) {
-      this.intentos.splice(0, 1000);
+    if (this.intentos.length > 35000) {
+      this.intentos.splice(0, 5000);
     }
     return id;
   }
@@ -116,14 +116,17 @@ class Database {
   }
 
   public metricasResumen(): MetricasResumen | null {
-    const simulados = this.intentos.filter((i) => i.es_simulado === 1);
-    if (simulados.length === 0) return null;
+    let grupo = this.intentos.filter((i) => i.es_simulado === 1);
+    if (grupo.length === 0) {
+      grupo = this.intentos;
+    }
+    if (grupo.length === 0) return null;
 
     const calcular = (
       campo: 'alerta_reglas' | 'alerta_ml' | 'alerta_iforest' | 'alerta_ocsvm' | 'alerta_lof'
     ): MetricaMetodo => {
       let vp = 0, fn = 0, fp = 0, vn = 0;
-      for (const i of simulados) {
+      for (const i of grupo) {
         const predicho = i[campo] === 1;
         const real = i.es_ataque_real === 1;
         if (real && predicho) vp++;
@@ -152,7 +155,7 @@ class Database {
       alerta_ocsvm: calcular('alerta_ocsvm'),
       alerta_lof: calcular('alerta_lof'),
       alerta_ml: calcular('alerta_ml'),
-      total_intentos: simulados.length,
+      total_intentos: grupo.length,
     };
   }
 

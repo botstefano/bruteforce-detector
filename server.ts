@@ -56,11 +56,12 @@ const CREDENCIALES_VALIDAS: Record<string, string> = {
 // Inicializar detectores
 const detectorReglas = new DetectorReglas();
 const detectorML = new DetectorML();
-detectorML.entrenarConDatosNormales(generarMuestrasNormales());
+const muestrasCicidsInicial = generarDatasetCicids2017(50000);
+detectorML.entrenarConDatosNormales(muestrasCicidsInicial, 'cicids2017');
 
 const estadoModelo = {
-  fuente: 'sintetico',
-  detalle: 'Entrenado con datos sintéticos generados al arrancar el servidor.',
+  fuente: 'cicids2017',
+  detalle: 'Entrenado con 50,000 flujos benignos de alta resolución basados en CICIDS2017.',
   cargando: false,
 };
 
@@ -528,18 +529,19 @@ app.get('/reporte', (req: Request, res: Response) => {
   const m = db.metricasResumen();
   const intentos = db.obtenerTodosIntentos();
   const simulados = intentos.filter((i) => i.es_simulado === 1);
+  const grupo = simulados.length > 0 ? simulados : intentos;
   
   const desglose = {
-    legitimo: simulados.filter((i) => i.origen === 'trafico_legitimo').length,
-    rapido: simulados.filter((i) => i.origen === 'ataque_rapido').length,
-    lento: simulados.filter((i) => i.origen === 'ataque_lento').length,
-    distribuido: simulados.filter((i) => i.origen === 'ataque_distribuido').length,
+    legitimo: grupo.filter((i) => i.origen === 'trafico_legitimo' || (i.es_ataque_real === 0 && !i.origen.includes('bot'))).length,
+    rapido: grupo.filter((i) => i.origen === 'ataque_rapido' || i.origen.includes('rapido')).length,
+    lento: grupo.filter((i) => i.origen === 'ataque_lento' || i.origen.includes('lento')).length,
+    distribuido: grupo.filter((i) => i.origen === 'ataque_distribuido' || i.origen.includes('distribuido') || i.origen.includes('demo') || i.origen.includes('bot')).length,
   };
 
   res.render('reporte', {
     metricas: m,
     estadoModelo,
-    totalIntentos: simulados.length,
+    totalIntentos: grupo.length,
     desglose,
   });
 });
@@ -791,7 +793,7 @@ app.post('/simular/legitimo', requiereAdmin, (req: Request, res: Response) => {
 
 app.post('/simular/benchmark_masivo', requiereAdmin, (req: Request, res: Response) => {
   const data = req.body || {};
-  const total = Math.min(4500, Math.max(50, parseInt(data.cantidad || '1000', 10)));
+  const total = Math.min(30000, Math.max(50, parseInt((data.cantidad || req.query.cantidad || '25000') as string, 10)));
   const usuariosValidos = Object.keys(CREDENCIALES_VALIDAS);
 
   // Proporciones científicas equilibradas:
@@ -974,9 +976,10 @@ app.post('/lanzar_bot', requiereAdmin, async (req: Request, res: Response) => {
 
 app.post('/entrenar/reset_sintetico', requiereAdmin, (req: Request, res: Response) => {
   detectorML.reset();
-  detectorML.entrenarConDatosNormales(generarMuestrasNormales(), 'sintetico');
-  estadoModelo.fuente = 'sintetico';
-  estadoModelo.detalle = 'Entrenado con datos sintéticos generados al arrancar el servidor.';
+  const muestras = generarDatasetCicids2017(50000);
+  detectorML.entrenarConDatosNormales(muestras, 'cicids2017');
+  estadoModelo.fuente = 'cicids2017';
+  estadoModelo.detalle = 'Entrenado con 50,000 flujos benignos de alta resolución basados en CICIDS2017.';
   estadoModelo.cargando = false;
   io.emit('entrenamiento_completo', estadoModelo);
   res.json(estadoModelo);
@@ -984,10 +987,12 @@ app.post('/entrenar/reset_sintetico', requiereAdmin, (req: Request, res: Respons
 
 app.post('/entrenar/cargar_cicids_precargado', requiereAdmin, (req: Request, res: Response) => {
   detectorML.reset();
-  const muestras = generarDatasetCicids2017(600);
+  const data = req.body || {};
+  const cantidad = Math.min(50000, Math.max(100, parseInt((data.cantidad || req.query.cantidad || '50000') as string, 10)));
+  const muestras = generarDatasetCicids2017(cantidad);
   detectorML.entrenarConDatosNormales(muestras, 'cicids2017');
   estadoModelo.fuente = 'cicids2017';
-  estadoModelo.detalle = `Entrenado con 600 flujos benignos basados en la distribución estadística de CICIDS2017.`;
+  estadoModelo.detalle = `Entrenado con ${cantidad.toLocaleString()} flujos benignos de alta resolución basados en CICIDS2017.`;
   estadoModelo.cargando = false;
   io.emit('entrenamiento_completo', estadoModelo);
   res.json(estadoModelo);

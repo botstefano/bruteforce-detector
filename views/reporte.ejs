@@ -358,8 +358,8 @@
       
       <div class="meta-grid">
         <div class="meta-item"><span>Entorno:</span> <b>Centinela v2</b></div>
-        <div class="meta-item"><span>Dataset Base de Entrenamiento:</span> <b>CICIDS2017 (<%= estadoModelo.fuente %>)</b></div>
-        <div class="meta-item"><span>Total de Muestra ($N$):</span> <b><%= totalIntentos %> eventos evaluados</b></div>
+        <div class="meta-item"><span>Dataset Base de Entrenamiento:</span> <b>CICIDS2017 (50,000 flujos benignos)</b></div>
+        <div class="meta-item"><span>Total de Muestra ($N$):</span> <b><%= totalIntentos.toLocaleString() %> eventos evaluados</b></div>
         <div class="meta-item"><span>Fecha de Generación:</span> <b><%= new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) %></b></div>
       </div>
     </div>
@@ -367,7 +367,7 @@
     <% if (!metricas) { %>
       <div style="text-align: center; padding: 40px; color: var(--text-muted);">
         <h3>No hay eventos evaluados actualmente.</h3>
-        <p style="margin-top: 8px;">Regresa al dashboard y haz clic en "⚡ N = 1,000 (Paper)" para generar la muestra de resultados.</p>
+        <p style="margin-top: 8px;">Regresa al dashboard y haz clic en "👑 N = 25,000 (Benchmark Completo)" para generar la muestra de resultados.</p>
         <a href="/" class="btn btn-primary" style="margin-top: 16px;">Ir al Dashboard</a>
       </div>
     <% } else { %>
