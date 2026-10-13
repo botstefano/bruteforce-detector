@@ -65,10 +65,6 @@ const estadoModelo = {
   cargando: false,
 };
 
-// View engine
-app.set('view engine', 'ejs');
-app.set('views', path.join(process.cwd(), 'views'));
-
 // Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -1067,7 +1063,7 @@ async function startServer() {
       ? path.join(process.cwd(), 'dist', 'client')
       : path.join(process.cwd(), 'dist');
     app.use(express.static(clientDist));
-    app.get('*', (req: Request, res: Response) => {
+    app.use((req: Request, res: Response) => {
       res.sendFile(path.join(clientDist, 'index.html'));
     });
   }
