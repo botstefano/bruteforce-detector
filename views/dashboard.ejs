@@ -3,647 +3,1252 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Centinela · Detección de fuerza bruta en tiempo real</title>
+<title>Centinela · Centro de Operaciones de Ciberseguridad & Anti-Bruteforce</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg: #0A0E14;
-    --bg-panel: #0F141C;
-    --bg-panel-raised: #141B25;
-    --line: #22303F;
-    --text: #D6E1EA;
-    --text-dim: #6E828F;
-    --safe: #6FCF97;
-    --warn-rules: #FFB454;
-    --warn-ml: #39BAE6;
-    --danger: #F07178;
-    --accent: #39BAE6;
-    --font-head: 'Space Grotesk', sans-serif;
+    --bg-base: #0B0F19;
+    --bg-surface: #111827;
+    --bg-surface-elevated: #1F2937;
+    --bg-surface-hover: #263346;
+    --border-subtle: #2D3748;
+    --border-accent: #374151;
+    --text-primary: #F3F4F6;
+    --text-secondary: #9CA3AF;
+    --text-muted: #6B7280;
+    
+    --brand-primary: #06B6D4;
+    --brand-primary-rgb: 6, 182, 212;
+    --brand-hover: #0891B2;
+    
+    --status-success: #10B981;
+    --status-success-bg: rgba(16, 185, 129, 0.12);
+    --status-warning: #F59E0B;
+    --status-warning-bg: rgba(245, 158, 11, 0.12);
+    --status-danger: #EF4444;
+    --status-danger-bg: rgba(239, 68, 68, 0.12);
+    --status-info: #3B82F6;
+    --status-info-bg: rgba(59, 130, 246, 0.12);
+    --status-purple: #8B5CF6;
+
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-full: 9999px;
   }
-  *{box-sizing:border-box; margin:0; padding:0;}
+
+  *{ box-sizing: border-box; margin: 0; padding: 0; }
+  
   body{
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--font-mono);
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    line-height: 1.5;
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
   }
 
-  .topbar{
-    display:flex; align-items:center; justify-content:space-between;
-    padding: 18px 28px;
-    border-bottom: 1px solid var(--line);
-    background: linear-gradient(180deg, #0C1119 0%, #0A0E14 100%);
-    gap: 20px; flex-wrap: wrap;
+  /* ================= NAVBAR PROFESIONAL ================= */
+  .site-header{
+    background: rgba(17, 24, 39, 0.88);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border-subtle);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    padding: 12px 24px;
   }
-  .brand{
-    display:flex; align-items:baseline; gap:12px;
+  .header-inner{
+    max-width: 1720px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
   }
-  .brand .pulse{
-    width:10px; height:10px; border-radius:50%;
-    background: var(--safe);
-    box-shadow: 0 0 0 0 rgba(111,207,151,0.6);
-    animation: pulse 2s infinite;
+  .brand-group{
+    display: flex;
+    align-items: center;
+    gap: 12px;
   }
-  @keyframes pulse{
-    0%{ box-shadow: 0 0 0 0 rgba(111,207,151,0.5);}
-    70%{ box-shadow: 0 0 0 10px rgba(111,207,151,0);}
-    100%{ box-shadow: 0 0 0 0 rgba(111,207,151,0);}
+  .brand-icon{
+    width: 36px;
+    height: 36px;
+    background: linear-gradient(135deg, #06B6D4 0%, #3B82F6 100%);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 0 16px rgba(6, 182, 212, 0.35);
   }
-  .brand h1{
-    font-family: var(--font-head);
-    font-size: 20px;
+  .brand-icon svg{
+    width: 20px;
+    height: 20px;
+    fill: #ffffff;
+  }
+  .brand-info h1{
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .brand-badge{
+    font-size: 10px;
+    text-transform: uppercase;
     font-weight: 700;
-    letter-spacing: -0.01em;
+    letter-spacing: 0.05em;
+    padding: 2px 7px;
+    background: rgba(6, 182, 212, 0.15);
+    color: var(--brand-primary);
+    border-radius: var(--radius-full);
+    border: 1px solid rgba(6, 182, 212, 0.3);
   }
-  .brand span.sub{
-    color: var(--text-dim);
+  .brand-subtitle{
     font-size: 12px;
-  }
-  .topbar .right{ display:flex; align-items:center; gap: 14px; }
-  .topbar .status{
-    font-size: 11px; color: var(--text-dim);
-  }
-  .btn-mini{
-    background: var(--bg-panel-raised);
-    color: var(--text-dim);
-    border: 1px solid var(--line);
-    border-radius: 3px;
-    padding: 5px 10px;
-    font-family: var(--font-mono);
-    font-size: 10.5px;
-    cursor: pointer;
-    text-decoration: none;
-  }
-  .btn-mini:hover{ color: var(--text); border-color: var(--text-dim); }
-
-  .layout{
-    display:grid;
-    grid-template-columns: 360px 1fr 380px;
-    gap: 1px;
-    background: var(--line);
-    min-height: calc(100vh - 64px);
-  }
-  @media (max-width: 1300px){
-    .layout{ grid-template-columns: 320px 1fr 340px; }
-  }
-  @media (max-width: 1080px){
-    .layout{ grid-template-columns: 1fr 1fr; }
-    .col.panel-bot{ grid-column: 1 / -1; }
-  }
-  @media (max-width: 720px){
-    .layout{ grid-template-columns: 1fr; }
+    color: var(--text-secondary);
+    font-weight: 400;
   }
 
-  .col{ background: var(--bg); padding: 22px 24px; min-width: 0; }
-
-  .section-title{
-    font-family: var(--font-head);
-    font-size: 14px;
+  .nav-center{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 4px;
+  }
+  .nav-btn{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
     font-weight: 600;
-    color: var(--text);
-    margin-bottom: 4px;
-    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 6px 12px;
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    color: var(--text-secondary);
+    transition: all 0.18s ease;
   }
-  .section-desc{
+  .nav-btn:hover{
+    color: var(--text-primary);
+    background: var(--bg-surface-hover);
+  }
+  .nav-btn.active{
+    background: var(--brand-primary);
+    color: #0B0F19;
+    box-shadow: 0 2px 8px rgba(6, 182, 212, 0.3);
+  }
+
+  .nav-right{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .connection-pill{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    padding: 5px 12px;
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    font-family: var(--font-mono);
+  }
+  .status-dot{
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--status-success);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+    animation: statusPulse 2s infinite;
+  }
+  @keyframes statusPulse{
+    0%{ box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+    70%{ box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+    100%{ box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+  }
+  .btn-logout-pill{
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    padding: 5px 12px;
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.18s ease;
+  }
+  .btn-logout-pill:hover{
+    color: var(--status-danger);
+    border-color: var(--status-danger);
+    background: var(--status-danger-bg);
+  }
+
+  /* ================= SUB-BARRA DE ESTADO / ACCESO A LOGINS ================= */
+  .logins-strip{
+    background: #0D1322;
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 10px 24px;
+  }
+  .logins-strip-inner{
+    max-width: 1720px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .logins-strip-title{
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .logins-chips{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .login-chip{
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 11.5px;
-    color: var(--text-dim);
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: var(--radius-full);
+    text-decoration: none;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+  }
+  .login-chip.vulnerable{
+    background: rgba(239, 68, 68, 0.1);
+    color: #F87171;
+    border-color: rgba(239, 68, 68, 0.25);
+  }
+  .login-chip.vulnerable:hover{
+    background: rgba(239, 68, 68, 0.2);
+    border-color: #EF4444;
+  }
+  .login-chip.captcha{
+    background: rgba(245, 158, 11, 0.1);
+    color: #FBBF24;
+    border-color: rgba(245, 158, 11, 0.25);
+  }
+  .login-chip.captcha:hover{
+    background: rgba(245, 158, 11, 0.2);
+    border-color: #F59E0B;
+  }
+  .login-chip.twofa{
+    background: rgba(59, 130, 246, 0.1);
+    color: #60A5FA;
+    border-color: rgba(59, 130, 246, 0.25);
+  }
+  .login-chip.twofa:hover{
+    background: rgba(59, 130, 246, 0.2);
+    border-color: #3B82F6;
+  }
+  .login-chip.centinela{
+    background: rgba(16, 185, 129, 0.12);
+    color: #34D399;
+    border-color: rgba(16, 185, 129, 0.35);
+    font-weight: 700;
+  }
+  .login-chip.centinela:hover{
+    background: rgba(16, 185, 129, 0.25);
+    border-color: #10B981;
+  }
+
+  /* ================= LAYOUT DE CONTENIDO ================= */
+  .main-wrapper{
+    max-width: 1720px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 24px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .grid-layout{
+    display: grid;
+    grid-template-columns: 390px 1fr 390px;
+    gap: 20px;
+    align-items: start;
+  }
+  @media (max-width: 1400px){
+    .grid-layout{ grid-template-columns: 360px 1fr 360px; }
+  }
+  @media (max-width: 1160px){
+    .grid-layout{ grid-template-columns: 1fr 1fr; }
+    .grid-layout > .panel-bot-col{ grid-column: 1 / -1; }
+  }
+  @media (max-width: 780px){
+    .grid-layout{ grid-template-columns: 1fr; }
+    .main-wrapper{ padding: 16px; }
+  }
+
+  /* ================= TARJETAS & PANELES MODERNOS ================= */
+  .card{
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .card-header{
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: rgba(31, 41, 55, 0.35);
+  }
+  .card-header-left{
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card-icon{
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+  }
+  .card-icon.red{ background: rgba(239, 68, 68, 0.15); color: #EF4444; }
+  .card-icon.blue{ background: rgba(6, 182, 212, 0.15); color: var(--brand-primary); }
+  .card-icon.purple{ background: rgba(139, 92, 246, 0.15); color: var(--status-purple); }
+  .card-icon.green{ background: rgba(16, 185, 129, 0.15); color: var(--status-success); }
+  
+  .card-title{
+    font-size: 14.5px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .card-subtitle{
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-weight: 400;
+  }
+  .card-body{
+    padding: 20px;
+  }
+
+  /* ================= FORMULARIOS Y CONTROLES ================= */
+  .form-group{
     margin-bottom: 14px;
+  }
+  .form-label{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+  }
+  .form-label span.highlight{
+    color: var(--brand-primary);
+  }
+  .form-label a{
+    font-size: 11px;
+    color: var(--brand-primary);
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .form-label a:hover{
+    text-decoration: underline;
+  }
+  .form-control{
+    width: 100%;
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    padding: 9px 12px;
+    transition: all 0.2s ease;
+  }
+  .form-control:focus{
+    outline: none;
+    border-color: var(--brand-primary);
+    box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.18);
+  }
+  select.form-control{
+    cursor: pointer;
+  }
+  textarea.form-control{
+    font-family: var(--font-mono);
+    font-size: 12px;
+    min-height: 72px;
+    resize: vertical;
     line-height: 1.5;
   }
 
-  /* ================== BOT PANEL (izquierda) ================== */
-  .field{ margin-bottom: 10px; }
-  .field label{
-    font-size: 10.5px; color: var(--text-dim); display:block;
-    margin-bottom: 5px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+  .form-row{
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
   }
-  .field select, .field input[type=number], .field input[type=text], .field textarea{
-    width:100%;
-    background: var(--bg-panel-raised);
-    border: 1px solid var(--line);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 12px;
-    padding: 7px 10px;
-    border-radius: 3px;
-  }
-  .field textarea{ min-height: 64px; resize: vertical; line-height: 1.45; }
-  .field input:focus, .field select:focus, .field textarea:focus{
-    outline: none; border-color: var(--accent);
-  }
-  .row-2{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .btn{
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--text);
-    background: var(--bg-panel-raised);
-    border: 1px solid var(--line);
-    border-radius: 3px;
-    padding: 9px 10px;
-    cursor: pointer;
-    transition: border-color .15s ease, transform .1s ease, opacity .15s;
-    text-align: left;
-    line-height: 1.35;
-  }
-  .btn:hover:not(:disabled){ border-color: var(--text-dim); }
-  .btn:active:not(:disabled){ transform: scale(0.98); }
-  .btn:disabled{ opacity: 0.45; cursor: not-allowed; }
-  .btn.rapido{ border-left: 3px solid var(--danger); }
-  .btn.lento{ border-left: 3px solid var(--warn-rules); }
-  .btn.distribuido{ border-left: 3px solid var(--warn-ml); }
-  .btn.lanzar-big{
-    width:100%;
-    background: var(--accent);
-    color: #0A0E14;
-    border: none;
-    font-family: var(--font-head);
-    font-size: 13px;
-    font-weight: 700;
-    text-align: center;
-    margin-top: 6px;
-    padding: 11px;
-  }
-  .btn.lanzar-big:hover{ opacity: 0.9; }
-  .btn.secundario{ border-left: 3px solid var(--safe); }
-  .btn.reset{ border-left: 3px solid var(--text-dim); }
 
-  .stream-bot{
+  /* Caja modo de ataque */
+  .strategy-box{
+    background: rgba(6, 182, 212, 0.04);
+    border: 1px solid rgba(6, 182, 212, 0.25);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+  .strategy-box-title{
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--brand-primary);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .radio-option{
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .radio-option:hover{
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .radio-option input[type="radio"]{
+    margin-top: 3px;
+    accent-color: var(--brand-primary);
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+  }
+  .radio-option-title{
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .radio-option-desc{
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-top: 2px;
+  }
+
+  .btn-primary-action{
+    width: 100%;
+    background: linear-gradient(135deg, #06B6D4 0%, #0284C7 100%);
+    color: #FFFFFF;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 700;
+    padding: 12px;
+    border-radius: var(--radius-md);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    box-shadow: 0 4px 14px rgba(6, 182, 212, 0.3);
+    transition: all 0.2s ease;
+  }
+  .btn-primary-action:hover:not(:disabled){
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(6, 182, 212, 0.45);
+    background: linear-gradient(135deg, #22D3EE 0%, #0369A1 100%);
+  }
+  .btn-primary-action:active:not(:disabled){
+    transform: translateY(0);
+  }
+  .btn-primary-action:disabled{
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  /* Log de consola del bot */
+  .bot-terminal{
+    background: #070A11;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 12px;
     height: 320px;
     overflow-y: auto;
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    background: var(--bg-panel);
-    padding: 8px 10px;
-    font-size: 11px;
-    line-height: 1.55;
-    white-space: pre-wrap;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    line-height: 1.6;
+    margin-top: 10px;
+  }
+  .bot-terminal .line{
+    padding: 1px 0;
     word-break: break-all;
   }
-  .stream-bot .line{ padding: 1px 0; }
-  .stream-bot .line.bloqueado{ color: var(--danger); font-weight: 600; }
-  .stream-bot .line.http403{ color: var(--danger); }
-  .stream-bot .line.http401{ color: var(--warn-rules); }
-  .stream-bot .line.http200{ color: var(--safe); }
-  .stream-bot .line.http5xx{ color: #BB80E3; }
-  .stream-bot .line.head{ color: var(--warn-ml); font-weight: 600; }
+  .bot-terminal .line.bloqueado{ color: #F87171; font-weight: 700; }
+  .bot-terminal .line.http403{ color: #EF4444; font-weight: 600; }
+  .bot-terminal .line.http401{ color: #FBBF24; }
+  .bot-terminal .line.http200{ color: #34D399; font-weight: 700; }
+  .bot-terminal .line.http5xx{ color: #C084FC; }
+  .bot-terminal .line.head{ color: #38BDF8; font-weight: 600; }
 
-  /* ================== STREAM EVENTOS (centro) ================== */
-  .sim-controls{
-    display:grid;
+  /* ================= COLUMNA CENTRAL: STREAM DE LOGS Y SIMULADOR ================= */
+  .quick-sim-buttons{
+    display: grid;
     grid-template-columns: repeat(3, 1fr) 2fr 1fr;
     gap: 8px;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
   }
-  @media (max-width: 1080px){
-    .sim-controls{ grid-template-columns: repeat(3,1fr); }
-    .sim-controls .btn.legitimo{ grid-column: span 3; }
+  @media (max-width: 1000px){
+    .quick-sim-buttons{ grid-template-columns: repeat(3, 1fr); }
+    .quick-sim-buttons .btn-sim-legitimo{ grid-column: span 3; }
   }
+  .btn-sim{
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    padding: 10px 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .btn-sim:hover{
+    background: var(--bg-surface-hover);
+    border-color: var(--border-accent);
+  }
+  .btn-sim .sim-label{
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .btn-sim .sim-sub{
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+  .btn-sim.rapido{ border-left: 3px solid #EF4444; }
+  .btn-sim.lento{ border-left: 3px solid #F59E0B; }
+  .btn-sim.distribuido{ border-left: 3px solid #8B5CF6; }
+  .btn-sim.legitimo{ border-left: 3px solid #10B981; }
+  .btn-sim.reset{ border-left: 3px solid var(--text-muted); text-align: center; justify-content: center; }
 
-  .stream{
-    height: calc(100vh - 220px);
-    min-height: 480px;
+  /* Stream interactivo en vivo */
+  .event-stream-container{
+    background: #080D17;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    height: 520px;
     overflow-y: auto;
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    background: var(--bg-panel);
   }
-  .evento{
-    display:grid;
-    grid-template-columns: 64px 100px 1fr 72px 72px;
+  .stream-header-row{
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg-surface-elevated);
+    border-bottom: 1px solid var(--border-subtle);
+    display: grid;
+    grid-template-columns: 75px 120px 1fr 70px 75px;
     gap: 10px;
-    align-items:center;
-    padding: 7px 12px;
-    border-bottom: 1px solid var(--line);
+    padding: 8px 14px;
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+  .evento-row{
+    display: grid;
+    grid-template-columns: 75px 120px 1fr 70px 75px;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 14px;
+    border-bottom: 1px solid rgba(45, 55, 72, 0.4);
+    font-family: var(--font-mono);
     font-size: 11.5px;
-    animation: entrar .25s ease;
+    transition: background 0.15s ease;
+    animation: slideIn 0.2s ease-out;
   }
-  @media (max-width: 1300px){
-    .evento{ grid-template-columns: 60px 90px 1fr 64px 64px; }
+  @keyframes slideIn{
+    from{ opacity: 0; transform: translateY(-4px); }
+    to{ opacity: 1; transform: translateY(0); }
   }
-  @keyframes entrar{
-    from{ opacity:0; transform: translateY(-4px);}
-    to{ opacity:1; transform: translateY(0);}
+  .evento-row:hover{
+    background: rgba(255, 255, 255, 0.02);
   }
-  .evento .hora{ color: var(--text-dim); font-size: 10.5px;}
-  .evento .ip{ font-size: 11px; }
-  .evento .detalle{ color: var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size: 11px; }
-  .evento.produccion{ background: rgba(57,186,230,0.03); }
-  .evento.bloqueado{ background: rgba(240,113,120,0.06); }
-  .tag{
-    font-size: 9.5px;
-    padding: 2px 5px;
-    border-radius: 3px;
-    text-align:center;
-    font-weight: 600;
+  .evento-row.produccion{
+    background: rgba(6, 182, 212, 0.04);
   }
-  .tag.ok{ background: rgba(111,207,151,0.12); color: var(--safe); }
-  .tag.off{ background: transparent; color: var(--text-dim); border: 1px solid var(--line); }
-  .tag.reglas{ background: rgba(255,180,84,0.14); color: var(--warn-rules); }
-  .tag.ml{ background: rgba(57,186,230,0.14); color: var(--warn-ml); }
+  .evento-row.bloqueado{
+    background: rgba(239, 68, 68, 0.08);
+  }
+  .evento-row .col-hora{ color: var(--text-muted); font-size: 11px; }
+  .evento-row .col-ip{ color: var(--text-primary); font-weight: 500; }
+  .evento-row .col-detalle{
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .badge{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: var(--radius-full);
+  }
+  .badge.success{ background: var(--status-success-bg); color: #34D399; }
+  .badge.warning{ background: var(--status-warning-bg); color: #FBBF24; }
+  .badge.danger{ background: var(--status-danger-bg); color: #F87171; }
+  .badge.info{ background: var(--status-info-bg); color: #60A5FA; }
+  .badge.purple{ background: rgba(139, 92, 246, 0.15); color: #C084FC; }
+  .badge.neutral{ background: rgba(255, 255, 255, 0.05); color: var(--text-muted); border: 1px solid var(--border-subtle); }
 
-  /* ================== METRICAS (derecha) ================== */
-  .metricas-grid{
-    display:grid;
+  /* ================= COLUMNA DERECHA: MÉTRICAS Y ML SUITE ================= */
+  .metrics-summary-bar{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: var(--bg-surface-elevated);
+    border-radius: var(--radius-md);
+    margin-bottom: 14px;
+    border: 1px solid var(--border-subtle);
+  }
+  .metrics-summary-text{
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .metrics-summary-val{
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    font-family: var(--font-mono);
+  }
+
+  .metrics-cards-grid{
+    display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .metric-box{
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .metric-box-header{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .metric-box-title{
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+  .metric-box-sub{
+    font-size: 9.5px;
+    color: var(--text-muted);
+  }
+  .metric-box.reglas .metric-box-title{ color: #FBBF24; }
+  .metric-box.iforest .metric-box-title{ color: var(--brand-primary); }
+  .metric-box.ocsvm .metric-box-title{ color: #C084FC; }
+  .metric-box.lof .metric-box-title{ color: #F59E0B; }
+  .metric-box.ensamble .metric-box-title{ color: #34D399; }
+
+  .metric-stat-row{
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 2px 0;
+  }
+  .metric-stat-row b{
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+  }
+  .f1-score-display{
+    font-size: 15px;
+    font-weight: 800;
+    font-family: var(--font-mono);
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .metric-box.reglas .f1-score-display{ color: #FBBF24; }
+  .metric-box.iforest .f1-score-display{ color: var(--brand-primary); }
+  .metric-box.ocsvm .f1-score-display{ color: #C084FC; }
+  .metric-box.lof .f1-score-display{ color: #F59E0B; }
+  .metric-box.ensamble .f1-score-display{ color: #34D399; }
+
+  /* Ensamble card destacado */
+  .ensemble-box{
+    grid-column: 1 / -1;
+    background: rgba(16, 185, 129, 0.05);
+    border-color: rgba(16, 185, 129, 0.35);
+  }
+
+  /* Paneles de Control de Entrenamiento */
+  .training-controls-box{
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 14px;
     margin-bottom: 14px;
   }
-  .metrica-card{
-    background: var(--bg-panel);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 10px 10px 8px;
-  }
-  .metrica-card h3{
-    font-family: var(--font-head);
-    font-size: 11px;
-    font-weight: 600;
-    margin-bottom: 6px;
-    display: flex; justify-content: space-between; align-items: center;
-  }
-  .metrica-card.reglas h3{ color: var(--warn-rules); }
-  .metrica-card.ml-iforest h3{ color: var(--warn-ml); }
-  .metrica-card.ml-ocsvm h3{ color: #BB80E3; }
-  .metrica-card.ml-lof h3{ color: #E6B450; }
-  .metrica-card.ml-ensamble h3{ color: var(--safe); }
-  .metrica-row{
-    display:flex; justify-content:space-between;
-    font-size: 10px;
-    padding: 1.5px 0;
-    color: var(--text-dim);
-  }
-  .metrica-row b{ color: var(--text); font-weight: 600; }
-  .f1-badge{
-    margin-top: 5px;
-    font-size: 14.5px;
+  .training-controls-box .title{
+    font-size: 12px;
     font-weight: 700;
-    font-family: var(--font-head);
+    color: var(--text-primary);
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
-  .metrica-card.reglas .f1-badge{ color: var(--warn-rules); }
-  .metrica-card.ml-iforest .f1-badge{ color: var(--warn-ml); }
-  .metrica-card.ml-ocsvm .f1-badge{ color: #BB80E3; }
-  .metrica-card.ml-lof .f1-badge{ color: #E6B450; }
-  .metrica-card.ml-ensamble .f1-badge{ color: var(--safe); }
-
-  .contador-total{
-    font-size: 11px; color: var(--text-dim); margin-top: -10px; margin-bottom: 14px;
-  }
-
-  .panel-entrenamiento{
-    background: var(--bg-panel);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 12px 12px;
-    margin-bottom: 18px;
-  }
-  .fila{ display:flex; gap:6px; margin-bottom:8px; }
-  .fila input{ flex:1; min-width:0;
-    background: var(--bg-panel-raised);
-    border: 1px solid var(--line);
-    color: var(--text);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    padding: 7px 8px;
-    border-radius: 3px;
-  }
-  .fila button{
-    background: var(--bg-panel-raised);
-    color: var(--text);
-    border: 1px solid var(--line);
-    border-radius: 3px;
-    padding: 7px 10px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    cursor: pointer;
-    white-space: nowrap;
-  }
-  .fila button:hover{ border-color: var(--text-dim); }
-  .log-entrenamiento{
-    font-size: 10.5px; color: var(--text-dim); white-space: pre-line;
-    max-height: 90px; overflow-y: auto; line-height: 1.5;
-  }
-
-  .panel-produccion{
-    background: var(--bg-panel);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    padding: 12px 12px;
-  }
-  .lista-bloqueadas{
-    font-size: 11px;
-    max-height: 160px; overflow-y: auto;
-  }
-  .ip-bloqueada{
-    display:flex; justify-content:space-between;
-    padding: 3px 0;
-  }
-  .ip-bloqueada .ip{ color: var(--danger); font-weight: 600; }
-  .ip-bloqueada .seg{ color: var(--text-dim); }
-
-  .vacio{
-    color: var(--text-dim);
+  .btn-action-outline{
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    padding: 7px 12px;
+    border-radius: var(--radius-sm);
     font-size: 11.5px;
-    padding: 30px 14px;
-    text-align: center;
-    line-height: 1.6;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.18s ease;
+  }
+  .btn-action-outline:hover{
+    border-color: var(--text-secondary);
+    background: var(--bg-surface-hover);
+  }
+  .btn-action-outline.primary{
+    background: rgba(6, 182, 212, 0.15);
+    color: var(--brand-primary);
+    border-color: rgba(6, 182, 212, 0.4);
+  }
+  .btn-action-outline.primary:hover{
+    background: rgba(6, 182, 212, 0.25);
+    border-color: var(--brand-primary);
   }
 
-  ::-webkit-scrollbar{ width: 8px; }
-  ::-webkit-scrollbar-track{ background: var(--bg-panel); }
-  ::-webkit-scrollbar-thumb{ background: var(--line); border-radius: 4px; }
-
-  #toast-error{
-    position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
-    background: rgba(240,113,120,0.15);
-    border: 1px solid var(--danger);
-    color: var(--text);
-    padding: 9px 16px;
-    border-radius: 4px;
+  /* Lista de IPs bloqueadas activas */
+  .blocked-ips-box{
+    background: var(--bg-surface-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 14px;
+  }
+  .blocked-ip-item{
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     font-family: var(--font-mono);
     font-size: 12px;
+  }
+  .blocked-ip-item:last-child{
+    border-bottom: none;
+  }
+  .blocked-ip-badge{
+    color: #EF4444;
+    font-weight: 700;
+  }
+  .blocked-ip-time{
+    color: var(--text-muted);
+    font-size: 11px;
+  }
+
+  /* Toast de notificaciones */
+  #toast-error{
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1F2937;
+    border: 1px solid var(--status-danger);
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    font-weight: 600;
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
     display: none;
     z-index: 9999;
   }
-  #toast-error.visible{ display: block; }
+  #toast-error.visible{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Scrollbar personalizado */
+  ::-webkit-scrollbar{ width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track{ background: transparent; }
+  ::-webkit-scrollbar-thumb{ background: var(--border-subtle); border-radius: var(--radius-full); }
+  ::-webkit-scrollbar-thumb:hover{ background: var(--text-muted); }
 </style>
 </head>
 <body>
 
 <div id="toast-error"></div>
 
-<div class="topbar">
-  <div class="brand">
-    <div class="pulse"></div>
-    <h1>Centinela</h1>
-    <span class="sub">Microservicio · /evaluar + /registrar_intento protegen cualquier login</span>
-  </div>
-  <div class="right">
-    <div style="display:flex; align-items:center; gap:6px; background:var(--bg-panel-raised); border:1px solid var(--line); border-radius:4px; padding:4px 8px;">
-      <span style="font-size:10.5px; color:var(--text-dim);">🎯 Abrir Logins:</span>
-      <a href="/demo/vulnerable" target="_blank" class="btn-mini" style="color:var(--danger); border-color:rgba(240,113,120,0.4);" title="Sin defensas, vulnerable">1. Vulnerable</a>
-      <a href="/demo/captcha" target="_blank" class="btn-mini" style="color:var(--warn-rules); border-color:rgba(255,180,84,0.4);" title="Con reto visual anti-bot">2. CAPTCHA</a>
-      <a href="/demo/2fa" target="_blank" class="btn-mini" style="color:var(--warn-ml); border-color:rgba(57,186,230,0.4);" title="Doble factor de autenticación">3. 2FA (TOTP)</a>
-      <a href="/demo" target="_blank" class="btn-mini" style="color:var(--safe); border-color:var(--safe); font-weight:600;" title="Protegido por reglas y Machine Learning">4. Centinela</a>
+<!-- ================= 1. HEADER & BRAND ================= -->
+<header class="site-header">
+  <div class="header-inner">
+    <div class="brand-group">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24"><path d="M12 2L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-3zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-2.33v8.02z"/></svg>
+      </div>
+      <div class="brand-info">
+        <h1>Centinela <span class="brand-badge">WAF + ML Suite</span></h1>
+        <div class="brand-subtitle">Plataforma de Protección Perimetral & Detección de Fuerza Bruta</div>
+      </div>
     </div>
-    <div class="status" id="status-conexion">conectando...</div>
-    <button class="btn-mini" id="btn-logout" style="display:none;">Cerrar sesión</button>
+
+    <!-- Navegación de secciones rápidas -->
+    <nav class="nav-center">
+      <a href="/dashboard" class="nav-btn active">📊 Dashboard & Bot</a>
+      <a href="/demo" target="_blank" class="nav-btn">🛡️ Portal Login Demo</a>
+      <a href="/api/exportar_dataset?formato=csv" download class="nav-btn">📥 Descargar Dataset</a>
+    </nav>
+
+    <!-- Estado y usuario -->
+    <div class="nav-right">
+      <div class="connection-pill">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="status-conexion">Conectado en vivo</span>
+      </div>
+      <button class="btn-logout-pill" id="btn-logout" style="display:none;">Cerrar sesión</button>
+    </div>
+  </div>
+</header>
+
+<!-- ================= 2. FRANJA DE LOGINS OBJETIVO (ACCESO RÁPIDO) ================= -->
+<div class="logins-strip">
+  <div class="logins-strip-inner">
+    <div class="logins-strip-title">
+      <span>🎯 Portales de Acceso para Pruebas:</span>
+    </div>
+    <div class="logins-chips">
+      <a href="/demo/vulnerable" target="_blank" class="login-chip vulnerable" title="Sin defensas, vulnerable a diccionario">
+        <span>⚠️ 1. Vulnerable (Sin límite)</span> ↗
+      </a>
+      <a href="/demo/captcha" target="_blank" class="login-chip captcha" title="Con reto visual anti-bot">
+        <span>🧩 2. Con CAPTCHA</span> ↗
+      </a>
+      <a href="/demo/2fa" target="_blank" class="login-chip twofa" title="Doble factor de autenticación TOTP">
+        <span>📱 3. Con 2FA (TOTP)</span> ↗
+      </a>
+      <a href="/demo" target="_blank" class="login-chip centinela" title="Protegido activamente por Centinela WAF/ML">
+        <span>🛡️ 4. Protegido por Centinela</span> ↗
+      </a>
+    </div>
   </div>
 </div>
 
-<div class="layout">
+<!-- ================= 3. CONTENIDO PRINCIPAL EN TRES COLUMNAS ================= -->
+<main class="main-wrapper">
 
-  <!-- ================ COLUMNA 1: PANEL DEL BOT ================ -->
-  <div class="col panel-bot">
-    <div class="section-title">
-      <span>Panel del atacante</span>
-    </div>
-    <div class="section-desc">
-      Selecciona en el menú desplegable qué login deseas atacar. El bot enviará las solicitudes automáticamente sin que tengas que escribir URLs.
-    </div>
+  <div class="grid-layout">
 
-    <div class="field" style="margin-bottom: 14px;">
-      <label style="color:var(--accent); font-weight:600; display:flex; justify-content:space-between; align-items:center;">
-        <span>🎯 Login Objetivo a Atacar</span>
-        <a id="link-abrir-login" href="/demo" target="_blank" style="font-size:10.5px; color:var(--text-dim); text-decoration:underline;">Abrir login ↗</a>
-      </label>
-      <select id="bot-url" style="border: 1.5px solid var(--accent); background: var(--bg-panel); font-weight: 500; padding: 8px 10px;">
-        <option value="/demo/login" selected>🛡️ 4. Centinela WAF/ML (Detección en tiempo real)</option>
-        <option value="/demo/vulnerable/login">⚠️ 1. Login Vulnerable (Sin protección ni filtros)</option>
-        <option value="/demo/captcha/login">🧩 2. Login con CAPTCHA (Desafío anti-automatización)</option>
-        <option value="/demo/2fa/login-paso1">📱 3. Login con 2FA (TOTP de doble factor)</option>
-      </select>
-      <div id="desc-login-seleccionado" style="font-size:10.5px; color:var(--text-dim); margin-top:5px; line-height:1.4;">
-        Protegido por Reglas fijas + Isolation Forest + One-Class SVM + LOF.
-      </div>
-    </div>
-
-    <div class="field">
-      <label>Tipo de ataque</label>
-      <select id="bot-tipo">
-        <option value="rapido">Ataque rápido (1 IP, ráfaga corta)</option>
-        <option value="lento">Ataque lento — low-and-slow</option>
-        <option value="distribuido">Ataque distribuido (varias IPs)</option>
-      </select>
-    </div>
-
-    <div class="field">
-      <label>Usuario objetivo</label>
-      <select id="bot-usuario">
-        <option value="">(aleatorio)</option>
-        <option>admin</option>
-        <option>carla</option>
-        <option>roberto</option>
-        <option>root</option>
-        <option>test</option>
-      </select>
-    </div>
-
-    <div class="row-2">
-      <div class="field" id="field-intentos">
-        <label>N° intentos</label>
-        <input type="number" id="bot-intentos" value="10" min="1" max="100">
-      </div>
-      <div class="field" id="field-ips" style="display:none;">
-        <label>N° IPs distintas</label>
-        <input type="number" id="bot-ips" value="6" min="1" max="50">
-      </div>
-      <div class="field">
-        <label>Intervalo (s)</label>
-        <input type="number" step="0.1" id="bot-intervalo" value="0.3" min="0.05" max="30">
-      </div>
-    </div>
-
-    <div class="field" style="margin-bottom:12px; background:rgba(0,217,255,0.04); padding:10px; border-radius:6px; border:1px solid rgba(0,217,255,0.25);">
-      <div style="font-weight:600; font-size:11.5px; color:var(--accent); margin-bottom:6px; display:flex; align-items:center; gap:6px;">
-        <span>🧠 Modo de Ataque y Deducción:</span>
-      </div>
-      <div style="display:flex; flex-direction:column; gap:6px;">
-        <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:11.5px; margin:0; text-transform:none; letter-spacing:normal;">
-          <input type="radio" name="bot-estrategia" id="strat-inteligente" value="inteligente" checked style="margin-top:2px; accent-color:var(--accent); cursor:pointer;">
-          <div>
-            <strong>Ataque Heurístico Inteligente (Mutación Semántica & Leetspeak)</strong>
-            <div style="color:var(--text-dim); font-size:10px; margin-top:2px;">
-              El bot perfila al objetivo y deduce progresivamente variantes (<code>S3guro#2026</code>, <code>MiClave!789</code>, años, sustitución leet <code>3->e</code>, <code>@->a</code>, símbolos). Encontrará la credencial de forma orgánica si el sistema no lo bloquea antes.
+    <!-- ========== COLUMNA 1: PANEL DEL BOT ATACANTE ========== -->
+    <div class="panel-bot-col">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-header-left">
+            <div class="card-icon red">⚡</div>
+            <div>
+              <div class="card-title">Simulador de Ataques</div>
+              <div class="card-subtitle">Control del Bot Inteligente & Fuerza Bruta</div>
             </div>
           </div>
-        </label>
+        </div>
 
-        <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:11.5px; margin:0; text-transform:none; letter-spacing:normal;">
-          <input type="radio" name="bot-estrategia" id="strat-diccionario" value="diccionario" style="margin-top:2px; accent-color:var(--accent); cursor:pointer;">
-          <div>
-            <strong>Diccionario Estático Tradicional</strong>
-            <div style="color:var(--text-dim); font-size:10px; margin-top:2px;">
-              Prueba la lista fija o personalizada (123456, password, etc.).
+        <div class="card-body">
+          <!-- 1. Selección de Login Objetivo -->
+          <div class="form-group">
+            <label class="form-label">
+              <span>Login Objetivo a Probar</span>
+              <a id="link-abrir-login" href="/demo" target="_blank">Abrir página ↗</a>
+            </label>
+            <select id="bot-url" class="form-control" style="font-weight: 600; border-color: rgba(6, 182, 212, 0.4);">
+              <option value="/demo/login" selected>🛡️ 4. Centinela WAF/ML (Detección en tiempo real)</option>
+              <option value="/demo/vulnerable/login">⚠️ 1. Login Vulnerable (Sin protección)</option>
+              <option value="/demo/captcha/login">🧩 2. Login con CAPTCHA (Desafío anti-bot)</option>
+              <option value="/demo/2fa/login-paso1">📱 3. Login con 2FA (TOTP)</option>
+            </select>
+            <div id="desc-login-seleccionado" style="font-size: 11px; color: var(--text-muted); margin-top: 5px; line-height: 1.4;">
+              Protegido activamente por Reglas Heurísticas + Isolation Forest + One-Class SVM + LOF.
             </div>
           </div>
-        </label>
-      </div>
 
-      <div id="box-pistas-contexto" style="margin-top:8px; padding-top:6px; border-top:1px dashed rgba(255,255,255,0.08);">
-        <label style="font-size:10px; color:var(--text-dim); margin-bottom:3px; display:block;">Pistas semánticas del objetivo (opcional para el bot inteligente):</label>
-        <input type="text" id="bot-pistas" placeholder="ej. seguro, trujillo, unitru, miclave" style="font-size:11px; width:100%; padding:5px 8px; background:rgba(0,0,0,0.3); border:1px solid var(--line); border-radius:4px; color:var(--text);">
-      </div>
-    </div>
+          <!-- 2. Estrategia del Atacante -->
+          <div class="strategy-box">
+            <div class="strategy-box-title">
+              <span>🧠 Estrategia de Descubrimiento de Credenciales</span>
+            </div>
+            
+            <label class="radio-option">
+              <input type="radio" name="bot-estrategia" id="strat-inteligente" value="inteligente" checked>
+              <div>
+                <div class="radio-option-title">Ataque Heurístico Inteligente (Mutación & Leetspeak)</div>
+                <div class="radio-option-desc">
+                  El bot no usa un número de intento fijo. Genera mutaciones semánticas (<code>S3guro#2026</code>, años, <code>@->a</code>, <code>3->e</code>, símbolos) hasta descifrar la clave orgánicamente si el sistema no lo bloquea.
+                </div>
+              </div>
+            </label>
 
-    <div class="field" id="box-passwords-custom" style="display:none;">
-      <label style="display:flex; justify-content:space-between; align-items:center;">
-        <span>Contraseñas a probar (una por línea)</span>
-        <span style="font-size:10px; color:var(--text-dim);">💡 Clave real de admin: <code>S3guro#2026</code></span>
-      </label>
-      <textarea id="bot-passwords" placeholder="Deja vacío para diccionario común (123456, password, etc.)&#10;O escribe una lista personalizada"></textarea>
-    </div>
+            <label class="radio-option" style="margin-top: 6px;">
+              <input type="radio" name="bot-estrategia" id="strat-diccionario" value="diccionario">
+              <div>
+                <div class="radio-option-title">Diccionario Estático Tradicional</div>
+                <div class="radio-option-desc">
+                  Prueba una lista fija común (123456, password, etc.) o contraseñas personalizadas ingresadas manualmente.
+                </div>
+              </div>
+            </label>
 
-    <button class="btn lanzar-big" id="bot-lanzar">▶ Lanzar ataque</button>
+            <div id="box-pistas-contexto" style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-subtle);">
+              <label class="form-label" style="font-size: 11px; margin-bottom: 4px;">Pistas Semánticas Opcionales (OSINT simulado):</label>
+              <input type="text" id="bot-pistas" class="form-control" placeholder="ej. seguro, trujillo, unitru, miclave" style="font-size: 12px; padding: 6px 10px;">
+            </div>
+          </div>
 
-    <div style="margin-top: 16px;">
-      <div class="section-title" style="font-size:12px; margin-bottom: 6px;">
-        <span>Log en vivo del bot</span>
-      </div>
-      <div class="stream-bot" id="stream-bot">
-        <div class="vacio" style="padding: 30px 10px; text-align:center;">
-          Sin ataques lanzados todavía.
+          <!-- Contraseñas personalizadas si elige diccionario -->
+          <div class="form-group" id="box-passwords-custom" style="display: none;">
+            <label class="form-label">
+              <span>Contraseñas a Probar (una por línea)</span>
+              <span style="font-size: 10.5px; color: var(--text-muted);">💡 Clave admin: <code>S3guro#2026</code></span>
+            </label>
+            <textarea id="bot-passwords" class="form-control" placeholder="123456&#10;password&#10;admin123"></textarea>
+          </div>
+
+          <!-- 3. Parámetros de Cadencia -->
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Tipo de Tráfico</label>
+              <select id="bot-tipo" class="form-control">
+                <option value="rapido">Ataque Rápido (Ráfaga)</option>
+                <option value="lento">Ataque Lento (Low-and-Slow)</option>
+                <option value="distribuido">Distribuido (Multi-IP)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Usuario</label>
+              <select id="bot-usuario" class="form-control">
+                <option value="">(Aleatorio)</option>
+                <option>admin</option>
+                <option>carla</option>
+                <option>roberto</option>
+                <option>root</option>
+                <option>test</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group" id="field-intentos">
+              <label class="form-label">N° Intentos</label>
+              <input type="number" id="bot-intentos" class="form-control" value="10" min="1" max="100">
+            </div>
+            <div class="form-group" id="field-ips" style="display: none;">
+              <label class="form-label">N° IPs Distintas</label>
+              <input type="number" id="bot-ips" class="form-control" value="6" min="1" max="50">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Intervalo (seg)</label>
+              <input type="number" step="0.1" id="bot-intervalo" class="form-control" value="0.3" min="0.05" max="30">
+            </div>
+          </div>
+
+          <!-- Botón de Lanzamiento Principal -->
+          <button class="btn-primary-action" id="bot-lanzar">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            <span>Ejecutar Ataque Sintético</span>
+          </button>
+
+          <!-- Consola en tiempo real del atacante -->
+          <div style="margin-top: 18px;">
+            <div class="form-label" style="margin-bottom: 4px;">
+              <span>Consola de Ejecución en Vivo:</span>
+            </div>
+            <div class="bot-terminal" id="stream-bot">
+              <div style="color: var(--text-muted); text-align: center; padding: 40px 10px;">
+                Sin ataques ejecutados en esta sesión.<br>Selecciona un login y haz clic en "Ejecutar Ataque".
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
     </div>
+
+    <!-- ========== COLUMNA 2: EVENTOS EN VIVO & SIMULADOR INTERNO ========== -->
+    <div class="stream-center-col">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-header-left">
+            <div class="card-icon blue">📡</div>
+            <div>
+              <div class="card-title">Monitor de Telemetría en Tiempo Real</div>
+              <div class="card-subtitle">Inspección de Tráfico HTTP & Evaluaciones de Seguridad</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <!-- Simuladores rápidos de calibración -->
+          <div style="margin-bottom: 8px;">
+            <div class="form-label">
+              <span>Generador Rápido de Calibración de Métricas:</span>
+            </div>
+          </div>
+          <div class="quick-sim-buttons">
+            <button class="btn-sim rapido" onclick="lanzarAtaque('rapido')">
+              <span class="sim-label">⚡ Ráfaga Rápida</span>
+              <span class="sim-sub">1 IP · Ráfaga</span>
+            </button>
+            <button class="btn-sim lento" onclick="lanzarAtaque('lento')">
+              <span class="sim-label">🐢 Low-and-Slow</span>
+              <span class="sim-sub">Intervalos largos</span>
+            </button>
+            <button class="btn-sim distribuido" onclick="lanzarAtaque('distribuido')">
+              <span class="sim-label">🌐 Botnet Distr.</span>
+              <span class="sim-sub">Multi-IP rotativa</span>
+            </button>
+            <button class="btn-sim legitimo btn-sim-legitimo" onclick="lanzarLegitimo()">
+              <span class="sim-label">👤 Tráfico Legítimo</span>
+              <span class="sim-sub">Simula usuarios humanos benévolos</span>
+            </button>
+            <button class="btn-sim reset" onclick="resetear()" title="Reiniciar base de datos y memoria">
+              <span class="sim-label">🔄 Reset</span>
+            </button>
+          </div>
+
+          <!-- Contenedor del stream de eventos -->
+          <div class="event-stream-container">
+            <div class="stream-header-row">
+              <span>Hora</span>
+              <span>Dirección IP</span>
+              <span>Detalles del Intento</span>
+              <span>Reglas</span>
+              <span>Modelos ML</span>
+            </div>
+            <div id="stream">
+              <div style="color: var(--text-muted); text-align: center; padding: 60px 20px;">
+                Sin eventos de autenticación registrados aún.<br>Inicia un ataque o abre un login demo para ver el flujo en vivo.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== COLUMNA 3: SUITE DE IA / ML & MÉTRICAS ========== -->
+    <div class="metrics-right-col">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-header-left">
+            <div class="card-icon green">📊</div>
+            <div>
+              <div class="card-title">Métricas & Suite de Inteligencia Artificial</div>
+              <div class="card-subtitle">Comparativa Heurística vs Algoritmos de Detección</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <!-- Total de eventos -->
+          <div class="metrics-summary-bar">
+            <span class="metrics-summary-text">Total de Eventos Evaluados:</span>
+            <span class="metrics-summary-val" id="contador-total">0 intentos</span>
+          </div>
+
+          <!-- Cuadrícula de modelos de Machine Learning -->
+          <div class="metrics-cards-grid">
+            
+            <!-- 1. Reglas Fijas -->
+            <div class="metric-box reglas">
+              <div class="metric-box-header">
+                <div>
+                  <div class="metric-box-title">Reglas Fijas WAF</div>
+                  <div class="metric-box-sub">Heurística Determinista</div>
+                </div>
+                <span class="badge warning">Heurística</span>
+              </div>
+              <div class="metric-stat-row"><span>Precisión</span><b id="r-precision">—</b></div>
+              <div class="metric-stat-row"><span>Recall</span><b id="r-recall">—</b></div>
+              <div class="metric-stat-row"><span>Falsos Positivos</span><b id="r-fp">—</b></div>
+              <div class="metric-stat-row"><span>Falsos Negativos</span><b id="r-fn">—</b></div>
+              <div class="f1-score-display">
+                <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);">F1-Score</span>
+                <span id="r-f1">F1 —</span>
+              </div>
+            </div>
+
+            <!-- 2. Isolation Forest -->
+            <div class="metric-box iforest">
+              <div class="metric-box-header">
+                <div>
+                  <div class="metric-box-title">Isolation Forest</div>
+                  <div class="metric-box-sub">Partición en Árboles</div>
+                </div>
+                <span class="badge info">iForest</span>
+              </div>
+              <div class="metric-stat-row"><span>Precisión</span><b id="if-precision">—</b></div>
+              <div class="metric-stat-row"><span>Recall</span><b id="if-recall">—</b></div>
+              <div class="metric-stat-row"><span>Falsos Positivos</span><b id="if-fp">—</b></div>
+              <div class="metric-stat-row"><span>Falsos Negativos</span><b id="if-fn">—</b></div>
+              <div class="f1-score-display">
+                <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);">F1-Score</span>
+                <span id="if-f1">F1 —</span>
+              </div>
+            </div>
+
+            <!-- 3. One-Class SVM -->
+            <div class="metric-box ocsvm">
+              <div class="metric-box-header">
+                <div>
+                  <div class="metric-box-title">One-Class SVM</div>
+                  <div class="metric-box-sub">Frontera No Lineal RBF</div>
+                </div>
+                <span class="badge purple">OC-SVM</span>
+              </div>
+              <div class="metric-stat-row"><span>Precisión</span><b id="svm-precision">—</b></div>
+              <div class="metric-stat-row"><span>Recall</span><b id="svm-recall">—</b></div>
+              <div class="metric-stat-row"><span>Falsos Positivos</span><b id="svm-fp">—</b></div>
+              <div class="metric-stat-row"><span>Falsos Negativos</span><b id="svm-fn">—</b></div>
+              <div class="f1-score-display">
+                <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);">F1-Score</span>
+                <span id="svm-f1">F1 —</span>
+              </div>
+            </div>
+
+            <!-- 4. LOF -->
+            <div class="metric-box lof">
+              <div class="metric-box-header">
+                <div>
+                  <div class="metric-box-title">LOF (Outlier Factor)</div>
+                  <div class="metric-box-sub">Densidad k-NN Local</div>
+                </div>
+                <span class="badge warning">LOF</span>
+              </div>
+              <div class="metric-stat-row"><span>Precisión</span><b id="lof-precision">—</b></div>
+              <div class="metric-stat-row"><span>Recall</span><b id="lof-recall">—</b></div>
+              <div class="metric-stat-row"><span>Falsos Positivos</span><b id="lof-fp">—</b></div>
+              <div class="metric-stat-row"><span>Falsos Negativos</span><b id="lof-fn">—</b></div>
+              <div class="f1-score-display">
+                <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);">F1-Score</span>
+                <span id="lof-f1">F1 —</span>
+              </div>
+            </div>
+
+            <!-- 5. Ensamble Multi-ML -->
+            <div class="metric-box ensamble ensemble-box">
+              <div class="metric-box-header">
+                <div>
+                  <div class="metric-box-title">⭐ Ensamble Multi-Modelo Consolidado</div>
+                  <div class="metric-box-sub">Votación Democrática (iForest + OC-SVM + LOF)</div>
+                </div>
+                <span class="badge success">Consenso ML</span>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 6px;">
+                <div class="metric-stat-row" style="flex-direction: column;"><span>Precisión</span><b id="m-precision">—</b></div>
+                <div class="metric-stat-row" style="flex-direction: column;"><span>Recall</span><b id="m-recall">—</b></div>
+                <div class="metric-stat-row" style="flex-direction: column;"><span>Falsos Pos.</span><b id="m-fp">—</b></div>
+                <div class="metric-stat-row" style="flex-direction: column;"><span>Falsos Neg.</span><b id="m-fn">—</b></div>
+              </div>
+              <div class="f1-score-display" style="margin-top: 10px;">
+                <span style="font-size: 12px; font-weight: 700; color: #10B981;">F1-Score Ensamble</span>
+                <span id="m-f1" style="font-size: 18px;">F1 —</span>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Panel de Entrenamiento & Datasets -->
+          <div class="training-controls-box">
+            <div class="title">
+              <span>🧠 Motor de Datos & Entrenamiento</span>
+              <span id="modelo-fuente" class="badge info">Sintético</span>
+            </div>
+            <div id="modelo-detalle" style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.4;">
+              Entrenado con distribuciones base al arrancar el servidor.
+            </div>
+
+            <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+              <button onclick="cargarCicidsPrecargado()" class="btn-action-outline primary" style="flex: 1;" title="Carga el dataset de investigación CICIDS2017">
+                ⚡ Cargar CICIDS2017
+              </button>
+              <button onclick="volverASintetico()" class="btn-action-outline" style="flex: 1;">
+                Reset a Sintético
+              </button>
+            </div>
+
+            <div style="margin-bottom: 8px;">
+              <button onclick="reentrenarConTrafico()" class="btn-action-outline" style="width: 100%; border-color: rgba(16, 185, 129, 0.4); color: #34D399;">
+                🔄 Re-entrenar con Tráfico Recibido en Vivo
+              </button>
+            </div>
+
+            <div id="log-entrenamiento" style="font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted); max-height: 80px; overflow-y: auto; line-height: 1.4; padding: 4px; background: rgba(0,0,0,0.2); border-radius: 4px;"></div>
+          </div>
+
+          <!-- Panel de IPs Bloqueadas en Vivo -->
+          <div class="blocked-ips-box">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+              <span style="font-size: 12px; font-weight: 700; color: #EF4444;">🛡️ IPs Bloqueadas Activas (Corte WAF):</span>
+              <span style="font-size: 11px; color: var(--text-muted);"><b id="prod-alertas" style="color:#fff;">0</b> alertas activas</span>
+            </div>
+            <div id="lista-bloqueadas" style="max-height: 140px; overflow-y: auto;">
+              <div style="color: var(--text-muted); font-size: 11.5px; padding: 8px 0;">Ninguna IP bloqueada en este momento.</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
   </div>
 
-  <!-- ================ COLUMNA 2: STREAM EVENTOS ================ -->
-  <div class="col">
-    <div class="section-title">
-      <span>Simulador rápido (eventos internos)</span>
-    </div>
-    <div class="section-desc">
-      Estos botones generan tráfico simulado directo (<code>es_simulado=1</code>) para calibrar métricas rápidamente sin pasar por el login demo.
-    </div>
-    <div class="sim-controls">
-      <button class="btn rapido" onclick="lanzarAtaque('rapido')">Ataque rápido<br><span style="color:var(--text-dim); font-size:10.5px;">ráfaga · 1 IP</span></button>
-      <button class="btn lento" onclick="lanzarAtaque('lento')">Ataque lento<br><span style="color:var(--text-dim); font-size:10.5px;">low-and-slow</span></button>
-      <button class="btn distribuido" onclick="lanzarAtaque('distribuido')">Ataque distrib.<br><span style="color:var(--text-dim); font-size:10.5px;">multi-IP</span></button>
-      <button class="btn secundario legitimo" onclick="lanzarLegitimo()">Generar tráfico legítimo<br><span style="color:var(--text-dim); font-size:10.5px;">simula usuarios humanos</span></button>
-      <button class="btn reset" onclick="resetear()">Reiniciar<br><span style="color:var(--text-dim); font-size:10.5px;">limpiar todo</span></button>
-    </div>
-
-    <div class="section-title">
-      <span>Stream de intentos de login</span>
-    </div>
-    <div class="section-desc">
-      En paralelo ambos detectores. Fondo azul = tráfico real / producción (<code>es_simulado=0</code>) · Fondo rojo = IP bloqueada en este evento.
-    </div>
-    <div class="stream" id="stream">
-      <div class="vacio">Sin eventos todavía — lanza un ataque desde el panel izquierdo para empezar.</div>
-    </div>
-  </div>
-
-  <!-- ================ COLUMNA 3: MÉTRICAS + ENTRENAMIENTO + BLOQUEOS ================ -->
-  <div class="col">
-    <div class="section-title"><span>Métricas comparativas</span></div>
-    <div class="section-desc">Solo eventos simulados con verdad fundamental conocida.</div>
-    <div class="contador-total" id="contador-total">0 intentos registrados</div>
-
-    <div class="metricas-grid">
-      <div class="metrica-card reglas">
-        <h3>Reglas Fijas <span>Heurística</span></h3>
-        <div class="metrica-row"><span>Precisión</span><b id="r-precision">—</b></div>
-        <div class="metrica-row"><span>Recall</span><b id="r-recall">—</b></div>
-        <div class="metrica-row"><span>Falsos Pos.</span><b id="r-fp">—</b></div>
-        <div class="metrica-row"><span>Falsos Neg.</span><b id="r-fn">—</b></div>
-        <div class="f1-badge" id="r-f1">F1 —</div>
-      </div>
-      <div class="metrica-card ml-iforest">
-        <h3>Isolation Forest <span>Árboles</span></h3>
-        <div class="metrica-row"><span>Precisión</span><b id="if-precision">—</b></div>
-        <div class="metrica-row"><span>Recall</span><b id="if-recall">—</b></div>
-        <div class="metrica-row"><span>Falsos Pos.</span><b id="if-fp">—</b></div>
-        <div class="metrica-row"><span>Falsos Neg.</span><b id="if-fn">—</b></div>
-        <div class="f1-badge" id="if-f1">F1 —</div>
-      </div>
-      <div class="metrica-card ml-ocsvm">
-        <h3>One-Class SVM <span>Frontera RBF</span></h3>
-        <div class="metrica-row"><span>Precisión</span><b id="svm-precision">—</b></div>
-        <div class="metrica-row"><span>Recall</span><b id="svm-recall">—</b></div>
-        <div class="metrica-row"><span>Falsos Pos.</span><b id="svm-fp">—</b></div>
-        <div class="metrica-row"><span>Falsos Neg.</span><b id="svm-fn">—</b></div>
-        <div class="f1-badge" id="svm-f1">F1 —</div>
-      </div>
-      <div class="metrica-card ml-lof">
-        <h3>LOF <span>Densidad KNN</span></h3>
-        <div class="metrica-row"><span>Precisión</span><b id="lof-precision">—</b></div>
-        <div class="metrica-row"><span>Recall</span><b id="lof-recall">—</b></div>
-        <div class="metrica-row"><span>Falsos Pos.</span><b id="lof-fp">—</b></div>
-        <div class="metrica-row"><span>Falsos Neg.</span><b id="lof-fn">—</b></div>
-        <div class="f1-badge" id="lof-f1">F1 —</div>
-      </div>
-      <div class="metrica-card ml-ensamble" style="grid-column: 1 / -1; background: rgba(111,207,151,0.06); border-color: rgba(111,207,151,0.3);">
-        <h3>⭐ Ensamble Multi-ML <span>Consenso de Votación (IF + SVM + LOF)</span></h3>
-        <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 4px;">
-          <div class="metrica-row" style="flex-direction:column;"><span>Precisión</span><b id="m-precision">—</b></div>
-          <div class="metrica-row" style="flex-direction:column;"><span>Recall</span><b id="m-recall">—</b></div>
-          <div class="metrica-row" style="flex-direction:column;"><span>Falsos Pos.</span><b id="m-fp">—</b></div>
-          <div class="metrica-row" style="flex-direction:column;"><span>Falsos Neg.</span><b id="m-fn">—</b></div>
-        </div>
-        <div class="f1-badge" id="m-f1" style="margin-top: 6px;">F1 —</div>
-      </div>
-    </div>
-
-    <div class="section-title"><span>Leyenda de Modelos</span></div>
-    <div class="section-desc" style="margin-bottom:12px;">
-      <span class="tag reglas" style="margin-right:4px;">REGLAS</span>
-      <span class="tag ml" style="margin-right:4px;">IForest</span>
-      <span class="tag" style="background:rgba(187,128,227,0.18); color:#BB80E3; margin-right:4px;">OC-SVM</span>
-      <span class="tag" style="background:rgba(230,180,80,0.18); color:#E6B450; margin-right:4px;">LOF</span>
-      <span class="tag ok">OK Éxito</span>
-    </div>
-
-    <div class="panel-entrenamiento">
-      <div class="section-title" style="font-size:12px; margin-bottom:6px;">Origen de datos del entrenamiento ML</div>
-      <div class="metrica-row" style="margin-bottom:6px;">
-        <span>Modelo actual:</span>
-        <b id="modelo-fuente" style="color:var(--warn-ml);">sintético</b>
-      </div>
-      <div class="section-desc" id="modelo-detalle" style="margin-bottom:10px;">
-        Entrenado con datos sintéticos generados al arrancar el servidor.
-      </div>
-      <div class="fila" style="margin-bottom:6px;">
-        <button onclick="cargarCicidsPrecargado()" style="flex:1; background:var(--accent); color:#000; font-weight:700;">⚡ Cargar CICIDS2017 (1-Click)</button>
-        <button onclick="volverASintetico()" style="flex:1; border-color: var(--text-dim); color: var(--text-dim);">Reset sintético</button>
-      </div>
-      <div class="fila" style="margin-bottom:6px;">
-        <button onclick="reentrenarConTrafico()" style="flex:1; background:rgba(111,207,151,0.15); color:var(--safe); border-color:var(--safe); font-weight:600;" title="Usa los intentos reales y benignos registrados para ajustar el modelo">🧠 Re-entrenar con Tráfico Recibido</button>
-      </div>
-      <div style="margin-top:8px;">
-        <div style="font-size:10.5px; color:var(--text-dim); margin-bottom:4px;">O sube tus propios archivos CSV de CICIDS2017:</div>
-        <div class="fila">
-          <input type="file" id="in-file-cicids" accept=".csv" multiple style="font-size:10px; color:var(--text);">
-          <button onclick="subirYEntrenarCicids()" style="font-size:10.5px;">Subir CSV</button>
-        </div>
-      </div>
-      <div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--line); display:flex; justify-content:space-between; align-items:center;">
-        <span style="font-size:10.5px; color:var(--text-dim);">📥 Exportar dataset de ataques:</span>
-        <div style="display:flex; gap:6px;">
-          <a href="/api/exportar_dataset?formato=csv" class="btn-mini" download style="color:var(--accent); border-color:var(--accent); text-decoration:none;">CSV</a>
-          <a href="/api/exportar_dataset?formato=json" class="btn-mini" download style="color:var(--text); text-decoration:none;">JSON</a>
-        </div>
-      </div>
-      <div class="log-entrenamiento" id="log-entrenamiento"></div>
-    </div>
-
-    <div class="panel-produccion">
-      <div class="section-title" style="font-size:12px; margin-bottom:6px;">Protección en vivo</div>
-      <div class="section-desc" style="margin-bottom:8px;">Tráfico real (<code>/registrar_intento</code>) e IPs bloqueadas.</div>
-      <div class="metrica-row"><span>Tráfico real recibido:</span><b id="prod-total">0</b></div>
-      <div class="metrica-row" style="margin-bottom:10px;"><span>De ese tráfico, con alerta:</span><b id="prod-alertas">0</b></div>
-      <div style="font-size:10.5px; color:var(--text-dim); margin-bottom:4px;">IPs bloqueadas activas:</div>
-      <div class="lista-bloqueadas" id="lista-bloqueadas">Ninguna por ahora.</div>
-    </div>
-  </div>
-
-</div>
+</main>
 
 <script>
 // ================== CONEXIÓN SOCKET.IO ==================
@@ -658,30 +1263,34 @@ const socket = io(undefined, ioOpts);
 
 const stream = document.getElementById('stream');
 const statusEl = document.getElementById('status-conexion');
+const statusDotEl = document.getElementById('status-dot');
 let primerEvento = true;
 
 function showToast(msg){
   const el = document.getElementById('toast-error');
   el.textContent = msg;
   el.classList.add('visible');
-  setTimeout(() => el.classList.remove('visible'), 3200);
+  setTimeout(() => el.classList.remove('visible'), 3400);
 }
 
 socket.on('connect', () => {
-  statusEl.textContent = 'conectado';
-  statusEl.style.color = '#6FCF97';
+  statusEl.textContent = 'Conectado en vivo';
+  statusEl.style.color = '#10B981';
+  if(statusDotEl) statusDotEl.style.background = '#10B981';
   actualizarProteccionEnVivo();
 });
 socket.on('connect_error', (err) => {
-  statusEl.textContent = 'desconectado';
-  statusEl.style.color = '#F07178';
+  statusEl.textContent = 'Desconectado';
+  statusEl.style.color = '#EF4444';
+  if(statusDotEl) statusDotEl.style.background = '#EF4444';
   if(err && err.message && err.message.includes('401')){
     showToast('Acceso denegado: el servidor requiere autenticación.');
   }
 });
 socket.on('disconnect', () => {
-  statusEl.textContent = 'desconectado';
-  statusEl.style.color = '#F07178';
+  statusEl.textContent = 'Desconectado';
+  statusEl.style.color = '#EF4444';
+  if(statusDotEl) statusDotEl.style.background = '#EF4444';
 });
 
 function formatHora(ts){
@@ -689,7 +1298,7 @@ function formatHora(ts){
   return d.toLocaleTimeString('es-PE', {hour12:false});
 }
 
-// ================== STREAM EVENTOS ==================
+// ================== STREAM DE EVENTOS ==================
 socket.on('nuevo_evento', (ev) => {
   if(primerEvento){ stream.innerHTML = ''; primerEvento = false; }
 
@@ -699,33 +1308,34 @@ socket.on('nuevo_evento', (ev) => {
     : `${ev.usuario} · ${estadoTexto} · score_ml ${ev.score_ml}`;
 
   const fila = document.createElement('div');
-  fila.className = 'evento';
+  fila.className = 'evento-row';
   if(!ev.es_simulado) fila.classList.add('produccion');
   if(ev.bloqueado_ahora) fila.classList.add('bloqueado');
 
-  const tagOk = ev.exitoso ? '<span class="tag ok" style="margin-right:4px;">OK</span>' : '';
+  const tagOk = ev.exitoso ? '<span class="badge success" style="margin-right:6px;">OK</span>' : '';
   
-  // Detalle de votos de modelos si están disponibles
   let tagsModelos = '';
   if(ev.modelos_ml){
     const ifAlerta = ev.modelos_ml.isolation_forest.alerta;
     const svmAlerta = ev.modelos_ml.one_class_svm.alerta;
     const lofAlerta = ev.modelos_ml.lof.alerta;
     tagsModelos = `
-      <span class="tag ${ifAlerta ? 'ml' : 'off'}" title="Isolation Forest">${ifAlerta ? 'IF' : '—'}</span>
-      <span class="tag ${svmAlerta ? 'ml' : 'off'}" style="${svmAlerta ? 'background:rgba(187,128,227,0.2); color:#BB80E3;' : ''}" title="One-Class SVM">${svmAlerta ? 'SVM' : '—'}</span>
-      <span class="tag ${lofAlerta ? 'ml' : 'off'}" style="${lofAlerta ? 'background:rgba(230,180,80,0.2); color:#E6B450;' : ''}" title="LOF">${lofAlerta ? 'LOF' : '—'}</span>
+      <div style="display:flex; gap:3px;">
+        <span class="badge ${ifAlerta ? 'info' : 'neutral'}" title="Isolation Forest">${ifAlerta ? 'IF' : '—'}</span>
+        <span class="badge ${svmAlerta ? 'purple' : 'neutral'}" title="One-Class SVM">${svmAlerta ? 'SVM' : '—'}</span>
+        <span class="badge ${lofAlerta ? 'warning' : 'neutral'}" title="LOF">${lofAlerta ? 'LOF' : '—'}</span>
+      </div>
     `;
   } else {
-    tagsModelos = `<span class="tag ${ev.alerta_ml ? 'ml' : 'off'}">${ev.alerta_ml ? 'ML' : '—'}</span>`;
+    tagsModelos = `<span class="badge ${ev.alerta_ml ? 'info' : 'neutral'}">${ev.alerta_ml ? 'ML' : '—'}</span>`;
   }
 
   fila.innerHTML = `
-    <span class="hora">${formatHora(ev.timestamp)}</span>
-    <span class="ip">${ev.ip}</span>
-    <span class="detalle" title="${detalle.replace(/"/g,'&quot;')}">${tagOk}${detalle}</span>
-    <span class="tag ${ev.alerta_reglas ? 'reglas' : 'off'}">${ev.alerta_reglas ? 'REGLAS' : '—'}</span>
-    ${tagsModelos}
+    <span class="col-hora">${formatHora(ev.timestamp)}</span>
+    <span class="col-ip">${ev.ip}</span>
+    <span class="col-detalle" title="${detalle.replace(/"/g,'&quot;')}">${tagOk}${detalle}</span>
+    <span><span class="badge ${ev.alerta_reglas ? 'warning' : 'neutral'}">${ev.alerta_reglas ? 'REGLAS' : '—'}</span></span>
+    <span>${tagsModelos}</span>
   `;
   stream.prepend(fila);
   while(stream.children.length > 200){ stream.removeChild(stream.lastChild); }
@@ -734,7 +1344,7 @@ socket.on('nuevo_evento', (ev) => {
 });
 
 socket.on('reset', () => {
-  stream.innerHTML = '<div class="vacio">Sin eventos todavía — lanza un ataque desde el panel izquierdo para empezar.</div>';
+  stream.innerHTML = '<div style="color:var(--text-muted); text-align:center; padding:60px 20px;">Sin eventos todavía — ejecuta un ataque desde el panel izquierdo para empezar.</div>';
   primerEvento = true;
   actualizarMetricas();
 });
@@ -761,13 +1371,13 @@ async function lanzarLegitimo(){
   } catch(e){ showToast('No se pudo conectar con el servidor.'); }
 }
 async function resetear(){
-  if(!confirm('¿Reiniciar estado? (limpia eventos, bloqueos y detectores)')) return;
+  if(!confirm('¿Reiniciar estado? (limpia eventos registrados, bloqueos y contadores de los detectores)')) return;
   try{
     await fetch('/reset', {method: 'POST'});
   } catch(e){ showToast('Error al resetear.'); }
 }
 
-// ================== MÉTRICAS ==================
+// ================== MÉTRICAS DE MACHINE LEARNING ==================
 function pct(x){
   if(x === undefined || x === null) return '—';
   return (x * 100).toFixed(1) + '%';
@@ -778,7 +1388,7 @@ async function actualizarMetricas(){
     const res = await fetch('/api/metricas');
     const m = await res.json();
     if(!m){ return; }
-    document.getElementById('contador-total').textContent = `${m.total_intentos} intentos registrados`;
+    document.getElementById('contador-total').textContent = `${m.total_intentos} intentos`;
     
     // 1. Reglas
     const r = m.alerta_reglas;
@@ -818,7 +1428,7 @@ async function actualizarMetricas(){
       document.getElementById('lof-f1').textContent = 'F1 ' + lof.f1.toFixed(3);
     }
 
-    // 5. Ensamble Multi-ML
+    // 5. Ensamble Consolidado
     const ml = m.alerta_ml;
     document.getElementById('m-precision').textContent = pct(ml.precision);
     document.getElementById('m-recall').textContent = pct(ml.recall);
@@ -828,6 +1438,18 @@ async function actualizarMetricas(){
   } catch(e){}
 }
 actualizarMetricas();
+
+// ================== GESTIÓN DEL DATASET Y MODELO ==================
+const logEntrenamiento = document.getElementById('log-entrenamiento');
+const modeloFuenteEl = document.getElementById('modelo-fuente');
+const modeloDetalleEl = document.getElementById('modelo-detalle');
+
+function agregarLog(msg){
+  if(!logEntrenamiento) return;
+  const d = new Date();
+  const time = d.toLocaleTimeString('es-PE', {hour12:false});
+  logEntrenamiento.textContent = `[${time}] ${msg}\n` + logEntrenamiento.textContent;
+}
 
 async function cargarCicidsPrecargado(){
   agregarLog('Entrenando suite de modelos (Isolation Forest, OC-SVM, LOF) con dataset CICIDS2017...');
@@ -844,73 +1466,32 @@ async function cargarCicidsPrecargado(){
   }
 }
 
-// ================== ENTRENAMIENTO ==================
-const logEntrenamiento = document.getElementById('log-entrenamiento');
-const modeloFuenteEl = document.getElementById('modelo-fuente');
-const modeloDetalleEl = document.getElementById('modelo-detalle');
-function agregarLog(msg){
-  const hora = new Date().toLocaleTimeString('es-PE', {hour12:false});
-  logEntrenamiento.textContent = `[${hora}] ${msg}\n` + logEntrenamiento.textContent;
-}
-
-async function subirYEntrenarCicids(){
-  const fileInput = document.getElementById('in-file-cicids');
-  if(!fileInput.files || fileInput.files.length === 0){
-    agregarLog('Por favor selecciona al menos un archivo .csv desde tu computadora.');
-    return;
-  }
-  const formData = new FormData();
-  for(let i=0; i<fileInput.files.length; i++){
-    formData.append('archivos', fileInput.files[i]);
-  }
-  formData.append('max_benignos', '5000');
-
-  agregarLog(`Subiendo ${fileInput.files.length} archivo(s) CSV al servidor...`);
-  try {
-    const res = await fetch('/entrenar/upload_cicids', {
-      method: 'POST',
-      body: formData
-    });
-    const data = await res.json().catch(()=>({}));
-    if(res.status === 401){
-      agregarLog('Error 401: autenticación requerida.');
-    } else if(!res.ok){
-      agregarLog('Error: ' + (data.error || 'fallo en la subida'));
-    } else {
-      agregarLog(`Subida exitosa (${data.archivos_guardados} CSV). Procesando entrenamiento en segundo plano...`);
-    }
-  } catch(e){
-    agregarLog('Error de conexión al subir archivos: ' + e.message);
-  }
-}
-
 async function reentrenarConTrafico(){
-  agregarLog('Extrayendo patrones de tráfico benigno capturado para re-entrenar modelos...');
+  agregarLog('Re-entrenando modelos con eventos de tráfico benigno registrados...');
   try {
-    const res = await fetch('/entrenar/reentrenar_con_trafico', {method: 'POST'});
-    const data = await res.json().catch(()=>({}));
+    const res = await fetch('/entrenar/con_trafico', {method: 'POST'});
     if(res.status === 401){
       agregarLog('Error 401: autenticación requerida.');
-    } else if(!res.ok){
-      agregarLog('Aviso: ' + (data.error || 'No se pudo reentrenar'));
     } else {
-      agregarLog('¡Modelos re-entrenados con éxito con el tráfico en vivo!');
+      const data = await res.json();
+      agregarLog(`¡Completado! Modelos calibrados con tráfico en vivo.`);
     }
   } catch(e) {
-    agregarLog('Error de conexión: ' + e.message);
+    agregarLog('Error: ' + e.message);
   }
 }
 
 async function volverASintetico(){
-  agregarLog('Volviendo al modelo entrenado con datos sintéticos...');
+  agregarLog('Restableciendo modelos al estado sintético base...');
   const res = await fetch('/entrenar/reset_sintetico', {method: 'POST'});
   if(res.status === 401){ agregarLog('Error 401: autenticación requerida.'); }
 }
+
 socket.on('entrenamiento_progreso', (data) => agregarLog(data.mensaje));
 socket.on('entrenamiento_completo', (estado) => {
-  agregarLog('Entrenamiento completo.');
-  modeloFuenteEl.textContent = estado.fuente === 'cicids2017' ? 'CICIDS2017 (real)' : 'sintético';
-  modeloFuenteEl.style.color = estado.fuente === 'cicids2017' ? 'var(--safe)' : 'var(--warn-ml)';
+  agregarLog('Entrenamiento finalizado con éxito.');
+  modeloFuenteEl.textContent = estado.fuente === 'cicids2017' ? 'CICIDS2017 (Real)' : 'Sintético';
+  modeloFuenteEl.className = 'badge ' + (estado.fuente === 'cicids2017' ? 'success' : 'info');
   modeloDetalleEl.textContent = estado.detalle;
 });
 socket.on('entrenamiento_error', (data) => agregarLog('ERROR: ' + data.mensaje));
@@ -918,13 +1499,13 @@ socket.on('entrenamiento_error', (data) => agregarLog('ERROR: ' + data.mensaje))
 async function cargarEstadoModeloInicial(){
   const res = await fetch('/api/estado_modelo');
   const estado = await res.json();
-  modeloFuenteEl.textContent = estado.fuente === 'cicids2017' ? 'CICIDS2017 (real)' : 'sintético';
-  modeloFuenteEl.style.color = estado.fuente === 'cicids2017' ? 'var(--safe)' : 'var(--warn-ml)';
+  modeloFuenteEl.textContent = estado.fuente === 'cicids2017' ? 'CICIDS2017 (Real)' : 'Sintético';
+  modeloFuenteEl.className = 'badge ' + (estado.fuente === 'cicids2017' ? 'success' : 'info');
   modeloDetalleEl.textContent = estado.detalle;
 }
 cargarEstadoModeloInicial();
 
-// ================== PROTECCIÓN EN VIVO ==================
+// ================== PROTECCIÓN EN VIVO & BLOQUEOS ==================
 async function actualizarProteccionEnVivo(){
   try {
     const [resBloqueadas, resProduccion] = await Promise.all([
@@ -932,16 +1513,16 @@ async function actualizarProteccionEnVivo(){
     ]);
     const bloqueadas = await resBloqueadas.json();
     const produccion = await resProduccion.json();
-    document.getElementById('prod-total').textContent = produccion.total;
     document.getElementById('prod-alertas').textContent = produccion.alertas;
     const contenedor = document.getElementById('lista-bloqueadas');
     const ips = Object.keys(bloqueadas);
-    if(ips.length === 0){ contenedor.textContent = 'Ninguna por ahora.'; }
-    else {
+    if(ips.length === 0){
+      contenedor.innerHTML = '<div style="color:var(--text-muted); font-size:11.5px; padding:8px 0;">Ninguna IP bloqueada en este momento.</div>';
+    } else {
       contenedor.innerHTML = ips.map(ip =>
-        `<div class="ip-bloqueada">
-           <span class="ip">${ip}</span>
-           <span class="seg">${bloqueadas[ip]}s restantes</span>
+        `<div class="blocked-ip-item">
+           <span class="blocked-ip-badge">🚫 ${ip}</span>
+           <span class="blocked-ip-time">${bloqueadas[ip]}s restantes</span>
          </div>`
       ).join('');
     }
@@ -950,7 +1531,7 @@ async function actualizarProteccionEnVivo(){
 setInterval(actualizarProteccionEnVivo, 3000);
 actualizarProteccionEnVivo();
 
-// ================== PANEL BOT ==================
+// ================== CONTROL DEL BOT ==================
 const botTipoEl = document.getElementById('bot-tipo');
 const botUrlEl = document.getElementById('bot-url');
 const linkAbrirLoginEl = document.getElementById('link-abrir-login');
@@ -959,19 +1540,19 @@ const descLoginEl = document.getElementById('desc-login-seleccionado');
 const INFO_LOGINS = {
   '/demo/login': {
     link: '/demo',
-    desc: '🛡️ <b>Centinela WAF/ML:</b> Inspección activa con Isolation Forest, OC-SVM, LOF y corte perimetral de IP en HTTP 403.'
+    desc: '🛡️ <b>4. Centinela WAF/ML:</b> Inspección activa en tiempo real. Bloqueo perimetral HTTP 403 mediante consenso de Isolation Forest, OC-SVM y LOF.'
   },
   '/demo/vulnerable/login': {
     link: '/demo/vulnerable',
-    desc: '⚠️ <b>Sin Protección:</b> Todas las peticiones van a la DB sin límite ni firewall. El atacante nunca es detenido.'
+    desc: '⚠️ <b>1. Sin Protección:</b> Endpoint desprotegido. Admite intentos infinitos y permite al atacante adivinar contraseñas sin resistencia.'
   },
   '/demo/captcha/login': {
     link: '/demo/captcha',
-    desc: '🧩 <b>Con CAPTCHA:</b> Desafío visual anti-bot. Las peticiones automáticas del bot son rechazadas con HTTP 400.'
+    desc: '🧩 <b>2. Con CAPTCHA:</b> Exige verificación humana interactiva. Las llamadas automatizadas sin resolver el token devuelven HTTP 400.'
   },
   '/demo/2fa/login-paso1': {
     link: '/demo/2fa',
-    desc: '📱 <b>Con 2FA / TOTP:</b> Aunque la contraseña sea correcta, no entrega acceso sin el código temporal del móvil.'
+    desc: '📱 <b>3. Con 2FA / TOTP:</b> Autenticación de doble factor. Aunque se adivine la contraseña, el acceso no se otorga sin el token temporal de 6 dígitos.'
   }
 };
 
@@ -982,6 +1563,7 @@ function syncBotUrlInfo(){
 }
 botUrlEl.addEventListener('change', syncBotUrlInfo);
 syncBotUrlInfo();
+
 const fieldIntentosEl = document.getElementById('field-intentos');
 const fieldIpsEl = document.getElementById('field-ips');
 const botIntervaloEl = document.getElementById('bot-intervalo');
@@ -1016,16 +1598,16 @@ function agregarBotLog(mensaje){
   const linea = document.createElement('div');
   linea.className = 'line';
   const t = mensaje || '';
-  if(t.includes('>>> BLOQUEADO') || t.includes('BLOQUEADO en')) linea.classList.add('bloqueado');
+  if(t.includes('>>> BLOQUEADO') || t.includes('BLOQUEADO en') || t.includes('CORTE PERIMETRAL')) linea.classList.add('bloqueado');
   else if(/HTTP\s+403/.test(t)) linea.classList.add('http403');
   else if(/HTTP\s+401/.test(t)) linea.classList.add('http401');
-  else if(/HTTP\s+200/.test(t)) linea.classList.add('http200');
+  else if(/HTTP\s+200/.test(t) || t.includes('ACCESO CONSEGUIDO')) linea.classList.add('http200');
   else if(/HTTP\s+5\d\d/.test(t)) linea.classList.add('http5xx');
   else if(/^\[ATAQUE/.test(t)) linea.classList.add('head');
   linea.textContent = t;
   streamBotEl.appendChild(linea);
   streamBotEl.scrollTop = streamBotEl.scrollHeight;
-  while(streamBotEl.children.length > 600){ streamBotEl.removeChild(streamBotEl.firstChild); }
+  while(streamBotEl.children.length > 500){ streamBotEl.removeChild(streamBotEl.firstChild); }
 }
 
 socket.on('bot_log', (ev) => agregarBotLog(ev.mensaje));
@@ -1052,8 +1634,8 @@ const botLanzarBtn = document.getElementById('bot-lanzar');
 botLanzarBtn.addEventListener('click', async () => {
   const tipo = botTipoEl.value;
   const usuario = document.getElementById('bot-usuario').value || undefined;
-  const intentos = parseInt(document.getElementById('bot-intentos').value,10) || 10;
-  const ips = parseInt(document.getElementById('bot-ips').value,10) || 6;
+  const intentos = parseInt(document.getElementById('bot-intentos').value, 10) || 10;
+  const ips = parseInt(document.getElementById('bot-ips').value, 10) || 6;
   const intervalo = parseFloat(botIntervaloEl.value);
   const url = document.getElementById('bot-url').value.trim() || '/demo/login';
   const pwdRaw = document.getElementById('bot-passwords') ? document.getElementById('bot-passwords').value.trim() : '';
@@ -1063,7 +1645,10 @@ botLanzarBtn.addEventListener('click', async () => {
   const incluirReal = !modoInteligente;
 
   botLanzarBtn.disabled = true;
-  botLanzarBtn.textContent = 'Lanzando...';
+  botLanzarBtn.innerHTML = `
+    <svg class="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-opacity="0.3"></circle><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"></path></svg>
+    <span>Ejecutando Ataque...</span>
+  `;
 
   try{
     const res = await fetch('/lanzar_bot', {
@@ -1082,7 +1667,10 @@ botLanzarBtn.addEventListener('click', async () => {
   } finally {
     setTimeout(() => {
       botLanzarBtn.disabled = false;
-      botLanzarBtn.textContent = '▶ Lanzar ataque';
+      botLanzarBtn.innerHTML = `
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <span>Ejecutar Ataque Sintético</span>
+      `;
     }, 600);
   }
 });
