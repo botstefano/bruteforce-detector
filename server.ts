@@ -76,7 +76,6 @@ app.use(cookieParser());
 // Security headers
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   next();
 });
@@ -574,6 +573,73 @@ app.get('/api/exportar_dataset', requiereAdmin, (req: Request, res: Response) =>
   return res.send(csvContent);
 });
 
+app.get('/api/exportar_metricas', (req: Request, res: Response) => {
+  const formato = (req.query.formato as string) || 'csv';
+  const m = db.metricasResumen();
+
+  if (!m) {
+    return res.status(400).send('No hay eventos de prueba registrados aún. Ejecuta tráfico de prueba antes de exportar.');
+  }
+
+  const filasMetricas = [
+    { nombre: 'Reglas Heurísticas WAF', data: m.alerta_reglas },
+    { nombre: 'Isolation Forest', data: m.alerta_iforest },
+    { nombre: 'One-Class SVM', data: m.alerta_ocsvm },
+    { nombre: 'Local Outlier Factor', data: m.alerta_lof },
+    { nombre: 'Ensamble ML Completo', data: m.alerta_ml },
+  ];
+
+  if (formato === 'md') {
+    let md = `# Resultados Experimentales — Centinela\n\n`;
+    md += `- **Entrenamiento**: ${estadoModelo.fuente} (${estadoModelo.detalle})\n`;
+    md += `- **Total de Eventos Evaluados**: ${m.total_intentos}\n`;
+    md += `- **Fecha de Exportación**: ${new Date().toISOString()}\n\n`;
+    md += `| Método Evaluado | Precisión | Recall | F1-Score | FP | FN | VP | VN |\n`;
+    md += `| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n`;
+    for (const f of filasMetricas) {
+      md += `| ${f.nombre} | ${f.data.precision.toFixed(3)} | ${f.data.recall.toFixed(3)} | ${f.data.f1.toFixed(3)} | ${f.data.falsos_positivos} | ${f.data.falsos_negativos} | ${f.data.verdaderos_positivos} | ${f.data.verdaderos_negativos} |\n`;
+    }
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="metricas_centinela.md"');
+    return res.send(md);
+  }
+
+  if (formato === 'latex') {
+    let ltx = `% Tabla comparativa generada por Centinela para artículo científico\n`;
+    ltx += `\\begin{table}[htbp]\n\\centering\n\\begin{tabular}{|l|c|c|c|c|c|}\n\\hline\n`;
+    ltx += `\\textbf{Método} & \\textbf{Precisión} & \\textbf{Recall} & \\textbf{F1-Score} & \\textbf{FP} & \\textbf{FN} \\\\\n\\hline\n`;
+    for (const f of filasMetricas) {
+      ltx += `${f.nombre} & ${f.data.precision.toFixed(3)} & ${f.data.recall.toFixed(3)} & ${f.data.f1.toFixed(3)} & ${f.data.falsos_positivos} & ${f.data.falsos_negativos} \\\\\n`;
+    }
+    ltx += `\\hline\n\\end{tabular}\n`;
+    ltx += `\\caption{Comparativa de Rendimiento con modelo ${estadoModelo.fuente} (${m.total_intentos} eventos)}\n`;
+    ltx += `\\label{tab:resultados_centinela}\n\\end{table}\n`;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="tabla_metricas_centinela.tex"');
+    return res.send(ltx);
+  }
+
+  // Por defecto: CSV
+  const headers = ['algoritmo', 'precision', 'recall', 'f1_score', 'verdaderos_positivos', 'falsos_positivos', 'falsos_negativos', 'verdaderos_negativos', 'total_eventos', 'modelo_fuente'];
+  const csvRows = filasMetricas.map((f) => [
+    `"${f.nombre}"`,
+    f.data.precision,
+    f.data.recall,
+    f.data.f1,
+    f.data.verdaderos_positivos,
+    f.data.falsos_positivos,
+    f.data.falsos_negativos,
+    f.data.verdaderos_negativos,
+    m.total_intentos,
+    `"${estadoModelo.fuente}"`
+  ].join(','));
+
+  const csv = [headers.join(','), ...csvRows].join('\n');
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="metricas_resumen_centinela.csv"');
+  return res.send(csv);
+});
+
 app.post('/entrenar/reentrenar_con_trafico', requiereAdmin, (req: Request, res: Response) => {
   const intentos = db.obtenerTodosIntentos();
   const intentosBenignos = intentos.filter((i) => i.es_ataque_real === 0);
@@ -701,6 +767,73 @@ app.post('/simular/legitimo', requiereAdmin, (req: Request, res: Response) => {
   }, 50);
 
   res.json({ status: 'lanzado', cantidad });
+});
+
+app.post('/simular/benchmark_masivo', requiereAdmin, (req: Request, res: Response) => {
+  const data = req.body || {};
+  const total = Math.min(4500, Math.max(50, parseInt(data.cantidad || '1000', 10)));
+  const usuariosValidos = Object.keys(CREDENCIALES_VALIDAS);
+
+  // Proporciones científicas equilibradas:
+  // 50% Benigno / Legítimo (Grupo de Control)
+  // 20% Ataque Ráfaga Rápido (Brute Force clásico)
+  // 15% Ataque Low-and-Slow (Sigiloso)
+  // 15% Ataque Distribuido (Botnet rotativa)
+  const nLegitimo = Math.floor(total * 0.50);
+  const nRapido = Math.floor(total * 0.20);
+  const nLento = Math.floor(total * 0.15);
+  const nDistribuido = total - (nLegitimo + nRapido + nLento);
+
+  // 1. Tráfico legítimo de control
+  for (let i = 0; i < nLegitimo; i++) {
+    const ip = ipAleatoria();
+    const u = usuariosValidos[i % usuariosValidos.length];
+    const exitoso = Math.random() < 0.88;
+    const pwd = exitoso ? CREDENCIALES_VALIDAS[u] : 'clave_erronea_humana';
+    procesarIntento(ip, u, pwd, 0, 'trafico_legitimo', 1);
+  }
+
+  // 2. Ataques Rápidos (Ráfagas desde IPs fijas)
+  const ipsRapidas = [ipAleatoria(), ipAleatoria(), ipAleatoria(), ipAleatoria()];
+  for (let i = 0; i < nRapido; i++) {
+    const ip = ipsRapidas[i % ipsRapidas.length];
+    const u = USUARIOS_COMUNES[i % USUARIOS_COMUNES.length];
+    const pwd = PASSWORDS_COMUNES[Math.floor(Math.random() * PASSWORDS_COMUNES.length)];
+    procesarIntento(ip, u, pwd, 1, 'ataque_rapido', 1);
+  }
+
+  // 3. Ataques Low-and-Slow (Espaciados)
+  const ipsLentas = [ipAleatoria(), ipAleatoria(), ipAleatoria(), ipAleatoria(), ipAleatoria()];
+  for (let i = 0; i < nLento; i++) {
+    const ip = ipsLentas[i % ipsLentas.length];
+    const u = USUARIOS_COMUNES[i % USUARIOS_COMUNES.length];
+    const pwd = PASSWORDS_COMUNES[Math.floor(Math.random() * PASSWORDS_COMUNES.length)];
+    procesarIntento(ip, u, pwd, 1, 'ataque_lento', 1);
+  }
+
+  // 4. Ataques Distribuidos (Muchas IPs contra pocos objetivos)
+  const victimas = ['admin', 'roberto', 'carla'];
+  for (let i = 0; i < nDistribuido; i++) {
+    const ip = ipAleatoria();
+    const u = victimas[i % victimas.length];
+    const pwd = PASSWORDS_COMUNES[Math.floor(Math.random() * PASSWORDS_COMUNES.length)];
+    procesarIntento(ip, u, pwd, 1, 'ataque_distribuido', 1);
+  }
+
+  const metricas = db.metricasResumen();
+  io.emit('benchmark_completo', { total, metricas });
+
+  return res.json({
+    status: 'ok',
+    total_generados: total,
+    desglose: {
+      legitimo: nLegitimo,
+      ataque_rapido: nRapido,
+      ataque_lento: nLento,
+      ataque_distribuido: nDistribuido,
+    },
+    metricas
+  });
 });
 
 app.post('/reset', requiereAdmin, (req: Request, res: Response) => {

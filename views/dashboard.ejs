@@ -3,7 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Centinela · Centro de Operaciones de Ciberseguridad & Anti-Bruteforce</title>
+<title>Centinela — Brute Force Detector</title>
+<meta name="description" content="Adaptive rule-based and machine-learning brute force attack detector and mitigation microservice with real-time dashboard and live attack simulator.">
+<meta property="og:title" content="Centinela — Brute Force Detector">
+<meta property="og:description" content="Adaptive rule-based and machine-learning brute force attack detector and mitigation microservice with real-time dashboard and live attack simulator.">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -1062,6 +1065,25 @@
             </button>
           </div>
 
+          <!-- Generador de Gran Escala para Paper / Artículo Científico -->
+          <div style="margin-top: 10px; margin-bottom: 12px; padding: 10px 12px; background: rgba(16, 185, 129, 0.08); border: 1px dashed rgba(16, 185, 129, 0.35); border-radius: 8px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+            <div>
+              <div style="font-size: 11.5px; font-weight: 700; color: #34D399;">🎓 Benchmark Masivo para tu Artículo (Alta Potencia Estadística):</div>
+              <div style="font-size: 10.5px; color: var(--text-muted);">Genera lotes estadísticamente representativos (50% control benigno + 50% ataques multivector).</div>
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button onclick="lanzarBenchmarkMasivo(500)" class="btn-action-outline" style="font-size: 11px; padding: 5px 10px; border-color: rgba(16, 185, 129, 0.5); color: #34D399; cursor: pointer;">
+                🚀 N = 500
+              </button>
+              <button onclick="lanzarBenchmarkMasivo(1000)" class="btn-action-outline primary" style="font-size: 11px; padding: 5px 10px; font-weight: 700; cursor: pointer;">
+                ⚡ N = 1,000 (Paper)
+              </button>
+              <button onclick="lanzarBenchmarkMasivo(2000)" class="btn-action-outline" style="font-size: 11px; padding: 5px 10px; border-color: rgba(139, 92, 246, 0.5); color: #A78BFA; cursor: pointer;">
+                🔥 N = 2,000
+              </button>
+            </div>
+          </div>
+
           <!-- Contenedor del stream de eventos -->
           <div class="event-stream-container">
             <div class="stream-header-row">
@@ -1099,6 +1121,28 @@
           <div class="metrics-summary-bar">
             <span class="metrics-summary-text">Total de Eventos Evaluados:</span>
             <span class="metrics-summary-val" id="contador-total">0 intentos</span>
+          </div>
+
+          <!-- Barra de Exportación Directa para Artículos / Tesis -->
+          <div style="background: rgba(6, 182, 212, 0.08); border: 1px solid rgba(6, 182, 212, 0.25); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px;">
+            <div style="font-size: 11.5px; font-weight: 700; color: #06B6D4; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+              <span>📥 Exportar Resultados para tu Artículo / Paper:</span>
+              <span style="font-size: 10.5px; color: var(--text-muted); font-weight: 500;">Formatos listos</span>
+            </div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <a href="/api/exportar_dataset?formato=csv" download="dataset_ataques_centinela.csv" class="btn-action-outline" style="font-size: 11px; padding: 4px 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.25);">
+                📊 Dataset Completo (CSV)
+              </a>
+              <a href="/api/exportar_metricas?formato=csv" download="metricas_resumen_centinela.csv" class="btn-action-outline" style="font-size: 11px; padding: 4px 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.25);">
+                📈 Tabla Métricas (CSV)
+              </a>
+              <a href="/api/exportar_metricas?formato=md" download="metricas_centinela.md" class="btn-action-outline" style="font-size: 11px; padding: 4px 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.25);">
+                📝 Reporte (Markdown)
+              </a>
+              <a href="/api/exportar_metricas?formato=latex" download="tabla_metricas_centinela.tex" class="btn-action-outline" style="font-size: 11px; padding: 4px 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.25);">
+                📑 Tabla (LaTeX)
+              </a>
+            </div>
           </div>
 
           <!-- Cuadrícula de modelos de Machine Learning -->
@@ -1391,6 +1435,24 @@ async function resetear(){
   try{
     await fetch('/reset', {method: 'POST'});
   } catch(e){ showToast('Error al resetear.'); }
+}
+
+async function lanzarBenchmarkMasivo(n){
+  try{
+    showToast(`Generando benchmark masivo de ${n} eventos para tu artículo...`);
+    const res = await fetch('/simular/benchmark_masivo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cantidad: n })
+    });
+    const d = await res.json();
+    if(d.status === 'ok'){
+      showToast(`✅ ¡Listo! ${d.total_generados} eventos evaluados con éxito.`);
+      await actualizarMetricas();
+    }
+  } catch(e){
+    showToast('Error al ejecutar benchmark masivo.');
+  }
 }
 
 // ================== MÉTRICAS DE MACHINE LEARNING ==================
