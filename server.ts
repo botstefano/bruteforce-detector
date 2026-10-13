@@ -524,6 +524,26 @@ app.get('/api/bloqueadas', (req: Request, res: Response) => {
   res.json(db.listarIpsBloqueadas());
 });
 
+app.get('/reporte', (req: Request, res: Response) => {
+  const m = db.metricasResumen();
+  const intentos = db.obtenerTodosIntentos();
+  const simulados = intentos.filter((i) => i.es_simulado === 1);
+  
+  const desglose = {
+    legitimo: simulados.filter((i) => i.origen === 'trafico_legitimo').length,
+    rapido: simulados.filter((i) => i.origen === 'ataque_rapido').length,
+    lento: simulados.filter((i) => i.origen === 'ataque_lento').length,
+    distribuido: simulados.filter((i) => i.origen === 'ataque_distribuido').length,
+  };
+
+  res.render('reporte', {
+    metricas: m,
+    estadoModelo,
+    totalIntentos: simulados.length,
+    desglose,
+  });
+});
+
 app.get('/api/exportar_dataset', requiereAdmin, (req: Request, res: Response) => {
   const formato = (req.query.formato as string) || 'csv';
   const intentos = db.obtenerTodosIntentos();

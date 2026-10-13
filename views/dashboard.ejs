@@ -848,8 +848,9 @@
     <!-- Navegación de secciones rápidas -->
     <nav class="nav-center">
       <a href="/dashboard" class="nav-btn active">📊 Dashboard & Bot</a>
+      <a href="/reporte" target="_blank" class="nav-btn" style="border-color: rgba(6, 182, 212, 0.4); color: #06B6D4;">📑 Reporte & Gráficas ↗</a>
       <a href="/demo" target="_blank" class="nav-btn">🛡️ Portal Login Demo</a>
-      <a href="/api/exportar_dataset?formato=csv" download class="nav-btn">📥 Descargar Dataset</a>
+      <a href="/api/exportar_dataset?formato=csv" download class="nav-btn">📥 Descargar Dataset (CSV)</a>
     </nav>
 
     <!-- Estado y usuario -->
@@ -1130,14 +1131,14 @@
               <span style="font-size: 10.5px; color: var(--text-muted); font-weight: 500;">Formatos listos</span>
             </div>
             <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <a href="/reporte" target="_blank" class="btn-action-outline primary" style="font-size: 11px; padding: 4px 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; font-weight: 700; background: var(--brand-primary); color: #0B0F19;">
+                📑 Ver Reporte Completo & Gráficas (PDF) ↗
+              </a>
               <a href="/api/exportar_dataset?formato=csv" download="dataset_ataques_centinela.csv" class="btn-action-outline" style="font-size: 11px; padding: 4px 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.25);">
                 📊 Dataset Completo (CSV)
               </a>
               <a href="/api/exportar_metricas?formato=csv" download="metricas_resumen_centinela.csv" class="btn-action-outline" style="font-size: 11px; padding: 4px 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.25);">
                 📈 Tabla Métricas (CSV)
-              </a>
-              <a href="/api/exportar_metricas?formato=md" download="metricas_centinela.md" class="btn-action-outline" style="font-size: 11px; padding: 4px 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.25);">
-                📝 Reporte (Markdown)
               </a>
               <a href="/api/exportar_metricas?formato=latex" download="tabla_metricas_centinela.tex" class="btn-action-outline" style="font-size: 11px; padding: 4px 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; background: rgba(0,0,0,0.25);">
                 📑 Tabla (LaTeX)
