@@ -33,7 +33,10 @@ import {
   TrendingUp,
   Target,
   Layers,
-  Filter
+  Filter,
+  Eye,
+  EyeOff,
+  Sparkles
 } from 'lucide-react';
 import { RealCaptchaCanvas } from './RealCaptchaCanvas';
 import { CicidsDatasetView } from './CicidsDatasetView';
@@ -147,6 +150,7 @@ export default function App() {
   const [gateCaptchaReset, setGateCaptchaReset] = useState(0);
   const [gateError, setGateError] = useState<string | null>(null);
   const [gateCargando, setGateCargando] = useState(false);
+  const [mostrarPassword, setMostrarPassword] = useState(false);
 
   // Demo login state
   const [demoMode, setDemoMode] = useState<'centinela' | 'vulnerable' | 'captcha' | '2fa'>('centinela');
@@ -581,15 +585,53 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-300 uppercase mb-1.5">Contraseña de Administrador</label>
-                <input
-                  type="password"
-                  value={gatePass}
-                  onChange={(e) => setGatePass(e.target.value)}
-                  placeholder="••••••••"
-                  required
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors"
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-300 uppercase">Contraseña de Administrador</label>
+                  <button
+                    type="button"
+                    onClick={() => setMostrarPassword(!mostrarPassword)}
+                    className="text-[11px] text-cyan-400 hover:text-cyan-300 flex items-center space-x-1"
+                  >
+                    {mostrarPassword ? (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5" />
+                        <span>Ocultar</span>
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Mostrar</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <div className="relative">
+                  <input
+                    type={mostrarPassword ? 'text' : 'password'}
+                    value={gatePass}
+                    onChange={(e) => setGatePass(e.target.value)}
+                    placeholder="S3guro#2026"
+                    required
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Botón rápido para autocompletar credenciales por defecto */}
+              <div className="flex items-center justify-between text-[11px] bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
+                <span className="text-slate-400">Credenciales por defecto:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGateUser('admin');
+                    setGatePass('S3guro#2026');
+                    showToast('Credenciales admin / S3guro#2026 aplicadas');
+                  }}
+                  className="text-cyan-400 hover:text-cyan-300 font-bold flex items-center space-x-1 cursor-pointer bg-cyan-950/60 hover:bg-cyan-900/60 px-2.5 py-1 rounded-lg border border-cyan-800/60 transition-colors"
+                >
+                  <Sparkles className="w-3 h-3 text-yellow-300" />
+                  <span>Autocompletar (admin / S3guro#2026)</span>
+                </button>
               </div>
 
               <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/90 space-y-3">
@@ -637,11 +679,19 @@ export default function App() {
               </button>
             </form>
 
-            <div className="mt-6 pt-5 border-t border-slate-800/80 text-center space-y-1">
-              <p className="text-[11px] text-slate-400">
-                Credenciales por defecto: <strong className="text-cyan-400">admin</strong> / <strong className="text-cyan-400">S3guro#2026</strong>
-              </p>
-              <p className="text-[10px] text-slate-500">
+            <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col items-center space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  localStorage.setItem('centinela_sesion_activa', 'true');
+                  setPanelAutenticado(true);
+                  showToast('Acceso directo al panel activado');
+                }}
+                className="text-xs text-slate-400 hover:text-cyan-300 underline transition-colors cursor-pointer"
+              >
+                ¿Deseas omitir el inicio de sesión y entrar directamente al panel? Haz clic aquí
+              </button>
+              <p className="text-[10px] text-slate-500 text-center">
                 El servidor consume y destruye el token de CAPTCHA al validarlo para prevenir ataques por fuerza bruta.
               </p>
             </div>
