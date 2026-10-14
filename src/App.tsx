@@ -27,9 +27,18 @@ import {
   Copy,
   Printer,
   LogOut,
-  Key
+  Key,
+  UploadCloud,
+  FileSpreadsheet,
+  TrendingUp,
+  Target,
+  Layers,
+  Filter
 } from 'lucide-react';
 import { RealCaptchaCanvas } from './RealCaptchaCanvas';
+import { CicidsDatasetView } from './CicidsDatasetView';
+import { ReporteAcademicoView } from './ReporteAcademicoView';
+import { CicidsEvaluationSummary } from './cicids_parser';
 
 interface Intento {
   id: number;
@@ -102,7 +111,7 @@ interface EstadoModelo {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'report' | 'demos' | 'training'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'dataset_cicids' | 'report' | 'demos' | 'training'>('dashboard');
   const [eventos, setEventos] = useState<Intento[]>([]);
   const [metricas, setMetricas] = useState<MetricasResumen | null>(null);
   const [ipsBloqueadas, setIpsBloqueadas] = useState<Record<string, number>>({});
@@ -111,6 +120,14 @@ export default function App() {
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [matrizAlgoritmo, setMatrizAlgoritmo] = useState<'alerta_ml' | 'alerta_reglas' | 'alerta_iforest' | 'alerta_ocsvm' | 'alerta_lof'>('alerta_ml');
+
+  // Estados del dataset CICIDS-2017 & Experimentos
+  const [cicidsData, setCicidsData] = useState<CicidsEvaluationSummary | null>(null);
+  const [cicidsCargando, setCicidsCargando] = useState(false);
+  const [cicidsUmbral, setCicidsUmbral] = useState(0.55);
+  const [expBotnet, setExpBotnet] = useState<any>(null);
+  const [expAblacion, setExpAblacion] = useState<any>(null);
+  const [expTraficoReal, setExpTraficoReal] = useState<any>(null);
 
   // Bot simulator form state
   const [botTipo, setBotTipo] = useState<'rapido' | 'lento' | 'distribuido'>('rapido');
@@ -202,6 +219,117 @@ export default function App() {
       if (resMod.ok) setEstadoModelo(await resMod.json());
     } catch (err) {
       console.error('Error fetching data:', err);
+    }
+
+    // Cargar datos de CICIDS y experimentos
+    try {
+      const [resCic, resExpBot, resExpAbl, resExpTraf] = await Promise.all([
+        fetch('/api/cicids/evaluacion'),
+        fetch('/api/experimentos/botnet_distribuido'),
+        fetch('/api/experimentos/ablacion'),
+        fetch('/api/experimentos/trafico_real'),
+      ]);
+      if (resCic.ok) {
+        const cicJson = await resCic.json();
+        setCicidsData(cicJson.evaluacion);
+        if (cicJson.umbral) setCicidsUmbral(cicJson.umbral);
+      }
+      if (resExpBot.ok) setExpBotnet(await resExpBot.json());
+      if (resExpAbl.ok) setExpAblacion(await resExpAbl.json());
+      if (resExpTraf.ok) setExpTraficoReal(await resExpTraf.json());
+    } catch (err) {
+      console.error('Error fetching experiments:', err);
+    }
+  };
+
+  const handleSubirArchivoCsv = async (file: File) => {
+    setCicidsCargando(true);
+    try {
+      const formData = new FormData();
+      formData.append('archivo', file);
+      const res = await fetch('/api/cicids/cargar_csv', { method: 'POST', body: formData });
+      const json = await res.json();
+      if (res.ok) {
+        setCicidsData(json.evaluacion);
+        if (json.umbral) setCicidsUmbral(json.umbral);
+        showToast(`Dataset cargado: ${json.totalRegistros} flujos evaluados exitosamente`);
+      } else {
+        showToast(`Error: ${json.error}`);
+      }
+    } catch {
+      showToast('Error al subir archivo CSV');
+    } finally {
+      setCicidsCargando(false);
+    }
+  };
+
+  const handleCargarCsvTexto = async (texto: string) => {
+    setCicidsCargando(true);
+    try {
+      const res = await fetch('/api/cicids/cargar_csv', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csvText: texto }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setCicidsData(json.evaluacion);
+        if (json.umbral) setCicidsUmbral(json.umbral);
+        showToast(`Dataset procesado: ${json.totalRegistros} flujos evaluados`);
+      } else {
+        showToast(`Error: ${json.error}`);
+      }
+    } catch {
+      showToast('Error procesando CSV');
+    } finally {
+      setCicidsCargando(false);
+    }
+  };
+
+  const handleCambiarUmbral = async (u: number) => {
+    setCicidsUmbral(u);
+    try {
+      const res = await fetch('/api/cicids/evaluar_umbral', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ umbral: u }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setCicidsData(json.evaluacion);
+      }
+    } catch {}
+  };
+
+  const handleRestaurarCicids2500 = async () => {
+    setCicidsCargando(true);
+    try {
+      const res = await fetch('/api/cicids/restaurar_muestra_2500', { method: 'POST' });
+      const json = await res.json();
+      if (res.ok) {
+        setCicidsData(json.evaluacion);
+        if (json.umbral) setCicidsUmbral(json.umbral);
+        showToast('Muestra de 2,500 registros CICIDS-2017 restaurada');
+      }
+    } catch {
+      showToast('Error restaurando muestra');
+    } finally {
+      setCicidsCargando(false);
+    }
+  };
+
+  const handleEntrenarConDataset = async () => {
+    try {
+      const res = await fetch('/api/cicids/entrenar_con_dataset', { method: 'POST' });
+      const json = await res.json();
+      if (res.ok) {
+        showToast(`Centinela re-calibrado con flujos benignos de CICIDS2017`);
+        fetchData();
+      } else {
+        showToast(`Error: ${json.error}`);
+      }
+    } catch {
+      showToast('Error entrenando con dataset');
     }
   };
 
@@ -550,7 +678,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => setActiveTab('simulator')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
                   activeTab === 'simulator'
                     ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
                     : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
@@ -560,8 +688,24 @@ export default function App() {
                 <span>Simulador & Bot</span>
               </button>
               <button
+                onClick={() => setActiveTab('dataset_cicids')}
+                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                  activeTab === 'dataset_cicids'
+                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Database className="w-4 h-4 text-emerald-400" />
+                <span>Dataset CICIDS-2017</span>
+                {cicidsData && (
+                  <span className="bg-emerald-500/20 text-emerald-300 text-[10px] px-1.5 py-0.5 rounded-full font-bold">
+                    {cicidsData.totalRegistros}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => setActiveTab('report')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
                   activeTab === 'report'
                     ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
                     : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
@@ -964,517 +1108,32 @@ export default function App() {
           </div>
         )}
 
+        {activeTab === 'dataset_cicids' && (
+          <CicidsDatasetView
+            data={cicidsData}
+            cargando={cicidsCargando}
+            umbral={cicidsUmbral}
+            onCambiarUmbral={handleCambiarUmbral}
+            onCargarArchivo={handleSubirArchivoCsv}
+            onCargarCsvTexto={handleCargarCsvTexto}
+            onRestaurarMuestra2500={handleRestaurarCicids2500}
+            onEntrenarConDataset={handleEntrenarConDataset}
+            showToast={showToast}
+          />
+        )}
+
         {activeTab === 'report' && (
-          <div className="space-y-6 animate-fadeIn">
-            {/* Header & Export Actions */}
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <BarChart2 className="w-5 h-5 text-cyan-400" />
-                  <h2 className="text-lg font-bold text-white">Reporte Científico y Métricas Experimentales (IEEE / Scopus)</h2>
-                </div>
-                <p className="text-xs text-slate-400 mt-1">
-                  Evaluación multidimensional: precisión, recall, F1, tasa de falsos positivos (FPR), especificidad, latencia en milisegundos y desglose por vector de ataque.
-                </p>
-              </div>
-
-              {/* Download Buttons Bar */}
-              <div className="flex flex-wrap items-center gap-2">
-                <a
-                  href="/api/exportar_metricas?formato=md"
-                  download="reporte_completo_centinela.md"
-                  className="px-4 py-2.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-cyan-600/30 transition-all flex items-center space-x-2"
-                  title="Descargar el reporte único completo con todos los resultados, tablas y conclusiones"
-                >
-                  <Download className="w-4 h-4 text-yellow-300" />
-                  <span>Descargar Reporte Único (.md)</span>
-                </a>
-                <button
-                  onClick={() => window.print()}
-                  className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5"
-                  title="Imprimir o guardar como PDF directamente desde el navegador"
-                >
-                  <Printer className="w-3.5 h-3.5 text-purple-400" />
-                  <span>Imprimir / Guardar en PDF</span>
-                </button>
-                <a
-                  href="/api/exportar_metricas?formato=csv"
-                  download="metricas_resumen_centinela.csv"
-                  className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5"
-                  title="Descargar hoja de cálculo con todas las métricas experimentales"
-                >
-                  <FileText className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Métricas (CSV)</span>
-                </a>
-                <a
-                  href="/api/exportar_dataset?formato=csv"
-                  download="dataset_ataques_centinela.csv"
-                  className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl text-xs font-bold transition-all flex items-center space-x-1.5"
-                  title="Descargar el dataset crudo de eventos evaluados"
-                >
-                  <Database className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Dataset (CSV)</span>
-                </a>
-              </div>
-            </div>
-
-            {/* Computational Overhead & Performance Highlights */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Latencia de Inferencia</span>
-                <p className="text-2xl font-black text-cyan-400 mt-1">
-                  {metricas?.rendimiento_computacional?.latencia_promedio_total_ms || 1.25} ms
-                </p>
-                <p className="text-[11px] text-slate-500 mt-0.5">Tiempo promedio por evaluación</p>
-              </div>
-
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Throughput Estimado</span>
-                <p className="text-2xl font-black text-emerald-400 mt-1">
-                  ~{(metricas?.rendimiento_computacional?.throughput_rps_estimado || 2450).toLocaleString()} req/s
-                </p>
-                <p className="text-[11px] text-slate-500 mt-0.5">Capacidad sostenida del microservicio</p>
-              </div>
-
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Tasa Falsos Positivos (FPR)</span>
-                <p className="text-2xl font-black text-amber-400 mt-1">
-                  {metricas ? `${((metricas.alerta_ml.tasa_falsos_positivos || 0.116) * 100).toFixed(1)}%` : '—'}
-                </p>
-                <p className="text-[11px] text-slate-500 mt-0.5">FPR en tráfico legítimo benigno</p>
-              </div>
-
-              <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Muestras Evaluadas</span>
-                <p className="text-2xl font-black text-white mt-1">
-                  {(metricas?.total_intentos || 0).toLocaleString()}
-                </p>
-                <p className="text-[11px] text-slate-500 mt-0.5">Dataset balanceado (50% ataques / 50% benigno)</p>
-              </div>
-            </div>
-
-            {/* TABLA 1: Rendimiento Global Comparativo */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
-              <div className="p-5 border-b border-slate-800 bg-slate-950/40 flex justify-between items-center">
-                <div>
-                  <h3 className="font-bold text-white text-base">Tabla I: Rendimiento Global por Algoritmo de Detección</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Comparativa directa de precisión, sensibilidad, especificidad y latencia de procesamiento.</p>
-                </div>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead className="bg-slate-950 text-xs text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                    <tr>
-                      <th className="p-4">Método / Algoritmo</th>
-                      <th className="p-4">Precisión</th>
-                      <th className="p-4">Recall (Sensibilidad)</th>
-                      <th className="p-4">F1-Score</th>
-                      <th className="p-4">FPR (Falsos Positivos)</th>
-                      <th className="p-4">Especificidad</th>
-                      <th className="p-4">Accuracy</th>
-                      <th className="p-4">Latencia</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800 text-sm">
-                    {metricas ? (
-                      [
-                        { name: 'Reglas Heurísticas WAF', data: metricas.alerta_reglas },
-                        { name: 'Isolation Forest', data: metricas.alerta_iforest },
-                        { name: 'One-Class SVM', data: metricas.alerta_ocsvm },
-                        { name: 'Local Outlier Factor (LOF)', data: metricas.alerta_lof },
-                        { name: 'Ensamble ML Completo', data: metricas.alerta_ml },
-                      ].map((item, idx) => (
-                        <tr key={idx} className="hover:bg-slate-800/40 transition-colors">
-                          <td className="p-4 font-bold text-white flex items-center space-x-2">
-                            <span className={`w-2 h-2 rounded-full ${idx === 4 ? 'bg-cyan-400 ring-2 ring-cyan-400/30' : 'bg-slate-500'}`}></span>
-                            <span>{item.name}</span>
-                          </td>
-                          <td className="p-4 font-mono text-cyan-400 font-bold">{(item.data.precision * 100).toFixed(1)}%</td>
-                          <td className="p-4 font-mono text-blue-400 font-bold">{(item.data.recall * 100).toFixed(1)}%</td>
-                          <td className="p-4 font-mono text-emerald-400 font-bold">{(item.data.f1 * 100).toFixed(1)}%</td>
-                          <td className="p-4 font-mono text-amber-400 font-semibold">
-                            {item.data.tasa_falsos_positivos !== undefined ? `${(item.data.tasa_falsos_positivos * 100).toFixed(1)}%` : '—'}
-                          </td>
-                          <td className="p-4 font-mono text-slate-300">
-                            {item.data.especificidad !== undefined ? `${(item.data.especificidad * 100).toFixed(1)}%` : '—'}
-                          </td>
-                          <td className="p-4 font-mono text-slate-300">
-                            {item.data.accuracy !== undefined ? `${(item.data.accuracy * 100).toFixed(1)}%` : '—'}
-                          </td>
-                          <td className="p-4 font-mono text-slate-400 text-xs">
-                            {item.data.latencia_ms_promedio !== undefined ? `${item.data.latencia_ms_promedio} ms` : '—'}
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={8} className="p-8 text-center text-slate-500">
-                          Ejecuta el Benchmark Masivo (en el Dashboard) para generar las métricas experimentales.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* GRÁFICAS VISUALES: Desglose por Vector de Ataque */}
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-5">
-              <div>
-                <h3 className="font-bold text-white text-base">Gráfica Comparativa: Eficacia de Detección por Vector Específico de Tráfico</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Demuestra cuantitativamente la superioridad del Machine Learning en ataques lentos y distribuidos.</p>
-              </div>
-
-              {metricas?.desglose_vectores ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Ataque Rápido */}
-                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center space-x-1.5">
-                        <Zap className="w-3.5 h-3.5 text-yellow-400" />
-                        <span>Ataque Rápido (Burst Clásico)</span>
-                      </span>
-                      <span className="text-xs font-mono text-slate-400">Total: {metricas.desglose_vectores.rapido.total.toLocaleString()}</span>
-                    </div>
-                    <div className="space-y-2 text-xs">
-                      <div>
-                        <div className="flex justify-between text-[11px] mb-1">
-                          <span className="text-slate-400">Reglas Heurísticas WAF</span>
-                          <span className="font-bold text-cyan-400">{metricas.desglose_vectores.rapido.pct_reglas}%</span>
-                        </div>
-                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                          <div className="bg-cyan-500 h-full rounded-full" style={{ width: `${metricas.desglose_vectores.rapido.pct_reglas}%` }}></div>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex justify-between text-[11px] mb-1">
-                          <span className="text-slate-400">Ensamble ML (Isolation Forest)</span>
-                          <span className="font-bold text-emerald-400">{metricas.desglose_vectores.rapido.pct_ml}%</span>
-                        </div>
-                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                          <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${metricas.desglose_vectores.rapido.pct_ml}%` }}></div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Ataque Lento */}
-                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center space-x-1.5">
-                        <Sliders className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Ataque Sigiloso (Low-and-Slow)</span>
-                      </span>
-                      <span className="text-xs font-mono text-slate-400">Total: {metricas.desglose_vectores.lento.total.toLocaleString()}</span>
-                    </div>
-                    <div className="space-y-2 text-xs">
-                      <div>
-                        <div className="flex justify-between text-[11px] mb-1">
-                          <span className="text-slate-400">Reglas Heurísticas WAF</span>
-                          <span className="font-bold text-amber-400">{metricas.desglose_vectores.lento.pct_reglas}%</span>
-                        </div>
-                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                          <div className="bg-amber-500 h-full rounded-full" style={{ width: `${metricas.desglose_vectores.lento.pct_reglas}%` }}></div>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex justify-between text-[11px] mb-1">
-                          <span className="text-slate-400">Ensamble ML (Isolation Forest)</span>
-                          <span className="font-bold text-emerald-400">{metricas.desglose_vectores.lento.pct_ml}%</span>
-                        </div>
-                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                          <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${metricas.desglose_vectores.lento.pct_ml}%` }}></div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Ataque Distribuido */}
-                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center space-x-1.5">
-                        <Globe className="w-3.5 h-3.5 text-purple-400" />
-                        <span>Ataque Distribuido (Botnet multi-IP)</span>
-                      </span>
-                      <span className="text-xs font-mono text-slate-400">Total: {metricas.desglose_vectores.distribuido.total.toLocaleString()}</span>
-                    </div>
-                    <div className="space-y-2 text-xs">
-                      <div>
-                        <div className="flex justify-between text-[11px] mb-1">
-                          <span className="text-slate-400">Reglas Heurísticas WAF</span>
-                          <span className="font-bold text-amber-400">{metricas.desglose_vectores.distribuido.pct_reglas}%</span>
-                        </div>
-                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                          <div className="bg-amber-500 h-full rounded-full" style={{ width: `${metricas.desglose_vectores.distribuido.pct_reglas}%` }}></div>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex justify-between text-[11px] mb-1">
-                          <span className="text-slate-400">Ensamble ML (Detección por anomalía de flujo)</span>
-                          <span className="font-bold text-emerald-400">{metricas.desglose_vectores.distribuido.pct_ml}%</span>
-                        </div>
-                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                          <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${metricas.desglose_vectores.distribuido.pct_ml}%` }}></div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Tráfico Legítimo */}
-                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center space-x-1.5">
-                        <UserCheck className="w-3.5 h-3.5 text-cyan-400" />
-                        <span>Tráfico Legítimo Benigno (Grupo Control)</span>
-                      </span>
-                      <span className="text-xs font-mono text-slate-400">Total: {metricas.desglose_vectores.legitimo.total.toLocaleString()}</span>
-                    </div>
-                    <div className="space-y-2 text-xs">
-                      <div>
-                        <div className="flex justify-between text-[11px] mb-1">
-                          <span className="text-slate-400">Especificidad Benigna Ensamble ML</span>
-                          <span className="font-bold text-cyan-400">{(100 - metricas.desglose_vectores.legitimo.pct_ml).toFixed(1)}%</span>
-                        </div>
-                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                          <div className="bg-cyan-500 h-full rounded-full" style={{ width: `${100 - metricas.desglose_vectores.legitimo.pct_ml}%` }}></div>
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex justify-between text-[11px] mb-1">
-                          <span className="text-slate-400">Tasa de Falsos Positivos (FPR)</span>
-                          <span className="font-bold text-amber-400">{metricas.desglose_vectores.legitimo.pct_ml}%</span>
-                        </div>
-                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
-                          <div className="bg-amber-500 h-full rounded-full" style={{ width: `${metricas.desglose_vectores.legitimo.pct_ml}%` }}></div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center py-6 text-slate-500 text-xs">
-                  Ejecuta el Benchmark Masivo para ver las barras de desglose vectorial.
-                </div>
-              )}
-            </div>
-
-            {/* MATRIZ DE CONFUSIÓN INTERACTIVA */}
-            {metricas && (
-              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-5">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                  <div>
-                    <h3 className="font-bold text-white text-base">Matriz de Confusión 2x2 Interactiva</h3>
-                    <p className="text-xs text-slate-400 mt-0.5">Selecciona el modelo para inspeccionar sus clasificaciones de la matriz.</p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
-                    <button
-                      onClick={() => setMatrizAlgoritmo('alerta_ml')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                        matrizAlgoritmo === 'alerta_ml' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Ensamble ML
-                    </button>
-                    <button
-                      onClick={() => setMatrizAlgoritmo('alerta_reglas')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                        matrizAlgoritmo === 'alerta_reglas' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      WAF Reglas
-                    </button>
-                    <button
-                      onClick={() => setMatrizAlgoritmo('alerta_iforest')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                        matrizAlgoritmo === 'alerta_iforest' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      Isolation Forest
-                    </button>
-                    <button
-                      onClick={() => setMatrizAlgoritmo('alerta_lof')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                        matrizAlgoritmo === 'alerta_lof' ? 'bg-cyan-600 text-white shadow' : 'text-slate-400 hover:text-white'
-                      }`}
-                    >
-                      LOF
-                    </button>
-                  </div>
-                </div>
-
-                {(() => {
-                  const mSel = metricas[matrizAlgoritmo] || metricas.alerta_ml;
-                  return (
-                    <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto">
-                      {/* VP */}
-                      <div className="bg-emerald-500/10 border border-emerald-500/30 p-4 rounded-xl text-center">
-                        <span className="text-[10px] font-bold uppercase text-emerald-400 tracking-wider">Verdaderos Positivos (VP)</span>
-                        <p className="text-3xl font-black text-emerald-300 mt-1">{mSel.verdaderos_positivos.toLocaleString()}</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Ataques reales detectados y mitigados</p>
-                      </div>
-
-                      {/* FP */}
-                      <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-xl text-center">
-                        <span className="text-[10px] font-bold uppercase text-amber-400 tracking-wider">Falsos Positivos (FP)</span>
-                        <p className="text-3xl font-black text-amber-300 mt-1">{mSel.falsos_positivos.toLocaleString()}</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Usuarios legítimos marcados</p>
-                      </div>
-
-                      {/* FN */}
-                      <div className="bg-red-500/10 border border-red-500/30 p-4 rounded-xl text-center">
-                        <span className="text-[10px] font-bold uppercase text-red-400 tracking-wider">Falsos Negativos (FN)</span>
-                        <p className="text-3xl font-black text-red-400 mt-1">{mSel.falsos_negativos.toLocaleString()}</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Ataques no detectados (fugas)</p>
-                      </div>
-
-                      {/* VN */}
-                      <div className="bg-blue-500/10 border border-blue-500/30 p-4 rounded-xl text-center">
-                        <span className="text-[10px] font-bold uppercase text-blue-400 tracking-wider">Verdaderos Negativos (VN)</span>
-                        <p className="text-3xl font-black text-blue-300 mt-1">{mSel.verdaderos_negativos.toLocaleString()}</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Tráfico benigno aprobado</p>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            {/* TABLA II: Comparativa Arquitectural de Mecanismos de Autenticación */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
-              <div className="p-5 border-b border-slate-800 bg-slate-950/40">
-                <h3 className="font-bold text-white text-base">Tabla II: Comparativa de Arquitecturas y Mecanismos de Defensa</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Evaluación cualitativa de fricción de usuario, resistencia a intrusión y latencia añadida.</p>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead className="bg-slate-950 text-xs text-slate-400 uppercase tracking-wider border-b border-slate-800">
-                    <tr>
-                      <th className="p-4">Estrategia Defensiva</th>
-                      <th className="p-4">Resistencia a Fuerza Bruta</th>
-                      <th className="p-4">Fricción al Usuario Benigno</th>
-                      <th className="p-4">Dependencia de Servicios</th>
-                      <th className="p-4">Latencia Promedio</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800">
-                    <tr className="hover:bg-slate-800/40">
-                      <td className="p-4 font-bold text-slate-300">Login Sin Protección (Vulnerable)</td>
-                      <td className="p-4 font-mono text-red-400 font-bold">Nula (0%)</td>
-                      <td className="p-4 text-emerald-400">Ninguna</td>
-                      <td className="p-4 text-slate-400">Ninguna</td>
-                      <td className="p-4 font-mono text-slate-400">0 ms</td>
-                    </tr>
-                    <tr className="hover:bg-slate-800/40">
-                      <td className="p-4 font-bold text-slate-300">CAPTCHA Estático Interceptivo</td>
-                      <td className="p-4 font-mono text-amber-400 font-bold">Media (Vulnerable a solvers/OCR)</td>
-                      <td className="p-4 text-red-400">Alta (Resuelve desafío de 3 a 8s)</td>
-                      <td className="p-4 text-slate-400">Servicio de CAPTCHA</td>
-                      <td className="p-4 font-mono text-slate-400">100 - 300 ms</td>
-                    </tr>
-                    <tr className="hover:bg-slate-800/40">
-                      <td className="p-4 font-bold text-slate-300">Autenticación 2FA / TOTP Universal</td>
-                      <td className="p-4 font-mono text-emerald-400 font-bold">Muy Alta (&gt;99%)</td>
-                      <td className="p-4 text-amber-400">Alta (Obliga token físico/app siempre)</td>
-                      <td className="p-4 text-slate-400">Servidor TOTP / SMS</td>
-                      <td className="p-4 font-mono text-slate-400">50 - 150 ms</td>
-                    </tr>
-                    <tr className="bg-cyan-950/20 border-l-4 border-cyan-500 hover:bg-cyan-950/30">
-                      <td className="p-4 font-bold text-cyan-300 flex items-center space-x-2">
-                        <Shield className="w-4 h-4 text-cyan-400" />
-                        <span>Centinela (Adaptive WAF + ML)</span>
-                      </td>
-                      <td className="p-4 font-mono text-emerald-400 font-bold">Muy Alta (&gt;99%)</td>
-                      <td className="p-4 text-emerald-400 font-bold">Baja (Transparente si no hay anomalía)</td>
-                      <td className="p-4 text-emerald-400">Baja (Microservicio local autónomo)</td>
-                      <td className="p-4 font-mono text-cyan-300 font-bold">~1.2 ms</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* PUNTOS CLAVE Y DISCUSIÓN PARA EL ARTÍCULO */}
-            <div className="bg-gradient-to-r from-slate-900 to-slate-950 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
-              <div className="flex items-center space-x-2">
-                <FileText className="w-5 h-5 text-cyan-400" />
-                <h3 className="font-bold text-white text-base">Puntos Clave para la Sección de Discusión de tu Artículo</h3>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-slate-300 leading-relaxed">
-                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800">
-                  <h4 className="font-bold text-cyan-400 mb-1.5">1. Resistencia a Botnets Multi-IP</h4>
-                  <p>
-                    Las reglas de umbral fijo por IP fallan en ataques distribuidos modernos. El ensamble ML analiza la anomalía estadística del flujo completo de autenticación, logrando un 100% de recall sin importar la rotación de IPs.
-                  </p>
-                </div>
-                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800">
-                  <h4 className="font-bold text-emerald-400 mb-1.5">2. Precisión Absoluta de LOF</h4>
-                  <p>
-                    Local Outlier Factor obtuvo 0 falsos positivos (100% precisión). Permite aplicar sanciones severas (bloqueos IP largos) con total certeza de que no se castiga a un usuario humano inocente.
-                  </p>
-                </div>
-                <div className="bg-slate-950/60 p-4 rounded-xl border border-slate-800">
-                  <h4 className="font-bold text-purple-400 mb-1.5">3. Sobrecarga Mínima (1.2 ms)</h4>
-                  <p>
-                    Con una latencia de inferencia de apenas 1.25 ms y soporte de +2,400 peticiones por segundo, la solución es ideal para integrarse en arquitecturas de microservicios y gateways perimetrales en producción.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* DOCUMENTO CONSOLIDADO DEL REPORTE (TODO EN UNO) */}
-            {metricas && (
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-800 pb-4">
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <FileText className="w-5 h-5 text-cyan-400" />
-                      <h3 className="font-bold text-white text-base">Documento del Reporte Único Consolidado</h3>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-0.5">Todos los resultados, tablas comparativas y análisis listos para pegar en tu artículo.</p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      fetch('/api/exportar_metricas?formato=md')
-                        .then((res) => res.text())
-                        .then((txt) => {
-                          navigator.clipboard.writeText(txt);
-                          showToast('¡Reporte completo copiado al portapapeles!');
-                        });
-                    }}
-                    className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-cyan-600/20 transition-all flex items-center space-x-2"
-                  >
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copiar Reporte Completo</span>
-                  </button>
-                </div>
-                <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 font-mono text-xs text-slate-300 max-h-96 overflow-y-auto space-y-3 leading-relaxed whitespace-pre-wrap select-all">
-                  {`# Reporte Experimental Consolidado — Centinela
-Total Muestras Evaluadas: ${metricas.total_intentos.toLocaleString()} eventos
-Modelo Base: ${estadoModelo.fuente} (${estadoModelo.detalle})
-Latencia Media: ${metricas.rendimiento_computacional?.latencia_promedio_total_ms || 1.25} ms
-Throughput Estimado: ~${(metricas.rendimiento_computacional?.throughput_rps_estimado || 2450).toLocaleString()} req/s
-
-## 1. Rendimiento Global por Algoritmo (Tabla I)
-- Reglas Heurísticas WAF: Precisión ${(metricas.alerta_reglas.precision * 100).toFixed(1)}% | Recall ${(metricas.alerta_reglas.recall * 100).toFixed(1)}% | F1 ${(metricas.alerta_reglas.f1 * 100).toFixed(1)}% | FPR ${((metricas.alerta_reglas.tasa_falsos_positivos || 0.115) * 100).toFixed(1)}% | VP ${metricas.alerta_reglas.verdaderos_positivos} | FP ${metricas.alerta_reglas.falsos_positivos} | FN ${metricas.alerta_reglas.falsos_negativos} | Latencia 0.08 ms
-- Isolation Forest:       Precisión ${(metricas.alerta_iforest.precision * 100).toFixed(1)}% | Recall ${(metricas.alerta_iforest.recall * 100).toFixed(1)}% | F1 ${(metricas.alerta_iforest.f1 * 100).toFixed(1)}% | FPR ${((metricas.alerta_iforest.tasa_falsos_positivos || 0.116) * 100).toFixed(1)}% | VP ${metricas.alerta_iforest.verdaderos_positivos} | FP ${metricas.alerta_iforest.falsos_positivos} | FN 0 | Latencia 0.42 ms
-- Local Outlier Factor:   Precisión ${(metricas.alerta_lof.precision * 100).toFixed(1)}% | Recall ${(metricas.alerta_lof.recall * 100).toFixed(1)}% | F1 ${(metricas.alerta_lof.f1 * 100).toFixed(1)}% | FPR 0.0% | VP ${metricas.alerta_lof.verdaderos_positivos} | FP 0 | FN ${metricas.alerta_lof.falsos_negativos} | Latencia 0.85 ms
-- Ensamble ML Completo:   Precisión ${(metricas.alerta_ml.precision * 100).toFixed(1)}% | Recall ${(metricas.alerta_ml.recall * 100).toFixed(1)}% | F1 ${(metricas.alerta_ml.f1 * 100).toFixed(1)}% | FPR ${((metricas.alerta_ml.tasa_falsos_positivos || 0.116) * 100).toFixed(1)}% | VP ${metricas.alerta_ml.verdaderos_positivos} | FP ${metricas.alerta_ml.falsos_positivos} | FN 0 | Latencia 1.25 ms
-
-## 2. Desglose de Detección por Vector de Tráfico (Tabla II)
-- Ataque Rápido (Burst clásico):        WAF ${metricas.desglose_vectores?.rapido.pct_reglas || 99.8}% | ML ${metricas.desglose_vectores?.rapido.pct_ml || 100}%
-- Ataque Sigiloso (Low-and-Slow):       WAF ${metricas.desglose_vectores?.lento.pct_reglas || 72.4}% | ML ${metricas.desglose_vectores?.lento.pct_ml || 100}%
-- Ataque Distribuido (Botnet multi-IP): WAF ${metricas.desglose_vectores?.distribuido.pct_reglas || 54.1}% | ML ${metricas.desglose_vectores?.distribuido.pct_ml || 100}%
-- Tráfico Legítimo Benigno:             Especificidad ${(100 - (metricas.desglose_vectores?.legitimo.pct_ml || 11.6)).toFixed(1)}% | FPR ${(metricas.desglose_vectores?.legitimo.pct_ml || 11.6)}%
-
-## 3. Comparativa de Arquitecturas Defensivas
-- Login Sin Protección: Resistencia 0% | Fricción 0 | Latencia 0 ms
-- CAPTCHA Estático:     Resistencia Media | Fricción Alta (3-8s) | Latencia 100-300 ms
-- 2FA / TOTP Universal: Resistencia >99% | Fricción Alta (token físico) | Latencia 50-150 ms
-- Centinela (WAF+ML):   Resistencia >99% | Fricción Baja (transparente) | Latencia ~1.2 ms`}
-                </div>
-              </div>
-            )}
-          </div>
+          <ReporteAcademicoView
+            metricas={metricas}
+            estadoModelo={estadoModelo}
+            expBotnet={expBotnet}
+            expAblacion={expAblacion}
+            expTraficoReal={expTraficoReal}
+            cicidsData={cicidsData}
+            umbral={cicidsUmbral}
+            onCambiarUmbral={handleCambiarUmbral}
+            showToast={showToast}
+          />
         )}
 
         {activeTab === 'demos' && (
