@@ -1,0 +1,22 @@
+{
+  "commit_hash": "1c776711bb25de42bb019edff5bffd0c20c99111",
+  "hardware_summary": "x86_64 (2 cores), 4096 MB RAM",
+  "files_sha256": {
+    "config": {
+      "file": "experiment_config.json",
+      "sha256": "9cad35a8067a773944ce71549452a4f2314a2cd4eda3c3a6121ae38d39becc1c"
+    },
+    "script": {
+      "file": "/app/applet/experiments_cli.py",
+      "sha256": "752d9eb3964f57f4d9af34cfae36e083100d8a0f37403484886c66606b1906a0"
+    },
+    "predictions_csv": {
+      "file": "results_baseline/predicciones_muestra.csv",
+      "sha256": "ef4f9231a39d02d4d93de688d1a3c9765a3251a6c368de5133dc6a56ebf5b6b9"
+    },
+    "metrics_json": {
+      "file": "results_baseline/resultados_metricas.json",
+      "sha256": "934c4a6927e75004b5670339f4153893e55963d5572cf6cbbf5e88ed6ef16de1"
+    }
+  }
+}

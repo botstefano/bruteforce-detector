@@ -1,0 +1,87 @@
+{
+  "metadata": {
+    "project": "Centinela — Brute Force Detector",
+    "description": "Configuración científica inmutable de experimentos independientes en Python",
+    "commit_hash_pre_test": "1c776711bb25de42bb019edff5bffd0c20c99111",
+    "execution_note": "Los modelos entrenados y evaluados en Python (scikit-learn) son independientes de las rutinas de mitigación en tiempo real del microservicio Node.js",
+    "version": "1.0.0"
+  },
+  "random_seeds": {
+    "seed_train_default": 42,
+    "seed_test_default": 1337,
+    "multi_seeds": [42, 101, 2024, 7, 13, 88, 555, 777, 999, 1337]
+  },
+  "hyperparameters": {
+    "isolation_forest": {
+      "n_estimators": 100,
+      "max_samples": "auto",
+      "contamination": "auto",
+      "bootstrap": false
+    },
+    "one_class_svm": {
+      "kernel": "rbf",
+      "gamma": "scale",
+      "nu": 0.05
+    },
+    "local_outlier_factor": {
+      "n_neighbors": 20,
+      "algorithm": "auto",
+      "leaf_size": 30,
+      "metric": "minkowski",
+      "p": 2,
+      "novelty": true
+    }
+  },
+  "ensemble": {
+    "strategy": "majority_voting",
+    "threshold_votes": 2,
+    "total_models": 3
+  },
+  "validation_grid": {
+    "waf_rules": {
+      "ventanas_segundos": [30, 60, 120, 300, 600, 900],
+      "umbrales_n": [3, 4, 5, 8, 10, 15]
+    },
+    "tau_threshold": {
+      "min": 0.10,
+      "max": 0.90,
+      "step": 0.02
+    }
+  },
+  "bootstrap": {
+    "n_iterations": 1000,
+    "confidence_level": 0.95,
+    "method": "percentile"
+  },
+  "feature_engineering": {
+    "cicids2017": {
+      "excluded_columns_baseline": [
+        "Source IP",
+        "Destination IP",
+        "Destination Port",
+        "Flow ID",
+        "Timestamp",
+        "Label"
+      ],
+      "variant_with_port": {
+        "included_extra": ["Destination Port"],
+        "reported_separately": true
+      }
+    },
+    "synthetic": {
+      "vector_dimensions": 5,
+      "features": [
+        "num_intentos_ventana",
+        "num_usuarios_distintos",
+        "intervalo_promedio_iat_seg",
+        "intervalo_std_iat_seg",
+        "hora_normalizada"
+      ]
+    }
+  },
+  "generator_drift": {
+    "iat_mean_shift_factor": 1.75,
+    "user_entropy_shift_factor": 0.50,
+    "rate_scale_factor": 0.65
+  }
+}

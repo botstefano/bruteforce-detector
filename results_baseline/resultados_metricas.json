@@ -1,0 +1,514 @@
+{
+  "metadata": {
+    "timestamp_utc": "2026-10-20T22:32:22Z",
+    "commit_hash": "1c776711bb25de42bb019edff5bffd0c20c99111",
+    "config_sha256": "9cad35a8067a773944ce71549452a4f2314a2cd4eda3c3a6121ae38d39becc1c",
+    "seed_train": 42,
+    "seed_test": 1337,
+    "test_sample_size": {
+      "total": 3000,
+      "attacks": 1198,
+      "benign": 1802,
+      "attack_prevalence_pct": 39.93
+    },
+    "validation_sample_size": {
+      "total": 1500,
+      "attacks": 584,
+      "benign": 916
+    },
+    "train_benign_sample_size": 1460,
+    "distribution_drift_applied": false,
+    "task": "all",
+    "methodology_notes_post_hoc": [
+      "[POST-HOC] Estudio de ablaci\u00f3n ejecutado sobre TEST recalibrando tau \u00f3ptimo en validaci\u00f3n para cada variante.",
+      "[POST-HOC] Experimento de botnet escalado con carga constante de 1200 ataques mezclados 1:1 con 1200 peticiones benignas de control (2400 total) para computar precisi\u00f3n y FPR por punto.",
+      "[POST-HOC] Escenario de atacante con ritmo humano evaluado por separado (1000 ataques + 1000 benignos)."
+    ]
+  },
+  "hardware_environment": {
+    "os_platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "processor": "x86_64",
+    "cpu_count_logical": 2,
+    "ram_total_mb": 4096,
+    "python_version": "3.11.2",
+    "library_versions": {
+      "scikit_learn": "1.2.1",
+      "numpy": "1.24.2",
+      "pandas": "1.5.3",
+      "scipy": "1.10.1"
+    },
+    "note": "Modelos ejecutados en Python (scikit-learn). Son independientes del microservicio Node.js."
+  },
+  "calibration_validation": {
+    "waf_window_seconds": 900.0,
+    "waf_threshold_n": 3,
+    "tau_ensemble": 0.42
+  },
+  "metrics_test": {
+    "reglas_waf": {
+      "precision": 0.5577,
+      "recall": 0.1653,
+      "f1_score": 0.255,
+      "accuracy": 0.6143,
+      "specificity": 0.9129,
+      "false_positive_rate": 0.0871,
+      "true_positives": 198,
+      "false_positives": 157,
+      "false_negatives": 1000,
+      "true_negatives": 1645
+    },
+    "isolation_forest": {
+      "precision": 0.7679,
+      "recall": 1.0,
+      "f1_score": 0.8687,
+      "accuracy": 0.8793,
+      "specificity": 0.7991,
+      "false_positive_rate": 0.2009,
+      "true_positives": 1198,
+      "false_positives": 362,
+      "false_negatives": 0,
+      "true_negatives": 1440,
+      "auc_roc": 0.9883,
+      "auc_pr": 0.9761
+    },
+    "one_class_svm": {
+      "precision": 1.0,
+      "recall": 0.8923,
+      "f1_score": 0.9431,
+      "accuracy": 0.957,
+      "specificity": 1.0,
+      "false_positive_rate": 0.0,
+      "true_positives": 1069,
+      "false_positives": 0,
+      "false_negatives": 129,
+      "true_negatives": 1802,
+      "auc_roc": 1.0,
+      "auc_pr": 1.0
+    },
+    "local_outlier_factor": {
+      "precision": 1.0,
+      "recall": 0.5518,
+      "f1_score": 0.7111,
+      "accuracy": 0.821,
+      "specificity": 1.0,
+      "false_positive_rate": 0.0,
+      "true_positives": 661,
+      "false_positives": 0,
+      "false_negatives": 537,
+      "true_negatives": 1802,
+      "auc_roc": 1.0,
+      "auc_pr": 1.0
+    },
+    "ensamble_votacion_mayoritaria": {
+      "precision": 1.0,
+      "recall": 0.8923,
+      "f1_score": 0.9431,
+      "accuracy": 0.957,
+      "specificity": 1.0,
+      "false_positive_rate": 0.0,
+      "true_positives": 1069,
+      "false_positives": 0,
+      "false_negatives": 129,
+      "true_negatives": 1802,
+      "auc_roc": 1.0,
+      "auc_pr": 1.0
+    },
+    "ensamble_tau_calibrado": {
+      "precision": 0.9975,
+      "recall": 1.0,
+      "f1_score": 0.9987,
+      "accuracy": 0.999,
+      "specificity": 0.9983,
+      "false_positive_rate": 0.0017,
+      "true_positives": 1198,
+      "false_positives": 3,
+      "false_negatives": 0,
+      "true_negatives": 1799,
+      "auc_roc": 1.0,
+      "auc_pr": 1.0
+    }
+  },
+  "bootstrap_95ci": {
+    "reglas_waf": {
+      "precision": {
+        "low": 0.5042,
+        "high": 0.6073,
+        "std": 0.0264
+      },
+      "recall": {
+        "low": 0.1449,
+        "high": 0.1872,
+        "std": 0.011
+      },
+      "f1_score": {
+        "low": 0.226,
+        "high": 0.2834,
+        "std": 0.0149
+      }
+    },
+    "isolation_forest": {
+      "precision": {
+        "low": 0.7461,
+        "high": 0.7882,
+        "std": 0.0109
+      },
+      "recall": {
+        "low": 1.0,
+        "high": 1.0,
+        "std": 0.0
+      },
+      "f1_score": {
+        "low": 0.8546,
+        "high": 0.8816,
+        "std": 0.007
+      }
+    },
+    "one_class_svm": {
+      "precision": {
+        "low": 1.0,
+        "high": 1.0,
+        "std": 0.0
+      },
+      "recall": {
+        "low": 0.8732,
+        "high": 0.9095,
+        "std": 0.0093
+      },
+      "f1_score": {
+        "low": 0.9323,
+        "high": 0.9526,
+        "std": 0.0052
+      }
+    },
+    "local_outlier_factor": {
+      "precision": {
+        "low": 1.0,
+        "high": 1.0,
+        "std": 0.0
+      },
+      "recall": {
+        "low": 0.5248,
+        "high": 0.5812,
+        "std": 0.0145
+      },
+      "f1_score": {
+        "low": 0.6884,
+        "high": 0.7351,
+        "std": 0.012
+      }
+    },
+    "ensamble_votacion": {
+      "precision": {
+        "low": 1.0,
+        "high": 1.0,
+        "std": 0.0
+      },
+      "recall": {
+        "low": 0.8732,
+        "high": 0.9095,
+        "std": 0.0093
+      },
+      "f1_score": {
+        "low": 0.9323,
+        "high": 0.9526,
+        "std": 0.0052
+      }
+    },
+    "ensamble_tau_calibrado": {
+      "precision": {
+        "low": 0.9942,
+        "high": 1.0,
+        "std": 0.0014
+      },
+      "recall": {
+        "low": 1.0,
+        "high": 1.0,
+        "std": 0.0
+      },
+      "f1_score": {
+        "low": 0.9971,
+        "high": 1.0,
+        "std": 0.0007
+      }
+    }
+  },
+  "latencies": {
+    "per_sample_us": {
+      "mean": 40848.63,
+      "median": 39747.92,
+      "p95": 48908.83,
+      "std": 3703.41
+    },
+    "batch_inference": {
+      "samples_evaluated": 500,
+      "total_ms": 70.37,
+      "ms_per_sample_in_batch": 0.1407
+    }
+  },
+  "botnet_scale_experiment": [
+    {
+      "num_ips": 1,
+      "attack_attempts": 1200,
+      "benign_control_requests": 1200,
+      "total_samples": 2400,
+      "attempts_per_ip": 1200.0,
+      "waf": {
+        "recall": 0.9983,
+        "precision": 0.9001,
+        "false_positive_rate": 0.1108,
+        "f1_score": 0.9467,
+        "true_positives": 1198,
+        "false_positives": 133
+      },
+      "ml_ensemble": {
+        "recall": 1.0,
+        "precision": 1.0,
+        "false_positive_rate": 0.0,
+        "f1_score": 1.0,
+        "true_positives": 1200,
+        "false_positives": 0
+      }
+    },
+    {
+      "num_ips": 5,
+      "attack_attempts": 1200,
+      "benign_control_requests": 1200,
+      "total_samples": 2400,
+      "attempts_per_ip": 240.0,
+      "waf": {
+        "recall": 0.9917,
+        "precision": 0.8894,
+        "false_positive_rate": 0.1233,
+        "f1_score": 0.9377,
+        "true_positives": 1190,
+        "false_positives": 148
+      },
+      "ml_ensemble": {
+        "recall": 1.0,
+        "precision": 1.0,
+        "false_positive_rate": 0.0,
+        "f1_score": 1.0,
+        "true_positives": 1200,
+        "false_positives": 0
+      }
+    },
+    {
+      "num_ips": 20,
+      "attack_attempts": 1200,
+      "benign_control_requests": 1200,
+      "total_samples": 2400,
+      "attempts_per_ip": 60.0,
+      "waf": {
+        "recall": 0.1458,
+        "precision": 0.5872,
+        "false_positive_rate": 0.1025,
+        "f1_score": 0.2336,
+        "true_positives": 175,
+        "false_positives": 123
+      },
+      "ml_ensemble": {
+        "recall": 1.0,
+        "precision": 1.0,
+        "false_positive_rate": 0.0,
+        "f1_score": 1.0,
+        "true_positives": 1200,
+        "false_positives": 0
+      }
+    },
+    {
+      "num_ips": 50,
+      "attack_attempts": 1200,
+      "benign_control_requests": 1200,
+      "total_samples": 2400,
+      "attempts_per_ip": 24.0,
+      "waf": {
+        "recall": 0.0,
+        "precision": 0.0,
+        "false_positive_rate": 0.1275,
+        "f1_score": 0.0,
+        "true_positives": 0,
+        "false_positives": 153
+      },
+      "ml_ensemble": {
+        "recall": 1.0,
+        "precision": 0.9992,
+        "false_positive_rate": 0.0008,
+        "f1_score": 0.9996,
+        "true_positives": 1200,
+        "false_positives": 1
+      }
+    },
+    {
+      "num_ips": 100,
+      "attack_attempts": 1200,
+      "benign_control_requests": 1200,
+      "total_samples": 2400,
+      "attempts_per_ip": 12.0,
+      "waf": {
+        "recall": 0.0,
+        "precision": 0.0,
+        "false_positive_rate": 0.0983,
+        "f1_score": 0.0,
+        "true_positives": 0,
+        "false_positives": 118
+      },
+      "ml_ensemble": {
+        "recall": 1.0,
+        "precision": 0.9992,
+        "false_positive_rate": 0.0008,
+        "f1_score": 0.9996,
+        "true_positives": 1200,
+        "false_positives": 1
+      }
+    },
+    {
+      "num_ips": 200,
+      "attack_attempts": 1200,
+      "benign_control_requests": 1200,
+      "total_samples": 2400,
+      "attempts_per_ip": 6.0,
+      "waf": {
+        "recall": 0.0,
+        "precision": 0.0,
+        "false_positive_rate": 0.1183,
+        "f1_score": 0.0,
+        "true_positives": 0,
+        "false_positives": 142
+      },
+      "ml_ensemble": {
+        "recall": 1.0,
+        "precision": 0.9975,
+        "false_positive_rate": 0.0025,
+        "f1_score": 0.9988,
+        "true_positives": 1200,
+        "false_positives": 3
+      }
+    },
+    {
+      "num_ips": 400,
+      "attack_attempts": 1200,
+      "benign_control_requests": 1200,
+      "total_samples": 2400,
+      "attempts_per_ip": 3.0,
+      "waf": {
+        "recall": 0.0,
+        "precision": 0.0,
+        "false_positive_rate": 0.1175,
+        "f1_score": 0.0,
+        "true_positives": 0,
+        "false_positives": 141
+      },
+      "ml_ensemble": {
+        "recall": 1.0,
+        "precision": 0.9983,
+        "false_positive_rate": 0.0017,
+        "f1_score": 0.9992,
+        "true_positives": 1200,
+        "false_positives": 2
+      }
+    }
+  ],
+  "ablation_study": [
+    {
+      "excluded_feature": "None (Full Baseline)",
+      "evaluation_set": "test",
+      "calibrated_tau_val": 0.42,
+      "f1_score": 0.9987,
+      "delta_f1": 0.0,
+      "precision": 0.9975,
+      "recall": 1.0,
+      "false_positive_rate": 0.0017
+    },
+    {
+      "excluded_feature": "num_intentos_ventana",
+      "evaluation_set": "test",
+      "calibrated_tau_val": 0.46,
+      "f1_score": 0.9971,
+      "delta_f1": -0.0016,
+      "precision": 0.9992,
+      "recall": 0.995,
+      "false_positive_rate": 0.0006,
+      "val_f1_calibrated": 1.0
+    },
+    {
+      "excluded_feature": "num_usuarios_distintos",
+      "evaluation_set": "test",
+      "calibrated_tau_val": 0.42,
+      "f1_score": 0.9987,
+      "delta_f1": 0.0,
+      "precision": 0.9975,
+      "recall": 1.0,
+      "false_positive_rate": 0.0017,
+      "val_f1_calibrated": 1.0
+    },
+    {
+      "excluded_feature": "intervalo_promedio_iat_seg",
+      "evaluation_set": "test",
+      "calibrated_tau_val": 0.36,
+      "f1_score": 0.9608,
+      "delta_f1": -0.0379,
+      "precision": 0.9694,
+      "recall": 0.9524,
+      "false_positive_rate": 0.02,
+      "val_f1_calibrated": 0.9737
+    },
+    {
+      "excluded_feature": "intervalo_std_iat_seg",
+      "evaluation_set": "test",
+      "calibrated_tau_val": 0.4,
+      "f1_score": 0.9916,
+      "delta_f1": -0.0071,
+      "precision": 0.995,
+      "recall": 0.9883,
+      "false_positive_rate": 0.0033,
+      "val_f1_calibrated": 1.0
+    },
+    {
+      "excluded_feature": "hora_normalizada",
+      "evaluation_set": "test",
+      "calibrated_tau_val": 0.4,
+      "f1_score": 0.9983,
+      "delta_f1": -0.0004,
+      "precision": 0.9967,
+      "recall": 1.0,
+      "false_positive_rate": 0.0022,
+      "val_f1_calibrated": 1.0
+    }
+  ],
+  "human_mimic_scenario": {
+    "scenario_name": "Ataque Sigiloso con Ritmo Humano (Human-Mimicry)",
+    "note": "[POST-HOC] Evaluado como escenario experimental independiente",
+    "sample_size": {
+      "total": 2000,
+      "human_mimic_attacks": 1000,
+      "legitimate_benign": 1000
+    },
+    "waf_heuristics": {
+      "precision": 0.125,
+      "recall": 0.002,
+      "f1_score": 0.0039,
+      "accuracy": 0.494,
+      "specificity": 0.986,
+      "false_positive_rate": 0.014,
+      "true_positives": 2,
+      "false_positives": 14,
+      "false_negatives": 998,
+      "true_negatives": 986
+    },
+    "ml_ensemble_tau": {
+      "precision": 0.4156,
+      "recall": 0.197,
+      "f1_score": 0.2673,
+      "accuracy": 0.46,
+      "specificity": 0.723,
+      "false_positive_rate": 0.277,
+      "true_positives": 197,
+      "false_positives": 277,
+      "false_negatives": 803,
+      "true_negatives": 723,
+      "auc_roc": 0.545,
+      "auc_pr": 0.4814
+    },
+    "discussion": "Cuando el atacante adopta una cadencia temporal id\u00e9ntica a la humana (IAT medio ~45s y n_intentos <= 2), el WAF heur\u00edstico colapsa completamente por no superar el umbral N. El ensamble ML detecta sutiles anomal\u00edas de entrop\u00eda y consistencia espacial pero sufre degradaci\u00f3n respecto al baseline cl\u00e1sico."
+  }
+}
