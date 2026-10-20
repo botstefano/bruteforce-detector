@@ -1,7 +1,0 @@
-# Requisitos para ejecutar validacion_cicids_real.py
-# Instalar con: pip install -r requirements_cicids.txt
-
-numpy>=1.22.0
-pandas>=1.4.0
-scikit-learn>=1.1.0
-scipy>=1.8.0

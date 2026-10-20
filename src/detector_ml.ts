@@ -123,7 +123,13 @@ class IsolationForestModel {
   private subSampleSize = 128;
   private sampleCount = 0;
 
-  constructor(private nEstimators = 100, private contamination = 0.15) {}
+  private nEstimators: number;
+  private contamination: number;
+
+  constructor(nEstimators = 100, contamination = 0.15) {
+    this.nEstimators = nEstimators;
+    this.contamination = contamination;
+  }
 
   public fit(X: number[][]): void {
     if (X.length === 0) return;
@@ -178,7 +184,11 @@ class OneClassSVMModel {
   private radioLimite = 2.4;
   private gamma = 0.5;
 
-  constructor(private nu = 0.1) {}
+  private nu: number;
+
+  constructor(nu = 0.1) {
+    this.nu = nu;
+  }
 
   public fit(X: number[][]): void {
     if (X.length === 0) return;
