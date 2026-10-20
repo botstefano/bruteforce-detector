@@ -72,22 +72,29 @@ export interface CicidsEvaluationSummary {
  * Limpia y convierte cadenas numéricas con posibles formatos locales
  * (e.g. "2.014.166.667" o "201,45" o "1.5e6")
  */
-function limpiarNumero(val: string | undefined): number {
+export function limpiarNumero(val: string | undefined): number {
   if (!val) return 0;
   let str = val.trim();
   if (str === '' || str === 'NaN' || str === 'Infinity' || str === '-Infinity') return 0;
 
-  // Si tiene múltiples puntos como separadores de miles (ej: 2.014.166.667)
-  const dotCount = (str.match(/\./g) || []).length;
-  if (dotCount > 1) {
-    str = str.replace(/\.(?=.*\.)/g, ''); // Deja solo el último punto o quítalos
-  }
+  // Quitar comillas si existen
+  str = str.replace(/^["']|["']$/g, '');
 
-  // Reemplazar coma por punto si es decimal
-  if (str.includes(',') && !str.includes('.')) {
+  // Manejo de comas y puntos
+  if (str.includes(',') && str.includes('.')) {
+    if (str.lastIndexOf(',') > str.lastIndexOf('.')) {
+      // Formato europeo: 1.234,56
+      str = str.replace(/\./g, '').replace(',', '.');
+    } else {
+      // Formato anglosajón: 1,234.56
+      str = str.replace(/,/g, '');
+    }
+  } else if (str.includes(',') && !str.includes('.')) {
+    // Formato con coma decimal: 201,4166667
     str = str.replace(',', '.');
-  } else if (str.includes(',') && str.includes('.')) {
-    str = str.replace(/,/g, '');
+  } else if ((str.match(/\./g) || []).length > 1) {
+    // Formato con múltiples puntos (ej: 2.014.166.667 o 16.500.000)
+    str = str.replace(/\./g, '');
   }
 
   const num = parseFloat(str);
@@ -151,25 +158,25 @@ export function mapearFlujoAFeaturesCentinela(rec: {
 /**
  * Parsea texto CSV / TSV de CICIDS2017
  */
-export function parsearCicidsCsv(csvContent: string, maxRows = 5000): CicidsFlowRecord[] {
+export function parsearCicidsCsv(csvContent: string, maxRows = 10000): CicidsFlowRecord[] {
   const lineas = csvContent.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lineas.length < 2) return [];
 
   const delim = detectarDelimitador(lineas[0]);
   const headers = lineas[0].split(delim).map((h) => h.trim().replace(/^["']|["']$/g, ''));
 
-  // Localizar índices de columnas clave
-  const idxPort = headers.findIndex((h) => /Destination\s*Port/i.test(h));
+  // Localizar índices de columnas clave de forma flexible
+  const idxPort = headers.findIndex((h) => /Destination\s*Port|Dst\s*Port/i.test(h));
   const idxDuration = headers.findIndex((h) => /Flow\s*Duration/i.test(h));
-  const idxFwdPkts = headers.findIndex((h) => /Total\s*Fwd\s*Packets/i.test(h));
-  const idxBwdPkts = headers.findIndex((h) => /Total\s*Backward\s*Packets/i.test(h));
-  const idxFwdLen = headers.findIndex((h) => /Total\s*Length\s*of\s*Fwd/i.test(h));
-  const idxBwdLen = headers.findIndex((h) => /Total\s*Length\s*of\s*Bwd/i.test(h));
-  const idxBytesSec = headers.findIndex((h) => /Flow\s*Bytes\/s/i.test(h));
-  const idxPktsSec = headers.findIndex((h) => /Flow\s*Packets\/s/i.test(h));
+  const idxFwdPkts = headers.findIndex((h) => /Tot(al)?\s*Fwd\s*P(ac)?k(e)?ts?/i.test(h));
+  const idxBwdPkts = headers.findIndex((h) => /Tot(al)?\s*B(ack)?w(ar)?d\s*P(ac)?k(e)?ts?/i.test(h));
+  const idxFwdLen = headers.findIndex((h) => /Tot(al)?\s*(Len(gth)?(\s*of)?)?\s*Fwd\s*P/i.test(h));
+  const idxBwdLen = headers.findIndex((h) => /Tot(al)?\s*(Len(gth)?(\s*of)?)?\s*B(ack)?w(ar)?d\s*P/i.test(h));
+  const idxBytesSec = headers.findIndex((h) => /Flow\s*Byt(es)?\/s/i.test(h));
+  const idxPktsSec = headers.findIndex((h) => /Flow\s*P(ac)?k(e)?ts?\/s/i.test(h));
   const idxIatMean = headers.findIndex((h) => /Flow\s*IAT\s*Mean/i.test(h));
   const idxIatStd = headers.findIndex((h) => /Flow\s*IAT\s*Std/i.test(h));
-  const idxAvgPktSize = headers.findIndex((h) => /Average\s*Packet\s*Size/i.test(h));
+  const idxAvgPktSize = headers.findIndex((h) => /(Average|Avg)\s*Packet\s*Size|Packet\s*Length\s*Mean/i.test(h));
   const idxLabel = headers.findIndex((h) => /Label/i.test(h));
 
   const finalIdxLabel = idxLabel !== -1 ? idxLabel : headers.length - 1;
@@ -187,11 +194,22 @@ export function parsearCicidsCsv(csvContent: string, maxRows = 5000): CicidsFlow
     const totalBwdPackets = idxBwdPkts !== -1 ? limpiarNumero(rawCols[idxBwdPkts]) : 1;
     const totalLengthFwd = idxFwdLen !== -1 ? limpiarNumero(rawCols[idxFwdLen]) : 100;
     const totalLengthBwd = idxBwdLen !== -1 ? limpiarNumero(rawCols[idxBwdLen]) : 100;
-    const flowBytesSec = idxBytesSec !== -1 ? limpiarNumero(rawCols[idxBytesSec]) : 500;
-    const flowPacketsSec = idxPktsSec !== -1 ? limpiarNumero(rawCols[idxPktsSec]) : 10;
+    let flowBytesSec = idxBytesSec !== -1 ? limpiarNumero(rawCols[idxBytesSec]) : 500;
+    let flowPacketsSec = idxPktsSec !== -1 ? limpiarNumero(rawCols[idxPktsSec]) : 10;
     const flowIatMean = idxIatMean !== -1 ? limpiarNumero(rawCols[idxIatMean]) : 50000;
     const flowIatStd = idxIatStd !== -1 ? limpiarNumero(rawCols[idxIatStd]) : 10000;
-    const avgPacketSize = idxAvgPktSize !== -1 ? limpiarNumero(rawCols[idxAvgPktSize]) : 64;
+    let avgPacketSize = idxAvgPktSize !== -1 ? limpiarNumero(rawCols[idxAvgPktSize]) : 64;
+
+    // Normalizar magnitudes derivadas si vinieron como 0
+    if (flowPacketsSec === 0 && flowDuration > 0) {
+      flowPacketsSec = Math.round(((totalFwdPackets + totalBwdPackets) / (flowDuration / 1_000_000)) * 100) / 100;
+    }
+    if (flowBytesSec === 0 && flowDuration > 0) {
+      flowBytesSec = Math.round(((totalLengthFwd + totalLengthBwd) / (flowDuration / 1_000_000)) * 100) / 100;
+    }
+    if (avgPacketSize === 0 && (totalFwdPackets + totalBwdPackets) > 0) {
+      avgPacketSize = Math.round((totalLengthFwd + totalLengthBwd) / (totalFwdPackets + totalBwdPackets));
+    }
 
     const rawLabel = (rawCols[finalIdxLabel] || 'BENIGN').trim().replace(/^["']|["']$/g, '');
     const isBenign = /BENIGN|LEGITIMO|NORMAL/i.test(rawLabel);

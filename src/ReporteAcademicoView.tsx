@@ -25,6 +25,7 @@ interface ReporteAcademicoViewProps {
   expAblacion: any;
   expTraficoReal: any;
   cicidsData: any;
+  resultadoEntrenamiento?: any;
   umbral: number;
   onCambiarUmbral: (u: number) => void;
   showToast: (msg: string) => void;
@@ -37,6 +38,7 @@ export function ReporteAcademicoView({
   expAblacion,
   expTraficoReal,
   cicidsData,
+  resultadoEntrenamiento,
   umbral,
   onCambiarUmbral,
   showToast,
@@ -423,6 +425,75 @@ export function ReporteAcademicoView({
           </table>
         </div>
       </div>
+
+      {/* MEJORA 5: ENTRENAMIENTO Y TEST ESTRATIFICADO DE MODELOS ML (TRAIN / TEST PIPELINE) */}
+      {resultadoEntrenamiento && (
+        <div className="bg-slate-900 border border-purple-500/30 p-6 rounded-2xl shadow-xl space-y-5">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 border-b border-slate-800 pb-4">
+            <div className="flex items-center space-x-2.5">
+              <span className="w-7 h-7 bg-purple-500/20 text-purple-400 rounded-lg flex items-center justify-center font-black text-sm">
+                5
+              </span>
+              <div>
+                <h3 className="font-bold text-white text-base">Mejora 5: Entrenamiento y Prueba de Modelos ML sobre CICIDS-2017 (Train & Test Split)</h3>
+                <p className="text-xs text-slate-400">
+                  Partición {resultadoEntrenamiento.splitSummary.trainRatio}% Train ({resultadoEntrenamiento.splitSummary.trainCount} flujos) y {100 - resultadoEntrenamiento.splitSummary.trainRatio}% Test ({resultadoEntrenamiento.splitSummary.testCount} flujos ciegos).
+                </p>
+              </div>
+            </div>
+            <span className={`text-xs font-bold px-3 py-1 rounded-full ${
+              resultadoEntrenamiento.brechaGeneralizacion.overfittingDetectado
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+            }`}>
+              {resultadoEntrenamiento.brechaGeneralizacion.overfittingDetectado ? 'Leve Brecha F1' : 'Generalización Óptima (Sin Overfitting)'}
+            </span>
+          </div>
+
+          <div className="overflow-x-auto border border-slate-800 rounded-xl">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead className="bg-slate-950 text-slate-400 uppercase tracking-wider border-b border-slate-800">
+                <tr>
+                  <th className="p-3">Algoritmo</th>
+                  <th className="p-3">F1 en Train</th>
+                  <th className="p-3 bg-cyan-950/30 text-cyan-300">F1 en Test (Ciego)</th>
+                  <th className="p-3">Precisión (Test)</th>
+                  <th className="p-3">Recall (Test)</th>
+                  <th className="p-3">Accuracy (Test)</th>
+                  <th className="p-3">Especificidad (Test)</th>
+                  <th className="p-3">Latencia Inferencia</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800 font-mono">
+                {Object.entries(resultadoEntrenamiento.metricasTest).map(([key, mTest]: [string, any]) => {
+                  const mTrain = resultadoEntrenamiento.metricasTrain[key];
+                  const isEns = key === 'ensamble';
+                  return (
+                    <tr key={key} className={`hover:bg-slate-800/40 ${isEns ? 'bg-purple-950/20 font-bold text-white' : ''}`}>
+                      <td className="p-3 font-sans text-slate-200">
+                        {mTest.nombre}
+                      </td>
+                      <td className="p-3 text-purple-300">{(mTrain.f1 * 100).toFixed(1)}%</td>
+                      <td className="p-3 text-cyan-300 bg-cyan-950/20 font-black">{(mTest.f1 * 100).toFixed(1)}%</td>
+                      <td className="p-3 text-emerald-400">{(mTest.precision * 100).toFixed(1)}%</td>
+                      <td className="p-3 text-blue-400">{(mTest.recall * 100).toFixed(1)}%</td>
+                      <td className="p-3 text-slate-300">{(mTest.accuracy * 100).toFixed(1)}%</td>
+                      <td className="p-3 text-slate-300">{(mTest.especificidad * 100).toFixed(1)}%</td>
+                      <td className="p-3 text-slate-400">{mTest.latencia_ms_promedio} ms</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs text-slate-300 leading-relaxed space-y-1">
+            <p>
+              <strong className="text-purple-400">Párrafo de Metodología de ML para el Artículo:</strong> “Para evaluar la capacidad predictiva y prevenir el sobreajuste (overfitting), el dataset CICIDS-2017 se particionó de manera estratificada en un conjunto de entrenamiento ({resultadoEntrenamiento.splitSummary.trainRatio}%, {resultadoEntrenamiento.splitSummary.trainCount} flujos) y un conjunto de prueba ciego independiente ({100 - resultadoEntrenamiento.splitSummary.trainRatio}%, {resultadoEntrenamiento.splitSummary.testCount} flujos). La estandarización de características se ajustó estrictamente sobre la distribución de entrenamiento sin filtración de datos. El ensamble Centinela alcanzó un F1-Score en prueba de {(resultadoEntrenamiento.metricasTest.ensamble.f1 * 100).toFixed(1)}% (Precisión: {(resultadoEntrenamiento.metricasTest.ensamble.precision * 100).toFixed(1)}%, Recall: {(resultadoEntrenamiento.metricasTest.ensamble.recall * 100).toFixed(1)}%) con una latencia media de {resultadoEntrenamiento.metricasTest.ensamble.latencia_ms_promedio} ms por flujo, confirmando una generalización óptima en condiciones no vistas.”
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* DOCUMENTO FINAL CONSOLIDADO LISTO PARA COPIAR */}
       <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">

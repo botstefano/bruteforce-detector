@@ -40,8 +40,10 @@ import {
 } from 'lucide-react';
 import { RealCaptchaCanvas } from './RealCaptchaCanvas';
 import { CicidsDatasetView } from './CicidsDatasetView';
+import { ValidacionCicidsRealView } from './ValidacionCicidsRealView';
 import { ReporteAcademicoView } from './ReporteAcademicoView';
 import { CicidsEvaluationSummary } from './cicids_parser';
+import { TrainingAndTestResult, TrainingConfig } from './ml_training_engine';
 
 interface Intento {
   id: number;
@@ -114,7 +116,7 @@ interface EstadoModelo {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'dataset_cicids' | 'report' | 'demos' | 'training'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'dataset_cicids' | 'cicids_real' | 'report' | 'demos' | 'training'>('dashboard');
   const [eventos, setEventos] = useState<Intento[]>([]);
   const [metricas, setMetricas] = useState<MetricasResumen | null>(null);
   const [ipsBloqueadas, setIpsBloqueadas] = useState<Record<string, number>>({});
@@ -128,6 +130,8 @@ export default function App() {
   const [cicidsData, setCicidsData] = useState<CicidsEvaluationSummary | null>(null);
   const [cicidsCargando, setCicidsCargando] = useState(false);
   const [cicidsUmbral, setCicidsUmbral] = useState(0.55);
+  const [resultadoEntrenamiento, setResultadoEntrenamiento] = useState<TrainingAndTestResult | null>(null);
+  const [entrenandoMl, setEntrenandoMl] = useState(false);
   const [expBotnet, setExpBotnet] = useState<any>(null);
   const [expAblacion, setExpAblacion] = useState<any>(null);
   const [expTraficoReal, setExpTraficoReal] = useState<any>(null);
@@ -227,11 +231,12 @@ export default function App() {
 
     // Cargar datos de CICIDS y experimentos
     try {
-      const [resCic, resExpBot, resExpAbl, resExpTraf] = await Promise.all([
+      const [resCic, resExpBot, resExpAbl, resExpTraf, resTrain] = await Promise.all([
         fetch('/api/cicids/evaluacion'),
         fetch('/api/experimentos/botnet_distribuido'),
         fetch('/api/experimentos/ablacion'),
         fetch('/api/experimentos/trafico_real'),
+        fetch('/api/cicids/resultado_entrenamiento'),
       ]);
       if (resCic.ok) {
         const cicJson = await resCic.json();
@@ -241,6 +246,10 @@ export default function App() {
       if (resExpBot.ok) setExpBotnet(await resExpBot.json());
       if (resExpAbl.ok) setExpAblacion(await resExpAbl.json());
       if (resExpTraf.ok) setExpTraficoReal(await resExpTraf.json());
+      if (resTrain && resTrain.ok) {
+        const trainJson = await resTrain.json();
+        if (trainJson.resultado) setResultadoEntrenamiento(trainJson.resultado);
+      }
     } catch (err) {
       console.error('Error fetching experiments:', err);
     }
@@ -255,6 +264,7 @@ export default function App() {
       const json = await res.json();
       if (res.ok) {
         setCicidsData(json.evaluacion);
+        if (json.resultadoEntrenamiento) setResultadoEntrenamiento(json.resultadoEntrenamiento);
         if (json.umbral) setCicidsUmbral(json.umbral);
         showToast(`Dataset cargado: ${json.totalRegistros} flujos evaluados exitosamente`);
       } else {
@@ -278,6 +288,7 @@ export default function App() {
       const json = await res.json();
       if (res.ok) {
         setCicidsData(json.evaluacion);
+        if (json.resultadoEntrenamiento) setResultadoEntrenamiento(json.resultadoEntrenamiento);
         if (json.umbral) setCicidsUmbral(json.umbral);
         showToast(`Dataset procesado: ${json.totalRegistros} flujos evaluados`);
       } else {
@@ -301,6 +312,7 @@ export default function App() {
       const json = await res.json();
       if (res.ok) {
         setCicidsData(json.evaluacion);
+        if (json.resultadoEntrenamiento) setResultadoEntrenamiento(json.resultadoEntrenamiento);
       }
     } catch {}
   };
@@ -312,6 +324,7 @@ export default function App() {
       const json = await res.json();
       if (res.ok) {
         setCicidsData(json.evaluacion);
+        if (json.resultadoEntrenamiento) setResultadoEntrenamiento(json.resultadoEntrenamiento);
         if (json.umbral) setCicidsUmbral(json.umbral);
         showToast('Muestra de 2,500 registros CICIDS-2017 restaurada');
       }
@@ -335,6 +348,40 @@ export default function App() {
     } catch {
       showToast('Error entrenando con dataset');
     }
+  };
+
+  const handleEjecutarEntrenamientoMl = async (configParams: Partial<TrainingConfig>) => {
+    setEntrenandoMl(true);
+    try {
+      const res = await fetch('/api/cicids/entrenar_y_probar_ml', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(configParams),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setResultadoEntrenamiento(json.resultado);
+        if (json.estadoModelo) setEstadoModelo(json.estadoModelo);
+        showToast('Modelos ML entrenados y probados exitosamente con CICIDS-2017');
+      } else {
+        showToast(json.error || 'Error entrenando modelos');
+      }
+    } catch {
+      showToast('Error en pipeline de entrenamiento');
+    } finally {
+      setEntrenandoMl(false);
+    }
+  };
+
+  const handleProbarFlujoEnVivo = async (params: Record<string, any>) => {
+    const res = await fetch('/api/cicids/probar_flujo_en_vivo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || 'Error en inferencia');
+    return json;
   };
 
   const fetchMetricas = async () => {
@@ -754,6 +801,20 @@ export default function App() {
                 )}
               </button>
               <button
+                onClick={() => setActiveTab('cicids_real')}
+                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                  activeTab === 'cicids_real'
+                    ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                    : 'text-emerald-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Shield className="w-4 h-4 text-emerald-400" />
+                <span>Validación CICIDS2017 (datos reales)</span>
+                <span className="bg-emerald-500/25 text-emerald-300 text-[9px] px-1.5 py-0.5 rounded-md font-black uppercase tracking-wider border border-emerald-400/30">
+                  REAL
+                </span>
+              </button>
+              <button
                 onClick={() => setActiveTab('report')}
                 className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
                   activeTab === 'report'
@@ -1161,15 +1222,23 @@ export default function App() {
         {activeTab === 'dataset_cicids' && (
           <CicidsDatasetView
             data={cicidsData}
+            resultadoEntrenamiento={resultadoEntrenamiento}
             cargando={cicidsCargando}
+            entrenandoMl={entrenandoMl}
             umbral={cicidsUmbral}
             onCambiarUmbral={handleCambiarUmbral}
             onCargarArchivo={handleSubirArchivoCsv}
             onCargarCsvTexto={handleCargarCsvTexto}
             onRestaurarMuestra2500={handleRestaurarCicids2500}
             onEntrenarConDataset={handleEntrenarConDataset}
+            onEjecutarEntrenamientoMl={handleEjecutarEntrenamientoMl}
+            onProbarFlujoEnVivo={handleProbarFlujoEnVivo}
             showToast={showToast}
           />
+        )}
+
+        {activeTab === 'cicids_real' && (
+          <ValidacionCicidsRealView showToast={showToast} />
         )}
 
         {activeTab === 'report' && (

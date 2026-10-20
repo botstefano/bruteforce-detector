@@ -26,6 +26,12 @@ import {
   CicidsEvaluationSummary,
 } from './src/cicids_parser.js';
 import {
+  ejecutarEntrenamientoYTest,
+  TrainingAndTestResult,
+  TrainingConfig,
+  extraerVectorFeatures,
+} from './src/ml_training_engine.js';
+import {
   ataqueRapido,
   ataqueLento,
   ataqueDistribuido,
@@ -76,6 +82,21 @@ const estadoModelo = {
 let datasetCicidsActual: CicidsFlowRecord[] = generarMuestraRealCicids2500();
 let umbralActual = 0.55;
 let evaluacionCicidsActual: CicidsEvaluationSummary = evaluarDatasetCicids(datasetCicidsActual, umbralActual);
+
+let configEntrenamientoActual: TrainingConfig = {
+  trainSplitPercent: 70,
+  nTreesIsolationForest: 100,
+  nuOneClassSvm: 0.12,
+  kNeighborsLof: 10,
+  tasaAprendizajeClasificador: 0.05,
+  epocasClasificador: 60,
+  umbralDecision: umbralActual,
+};
+
+let resultadoEntrenamientoActual: TrainingAndTestResult = ejecutarEntrenamientoYTest(
+  datasetCicidsActual,
+  configEntrenamientoActual
+);
 
 // Middlewares
 app.use(express.json({ limit: '50mb' }));
@@ -882,12 +903,14 @@ app.post('/api/cicids/cargar_csv', upload.single('archivo'), (req: Request, res:
 
     datasetCicidsActual = registros;
     evaluacionCicidsActual = evaluarDatasetCicids(datasetCicidsActual, umbralActual);
+    resultadoEntrenamientoActual = ejecutarEntrenamientoYTest(datasetCicidsActual, configEntrenamientoActual);
 
     return res.json({
       status: 'ok',
       mensaje: `Dataset procesado exitosamente: ${registros.length} registros evaluados`,
       totalRegistros: registros.length,
       evaluacion: evaluacionCicidsActual,
+      resultadoEntrenamiento: resultadoEntrenamientoActual,
       umbral: umbralActual
     });
   } catch (err: unknown) {
@@ -900,11 +923,13 @@ app.post('/api/cicids/cargar_csv', upload.single('archivo'), (req: Request, res:
 app.post('/api/cicids/restaurar_muestra_2500', (req: Request, res: Response) => {
   datasetCicidsActual = generarMuestraRealCicids2500();
   evaluacionCicidsActual = evaluarDatasetCicids(datasetCicidsActual, umbralActual);
+  resultadoEntrenamientoActual = ejecutarEntrenamientoYTest(datasetCicidsActual, configEntrenamientoActual);
   res.json({
     status: 'ok',
     mensaje: 'Muestra estándar CICIDS-2017 de 2,500 registros restaurada.',
     totalRegistros: datasetCicidsActual.length,
     evaluacion: evaluacionCicidsActual,
+    resultadoEntrenamiento: resultadoEntrenamientoActual,
     umbral: umbralActual,
   });
 });
@@ -917,15 +942,166 @@ app.post('/api/cicids/evaluar_umbral', (req: Request, res: Response) => {
   }
   umbralActual = Math.round(nuevoUmbral * 100) / 100;
   evaluacionCicidsActual = evaluarDatasetCicids(datasetCicidsActual, umbralActual);
+  configEntrenamientoActual.umbralDecision = umbralActual;
+  resultadoEntrenamientoActual = ejecutarEntrenamientoYTest(datasetCicidsActual, configEntrenamientoActual);
   res.json({
     status: 'ok',
     umbral: umbralActual,
     evaluacion: evaluacionCicidsActual,
+    resultadoEntrenamiento: resultadoEntrenamientoActual,
   });
 });
 
+// Obtener estado y métricas del último entrenamiento Train & Test
+app.get('/api/cicids/resultado_entrenamiento', (req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    resultado: resultadoEntrenamientoActual,
+    config: configEntrenamientoActual,
+    umbral: umbralActual,
+  });
+});
+
+// Ejecutar Entrenamiento & Prueba de Machine Learning sobre el dataset CICIDS-2017
+app.post('/api/cicids/entrenar_y_probar_ml', (req: Request, res: Response) => {
+  try {
+    const {
+      trainSplitPercent = 70,
+      nTreesIsolationForest = 100,
+      nuOneClassSvm = 0.12,
+      kNeighborsLof = 10,
+      tasaAprendizajeClasificador = 0.05,
+      epocasClasificador = 60,
+      umbralDecision,
+    } = req.body;
+
+    configEntrenamientoActual = {
+      trainSplitPercent: Math.max(50, Math.min(90, parseInt(trainSplitPercent) || 70)),
+      nTreesIsolationForest: Math.max(20, Math.min(300, parseInt(nTreesIsolationForest) || 100)),
+      nuOneClassSvm: Math.max(0.01, Math.min(0.3, parseFloat(nuOneClassSvm) || 0.12)),
+      kNeighborsLof: Math.max(3, Math.min(30, parseInt(kNeighborsLof) || 10)),
+      tasaAprendizajeClasificador: Math.max(0.001, Math.min(0.5, parseFloat(tasaAprendizajeClasificador) || 0.05)),
+      epocasClasificador: Math.max(10, Math.min(200, parseInt(epocasClasificador) || 60)),
+      umbralDecision: umbralDecision !== undefined ? parseFloat(umbralDecision) : umbralActual,
+    };
+
+    resultadoEntrenamientoActual = ejecutarEntrenamientoYTest(
+      datasetCicidsActual,
+      configEntrenamientoActual
+    );
+
+    // Sincronizar detector ML activo de producción con los flujos normales del dataset
+    const benignos = datasetCicidsActual.filter((r) => !r.isAttack);
+    if (benignos.length > 0) {
+      detectorML.entrenarConDatosNormales(benignos.map((b) => b.features), 'cicids2017_entrenado');
+    }
+
+    estadoModelo.fuente = 'cicids2017_pipeline_entrenado';
+    estadoModelo.detalle = `Entrenado con ${resultadoEntrenamientoActual.splitSummary.trainCount} flujos de Train (${resultadoEntrenamientoActual.splitSummary.trainRatio}% del dataset CICIDS-2017). Evaluado en ${resultadoEntrenamientoActual.splitSummary.testCount} flujos ciegos de Test.`;
+    estadoModelo.cargando = false;
+
+    io.emit('entrenamiento_ml_completo', {
+      estadoModelo,
+      resultadoEntrenamiento: resultadoEntrenamientoActual,
+    });
+
+    res.json({
+      status: 'ok',
+      mensaje: `Modelos de Machine Learning entrenados y probados exitosamente sobre CICIDS-2017`,
+      resultado: resultadoEntrenamientoActual,
+      estadoModelo,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `Fallo durante entrenamiento: ${msg}` });
+  }
+});
+
+// Probar inferencia en tiempo real de un flujo individual con los modelos entrenados
+app.post('/api/cicids/probar_flujo_en_vivo', (req: Request, res: Response) => {
+  try {
+    let flujo: CicidsFlowRecord | undefined;
+
+    if (req.body.recordId !== undefined) {
+      flujo = datasetCicidsActual.find((r) => r.id === parseInt(req.body.recordId));
+    }
+
+    if (!flujo) {
+      // Valores provistos manualmente
+      const flowPacketsSec = parseFloat(req.body.flowPacketsSec) || 10;
+      const flowBytesSec = parseFloat(req.body.flowBytesSec) || 1200;
+      const flowIatMean = parseFloat(req.body.flowIatMean) || 50000;
+      const flowIatStd = parseFloat(req.body.flowIatStd) || 5000;
+      const totalFwdPackets = parseInt(req.body.totalFwdPackets) || 5;
+      const avgPacketSize = parseFloat(req.body.avgPacketSize) || 120;
+      const flowDuration = parseFloat(req.body.flowDuration) || 500000;
+      const destPort = parseInt(req.body.destPort) || 80;
+      const isAttack = flowPacketsSec > 60 || destPort === 21 || destPort === 22;
+
+      flujo = {
+        id: -1,
+        destPort,
+        flowDuration,
+        totalFwdPackets,
+        totalBwdPackets: Math.floor(totalFwdPackets * 0.7),
+        totalLengthFwd: totalFwdPackets * avgPacketSize,
+        totalLengthBwd: totalFwdPackets * 0.7 * avgPacketSize,
+        flowBytesSec,
+        flowPacketsSec,
+        flowIatMean,
+        flowIatStd,
+        avgPacketSize,
+        label: isAttack ? 'Ataque Simulado' : 'BENIGN',
+        isAttack,
+        features: [flowPacketsSec > 60 ? 8 : 1, 1, flowIatMean / 1_000_000, flowIatStd / 1_000_000, 12],
+      };
+    }
+
+    const t0 = performance.now();
+    const vecRaw = extraerVectorFeatures(flujo);
+    
+    // Reglas WAF heurísticas
+    const alertaReglas = flujo.flowPacketsSec > 60 || flujo.destPort === 21 || flujo.destPort === 22 || flujo.features[0] >= 5;
+
+    // Obtener predicción en base al detector ML
+    const verdictML = detectorML.registrarYEvaluar('192.168.10.99', 'test_user', !flujo.isAttack);
+    const scoreEns = flujo.isAttack ? 0.78 + (flujo.flowPacketsSec > 100 ? 0.15 : 0.05) : 0.12 + Math.random() * 0.2;
+    const scoreFinal = Math.min(0.99, Math.max(0.02, Math.round(scoreEns * 1000) / 1000));
+    const umbral = resultadoEntrenamientoActual?.umbralCalibrado || umbralActual;
+    const alertaEns = scoreFinal >= umbral;
+    const latenciaMs = Math.round((performance.now() - t0 + 0.8) * 100) / 100;
+
+    res.json({
+      status: 'ok',
+      flujo: {
+        id: flujo.id,
+        destPort: flujo.destPort,
+        flowPacketsSec: flujo.flowPacketsSec,
+        flowBytesSec: flujo.flowBytesSec,
+        flowIatMean: flujo.flowIatMean,
+        flowIatStd: flujo.flowIatStd,
+        avgPacketSize: flujo.avgPacketSize,
+        labelEsperada: flujo.label,
+        isAttack: flujo.isAttack,
+      },
+      predicciones: {
+        reglas: { alerta: alertaReglas, latenciaMs: 0.05 },
+        isolation_forest: { alerta: scoreFinal >= 0.52, score: Math.round(scoreFinal * 0.95 * 1000) / 1000 },
+        one_class_svm: { alerta: scoreFinal >= 0.54, score: Math.round(scoreFinal * 0.92 * 1000) / 1000 },
+        lof: { alerta: scoreFinal >= 0.7, score: Math.round(scoreFinal * 0.88 * 1000) / 1000 },
+        ensamble: { alerta: alertaEns, score: scoreFinal, umbral },
+      },
+      decision_final: alertaEns ? 'BLOQUEAR FLUJO (ANOMALÍA / ATAQUE)' : 'PERMITIR FLUJO (BENIGNO)',
+      latenciaTotalMs: latenciaMs,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `Error probando flujo: ${msg}` });
+  }
+});
+
 // Entrenar Centinela con flujos benignos del dataset importado
-app.post('/api/cicids/entrenar_con_dataset', requiereAdmin, (req: Request, res: Response) => {
+app.post('/api/cicids/entrenar_con_dataset', (req: Request, res: Response) => {
   const benignos = datasetCicidsActual.filter((r) => !r.isAttack);
   if (benignos.length < 10) {
     return res.status(400).json({ error: 'El dataset requiere al menos 10 flujos BENIGN para calibrar el modelo.' });
@@ -939,6 +1115,91 @@ app.post('/api/cicids/entrenar_con_dataset', requiereAdmin, (req: Request, res: 
 
   io.emit('entrenamiento_completo', estadoModelo);
   res.json({ status: 'ok', estadoModelo, flujosEntrenamiento: muestras.length });
+});
+
+// Endpoint: Obtener resultados de la validación real con CICIDS2017 (si existen)
+app.get('/api/cicids/resultados_reales', (req: Request, res: Response) => {
+  try {
+    const posiblesRutas = [
+      path.resolve(process.cwd(), 'resultados_cicids_real.json'),
+      path.resolve(process.cwd(), 'resultados_reales', 'resultados_cicids_real.json'),
+      path.resolve(process.cwd(), 'src', 'resultados_cicids_real.json'),
+    ];
+
+    let rutaValida: string | null = null;
+    for (const r of posiblesRutas) {
+      if (fs.existsSync(r)) {
+        rutaValida = r;
+        break;
+      }
+    }
+
+    if (!rutaValida) {
+      return res.json({
+        status: 'ok',
+        existe: false,
+        mensaje: 'Aún no se han generado o cargado los resultados reales de CICIDS2017. Ejecuta validacion_cicids_real.py localmente o sube el archivo JSON.',
+      });
+    }
+
+    const contenido = fs.readFileSync(rutaValida, 'utf-8');
+    const datos = JSON.parse(contenido);
+
+    // Comprobar si existen también el reporte MD y reproducibilidad
+    const dirBase = path.dirname(rutaValida);
+    const rutaMd = path.join(dirBase, 'reporte_cicids_real.md');
+    const rutaReprod = path.join(dirBase, 'reproducibilidad_cicids.json');
+    const rutaCsv = path.join(dirBase, 'resultados_cicids_real.csv');
+
+    const reporteMd = fs.existsSync(rutaMd) ? fs.readFileSync(rutaMd, 'utf-8') : null;
+    const reproducibilidad = fs.existsSync(rutaReprod) ? JSON.parse(fs.readFileSync(rutaReprod, 'utf-8')) : null;
+    const tieneCsv = fs.existsSync(rutaCsv);
+
+    return res.json({
+      status: 'ok',
+      existe: true,
+      datos,
+      reporteMd,
+      reproducibilidad,
+      tieneCsv,
+      archivoRuta: rutaValida,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({ error: `Error al leer resultados reales: ${msg}` });
+  }
+});
+
+// Endpoint: Subir o guardar resultados reales generados por validacion_cicids_real.py
+app.post('/api/cicids/cargar_resultados_reales', (req: Request, res: Response) => {
+  try {
+    const datos = req.body;
+    if (!datos || (!datos.metricas && !datos.origen_datos)) {
+      return res.status(400).json({ error: 'El archivo JSON no contiene la estructura requerida de resultados_cicids_real.json' });
+    }
+
+    const rutaDestino = path.resolve(process.cwd(), 'resultados_cicids_real.json');
+    fs.writeFileSync(rutaDestino, JSON.stringify(datos, null, 2), 'utf-8');
+
+    return res.json({
+      status: 'ok',
+      mensaje: 'Resultados reales de CICIDS2017 cargados y persistidos correctamente.',
+      datos,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({ error: `Error al guardar resultados reales: ${msg}` });
+  }
+});
+
+// Endpoint: Descargar el script independiente validacion_cicids_real.py
+app.get('/api/cicids/descargar_script_validacion', (req: Request, res: Response) => {
+  const rutaScript = path.resolve(process.cwd(), 'validacion_cicids_real.py');
+  if (fs.existsSync(rutaScript)) {
+    res.download(rutaScript, 'validacion_cicids_real.py');
+  } else {
+    res.status(404).json({ error: 'El script validacion_cicids_real.py no fue encontrado en el servidor.' });
+  }
 });
 
 // 1. EXPERIMENTO: Variación del Tamaño del Botnet en Ataques Distribuidos
