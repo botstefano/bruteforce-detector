@@ -902,8 +902,11 @@ app.post('/api/cicids/cargar_csv', upload.single('archivo'), (req: Request, res:
     }
 
     datasetCicidsActual = registros;
-    evaluacionCicidsActual = evaluarDatasetCicids(datasetCicidsActual, umbralActual);
+    // Autocalibrar el umbral óptimo directamente en base al nuevo dataset cargado
+    configEntrenamientoActual.umbralDecision = undefined;
     resultadoEntrenamientoActual = ejecutarEntrenamientoYTest(datasetCicidsActual, configEntrenamientoActual);
+    umbralActual = resultadoEntrenamientoActual.umbralCalibrado;
+    evaluacionCicidsActual = evaluarDatasetCicids(datasetCicidsActual, umbralActual);
 
     return res.json({
       status: 'ok',
@@ -982,13 +985,15 @@ app.post('/api/cicids/entrenar_y_probar_ml', (req: Request, res: Response) => {
       kNeighborsLof: Math.max(3, Math.min(30, parseInt(kNeighborsLof) || 10)),
       tasaAprendizajeClasificador: Math.max(0.001, Math.min(0.5, parseFloat(tasaAprendizajeClasificador) || 0.05)),
       epocasClasificador: Math.max(10, Math.min(200, parseInt(epocasClasificador) || 60)),
-      umbralDecision: umbralDecision !== undefined ? parseFloat(umbralDecision) : umbralActual,
+      umbralDecision: umbralDecision !== undefined && umbralDecision !== null && umbralDecision !== '' ? parseFloat(umbralDecision) : undefined,
     };
 
     resultadoEntrenamientoActual = ejecutarEntrenamientoYTest(
       datasetCicidsActual,
       configEntrenamientoActual
     );
+    umbralActual = resultadoEntrenamientoActual.umbralCalibrado;
+    evaluacionCicidsActual = evaluarDatasetCicids(datasetCicidsActual, umbralActual);
 
     // Sincronizar detector ML activo de producción con los flujos normales del dataset
     const benignos = datasetCicidsActual.filter((r) => !r.isAttack);

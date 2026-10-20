@@ -526,31 +526,73 @@ export function ejecutarEntrenamientoYTest(
     calcularScoreEnsamble(scoresTrainIF[i], scoresTrainSVM[i], scoresTrainLOF[i], scoresTrainSup[i])
   );
 
-  // Buscar umbral óptimo tau en Train que maximice F1
-  let mejorF1 = -1;
-  let umbralOptimo = 0.52;
-  const candidatosUmbral = [0.3, 0.35, 0.4, 0.45, 0.5, 0.52, 0.55, 0.58, 0.6, 0.65, 0.7];
+  // Función de calibración óptima por barrido dinámico de umbrales en Train
+  const calibrarMejorUmbral = (scores: number[], y: number[], defaultTh = 0.5): number => {
+    if (scores.length === 0) return defaultTh;
+    const numAtaques = y.filter((val) => val === 1).length;
+    if (numAtaques === 0) {
+      const sorted = [...scores].sort((a, b) => a - b);
+      const p95Idx = Math.floor(0.95 * sorted.length);
+      return Math.round((sorted[p95Idx] || defaultTh) * 100) / 100;
+    }
 
-  for (const u of candidatosUmbral) {
-    let vp = 0, fp = 0, fn = 0;
-    for (let i = 0; i < trainRecords.length; i++) {
-      const pred = ensembleScoresTrain[i] >= u;
-      const real = yTrain[i] === 1;
-      if (pred && real) vp++;
-      else if (pred && !real) fp++;
-      else if (!pred && real) fn++;
+    let minS = Infinity, maxS = -Infinity;
+    for (const s of scores) {
+      if (s < minS) minS = s;
+      if (s > maxS) maxS = s;
     }
-    const prec = vp + fp > 0 ? vp / (vp + fp) : 0;
-    const rec = vp + fn > 0 ? vp / (vp + fn) : 0;
-    const f1 = prec + rec > 0 ? (2 * prec * rec) / (prec + rec) : 0;
-    if (f1 > mejorF1) {
-      mejorF1 = f1;
-      umbralOptimo = u;
+    if (!isFinite(minS) || !isFinite(maxS) || minS >= maxS) {
+      return defaultTh;
     }
+
+    const step = (maxS - minS) / 60;
+    let mejorF1 = -1;
+    let optTh = defaultTh;
+
+    for (let th = minS + step; th < maxS; th += step) {
+      let vp = 0, fp = 0, fn = 0;
+      for (let i = 0; i < scores.length; i++) {
+        const pred = scores[i] >= th;
+        const real = y[i] === 1;
+        if (pred && real) vp++;
+        else if (pred && !real) fp++;
+        else if (!pred && real) fn++;
+      }
+      const prec = vp + fp > 0 ? vp / (vp + fp) : 0;
+      const rec = vp + fn > 0 ? vp / (vp + fn) : 0;
+      const f1 = prec + rec > 0 ? (2 * prec * rec) / (prec + rec) : 0;
+
+      if (f1 > mejorF1) {
+        mejorF1 = f1;
+        optTh = Math.round(th * 1000) / 1000;
+      }
+    }
+
+    return optTh;
+  };
+
+  const optThIF = calibrarMejorUmbral(scoresTrainIF, yTrain, iforest.threshold);
+  const optThSVM = calibrarMejorUmbral(scoresTrainSVM, yTrain, 0.5);
+  const optThLOF = calibrarMejorUmbral(scoresTrainLOF, yTrain, 0.5);
+  const optThSup = calibrarMejorUmbral(scoresTrainSup, yTrain, 0.5);
+  const optThEns = calibrarMejorUmbral(ensembleScoresTrain, yTrain, 0.5);
+
+  const umbralFinal = config.umbralDecision !== undefined ? config.umbralDecision : optThEns;
+  
+  // Calcular F1 alcanzado en Train con el umbral final
+  let trainVp = 0, trainFp = 0, trainFn = 0;
+  for (let i = 0; i < trainRecords.length; i++) {
+    const pred = ensembleScoresTrain[i] >= umbralFinal;
+    const real = yTrain[i] === 1;
+    if (pred && real) trainVp++;
+    else if (pred && !real) trainFp++;
+    else if (!pred && real) trainFn++;
   }
+  const trainPrec = trainVp + trainFp > 0 ? trainVp / (trainVp + trainFp) : 0;
+  const trainRec = trainVp + trainFn > 0 ? trainVp / (trainVp + trainFn) : 0;
+  const trainF1Score = trainPrec + trainRec > 0 ? (2 * trainPrec * trainRec) / (trainPrec + trainRec) : 0;
 
-  const umbralFinal = config.umbralDecision !== undefined ? config.umbralDecision : umbralOptimo;
-  logs.push(`[7/7] Ensamble optimizado: umbral de decisión calibrado en tau=${umbralFinal.toFixed(2)} (F1 en Train: ${(mejorF1 * 100).toFixed(1)}%).`);
+  logs.push(`[7/7] Ensamble optimizado: umbral calibrado en tau=${umbralFinal.toFixed(3)} (F1 en Train: ${(trainF1Score * 100).toFixed(1)}%).`);
 
   const tiempoEntrenamientoMs = Math.round(performance.now() - inicioT);
 
@@ -599,10 +641,10 @@ export function ejecutarEntrenamientoYTest(
 
   // Predicciones en Train
   const predsTrainReglas = trainRecords.map((r) => r.flowPacketsSec > 60 || r.features[0] >= 5);
-  const predsTrainIF = scoresTrainIF.map((s) => s >= iforest.threshold);
-  const predsTrainSVM = scoresTrainSVM.map((s) => s >= 0.52);
-  const predsTrainLOF = scoresTrainLOF.map((s) => s >= 0.65);
-  const predsTrainSup = scoresTrainSup.map((s) => s >= 0.5);
+  const predsTrainIF = scoresTrainIF.map((s) => s >= optThIF);
+  const predsTrainSVM = scoresTrainSVM.map((s) => s >= optThSVM);
+  const predsTrainLOF = scoresTrainLOF.map((s) => s >= optThLOF);
+  const predsTrainSup = scoresTrainSup.map((s) => s >= optThSup);
   const predsTrainEns = ensembleScoresTrain.map((s) => s >= umbralFinal);
 
   const metricasTrain: Record<string, MetricasAlgoritmo> = {
@@ -624,10 +666,10 @@ export function ejecutarEntrenamientoYTest(
   );
 
   const predsTestReglas = testRecords.map((r) => r.flowPacketsSec > 60 || r.features[0] >= 5);
-  const predsTestIF = scoresTestIF.map((s) => s >= iforest.threshold);
-  const predsTestSVM = scoresTestSVM.map((s) => s >= 0.52);
-  const predsTestLOF = scoresTestLOF.map((s) => s >= 0.65);
-  const predsTestSup = scoresTestSup.map((s) => s >= 0.5);
+  const predsTestIF = scoresTestIF.map((s) => s >= optThIF);
+  const predsTestSVM = scoresTestSVM.map((s) => s >= optThSVM);
+  const predsTestLOF = scoresTestLOF.map((s) => s >= optThLOF);
+  const predsTestSup = scoresTestSup.map((s) => s >= optThSup);
   const predsTestEns = ensembleScoresTest.map((s) => s >= umbralFinal);
 
   const metricasTest: Record<string, MetricasAlgoritmo> = {
