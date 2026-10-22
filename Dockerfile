@@ -6,8 +6,8 @@ WORKDIR /app
 # Copiar configuraciones y dependencias
 COPY package.json tsconfig.json package-lock.json* ./
 
-# Instalar dependencias para compilar (funciona tanto si hay package-lock como si no)
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+# Instalar dependencias para compilar de forma robusta
+RUN npm install
 
 # Copiar código fuente y compilar a dist/
 COPY . .
@@ -24,10 +24,11 @@ ENV NODE_ENV=production \
 COPY package.json package-lock.json* ./
 
 # Instalar sólo dependencias de producción
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi
+RUN npm install --omit=dev
 
 # Copiar dist compilado (backend en dist/ y frontend React SPA en dist/client/)
 COPY --from=builder /app/dist ./dist
+COPY results_baseline ./results_baseline
 
 EXPOSE 3000
 
