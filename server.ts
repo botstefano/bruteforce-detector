@@ -548,7 +548,7 @@ app.post('/demo/login', async (req: Request, res: Response) => {
   const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
 
   // PASO 3: Registrar el intento en Centinela (tráfico real es_simulado=0)
-  let evento;
+  let evento: ReturnType<typeof procesarIntento>;
   try {
     evento = await procesarIntentoCapturado(ip, usuario, exitoso, 'demo_login');
   } catch (error) {
@@ -599,7 +599,7 @@ app.post('/login', async (req: Request, res: Response) => {
     });
   }
 
-  let evento;
+  let evento: ReturnType<typeof procesarIntento>;
   try {
     const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
     evento = await procesarIntentoCapturado(ip, usuario, exitoso, 'login_prueba_interno');
@@ -998,7 +998,7 @@ app.get('/api/estado_modelo', (req: Request, res: Response) => {
 // =================================================================
 
 // Obtener evaluación actual de CICIDS-2017
-app.get('/api/cicids/evaluacion', (req: Request, res: Response) => {
+app.get('/api/cicids/evaluacion', requiereAdmin, (req: Request, res: Response) => {
   res.json({
     evaluacion: evaluacionCicidsActual,
     umbral: umbralActual,
@@ -1007,7 +1007,7 @@ app.get('/api/cicids/evaluacion', (req: Request, res: Response) => {
 });
 
 // Cargar dataset CICIDS-2017 (vía CSV texto o archivo multipart)
-app.post('/api/cicids/cargar_csv', upload.single('archivo'), (req: Request, res: Response) => {
+app.post('/api/cicids/cargar_csv', requiereAdmin, upload.single('archivo'), (req: Request, res: Response) => {
   try {
     let csvText = '';
     if (req.file) {
@@ -1045,7 +1045,7 @@ app.post('/api/cicids/cargar_csv', upload.single('archivo'), (req: Request, res:
 });
 
 // Restaurar muestra estándar de 2,500 registros CICIDS-2017
-app.post('/api/cicids/restaurar_muestra_2500', (req: Request, res: Response) => {
+app.post('/api/cicids/restaurar_muestra_2500', requiereAdmin, (req: Request, res: Response) => {
   datasetCicidsActual = generarMuestraRealCicids2500();
   evaluacionCicidsActual = evaluarDatasetCicids(datasetCicidsActual, umbralActual);
   res.json({
@@ -1058,7 +1058,7 @@ app.post('/api/cicids/restaurar_muestra_2500', (req: Request, res: Response) => 
 });
 
 // Ajustar umbral de decisión tau del ensamble
-app.post('/api/cicids/evaluar_umbral', (req: Request, res: Response) => {
+app.post('/api/cicids/evaluar_umbral', requiereAdmin, (req: Request, res: Response) => {
   const nuevoUmbral = parseFloat(req.body.umbral);
   if (isNaN(nuevoUmbral) || nuevoUmbral < 0.05 || nuevoUmbral > 0.95) {
     return res.status(400).json({ error: 'Umbral debe estar entre 0.05 y 0.95' });
