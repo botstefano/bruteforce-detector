@@ -36,6 +36,7 @@ create table if not exists public.centinela_auth_events (
   ground_truth_updated_at timestamptz,
   ground_truth_notes text,
   experiment_id uuid references public.centinela_experiments(id) on delete set null,
+  campaign_id text,
   scenario text,
   dataset_split text not null default 'unassigned'
     check (dataset_split in ('unassigned', 'train', 'validation', 'test')),
@@ -48,7 +49,7 @@ create table if not exists public.centinela_auth_events (
   alerta_lof boolean not null default false,
   score_ml double precision,
   features double precision[] not null,
-  feature_schema_version text not null default 'centinela-auth-features-v1',
+  feature_schema_version text not null default 'centinela-auth-features-v2',
   latency_rules_ms double precision,
   latency_ml_ms double precision,
   latency_total_ms double precision,
@@ -66,7 +67,11 @@ create table if not exists public.centinela_auth_events (
 alter table public.centinela_auth_events
   add column if not exists features double precision[];
 alter table public.centinela_auth_events
-  add column if not exists feature_schema_version text not null default 'centinela-auth-features-v1';
+  add column if not exists feature_schema_version text not null default 'centinela-auth-features-v2';
+alter table public.centinela_auth_events
+  alter column feature_schema_version set default 'centinela-auth-features-v2';
+alter table public.centinela_auth_events
+  add column if not exists campaign_id text;
 
 -- Re-ejecutable también si la tabla ya existía antes de incorporar el split temporal.
 alter table public.centinela_auth_events
