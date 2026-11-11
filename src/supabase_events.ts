@@ -183,45 +183,18 @@ export async function labelObservedEvent(input: {
     throw new Error('El método y la justificación del etiquetado son obligatorios.');
   }
 
-  const { data: current, error: readError } = await client
-    .from('centinela_auth_events')
-    .select('event_id, ground_truth_label')
-    .eq('event_id', input.eventId)
-    .eq('is_simulated', false)
-    .maybeSingle();
-
-  if (readError) throw new Error(`No se pudo consultar el evento: ${readError.message}`);
-  if (!current) throw new Error('No existe un evento capturado con ese identificador.');
-
-  const now = new Date().toISOString();
-  const { error: updateError } = await client
-    .from('centinela_auth_events')
-    .update({
-      ground_truth_label: input.label,
-      ground_truth_method: input.method.trim(),
-      ground_truth_notes: input.rationale.trim(),
-      ground_truth_updated_at: now,
-    })
-    .eq('event_id', input.eventId)
-    .eq('is_simulated', false);
-
-  if (updateError) throw new Error(`No se pudo actualizar la etiqueta: ${updateError.message}`);
-
-  const { error: historyError } = await client.from('centinela_event_label_history').insert({
-    event_id: input.eventId,
-    previous_label: current.ground_truth_label,
-    new_label: input.label,
-    labeling_method: input.method.trim(),
-    rationale: input.rationale.trim(),
-    labeled_by: input.labeledBy?.trim() || null,
-    provenance: {},
+  const { data, error } = await client.rpc('label_centinela_event', {
+    p_event_id: input.eventId,
+    p_label: input.label,
+    p_method: input.method.trim(),
+    p_rationale: input.rationale.trim(),
+    p_labeled_by: input.labeledBy?.trim() || null,
   });
 
-  if (historyError) {
-    throw new Error(`La etiqueta fue actualizada, pero falló su historial: ${historyError.message}`);
+  if (error) {
+    throw new Error(`No se pudo etiquetar el evento de forma transaccional: ${error.message}`);
   }
-
-  return { event_id: input.eventId, previous_label: current.ground_truth_label, label: input.label };
+  return data;
 }
 
 function calculateMetrics(
