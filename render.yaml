@@ -27,7 +27,7 @@ services:
         sync: false
       - key: CENTINELA_INGEST_TOKEN
         sync: false
-      - key: CENTINELA_EXPERIMENT_ID
+      - key: CENTINELA_DEMO_CREDENTIALS_JSON
         sync: false
       - key: CENTINELA_VERSION
         value: "research-capture-v1"
