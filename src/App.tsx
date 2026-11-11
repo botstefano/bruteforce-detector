@@ -144,7 +144,7 @@ export default function App() {
     return localStorage.getItem('centinela_sesion_activa') === 'true';
   });
   const [gateUser, setGateUser] = useState('admin');
-  const [gatePass, setGatePass] = useState('S3guro#2026');
+  const [gatePass, setGatePass] = useState('');
   const [gateCaptchaId, setGateCaptchaId] = useState('');
   const [gateCaptchaInput, setGateCaptchaInput] = useState('');
   const [gateCaptchaReset, setGateCaptchaReset] = useState(0);
@@ -610,29 +610,14 @@ export default function App() {
                     type={mostrarPassword ? 'text' : 'password'}
                     value={gatePass}
                     onChange={(e) => setGatePass(e.target.value)}
-                    placeholder="S3guro#2026"
+                    placeholder="Contraseña configurada en el servidor"
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono"
                   />
                 </div>
               </div>
 
-              {/* Botón rápido para autocompletar credenciales por defecto */}
-              <div className="flex items-center justify-between text-[11px] bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
-                <span className="text-slate-400">Credenciales por defecto:</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGateUser('admin');
-                    setGatePass('S3guro#2026');
-                    showToast('Credenciales admin / S3guro#2026 aplicadas');
-                  }}
-                  className="text-cyan-400 hover:text-cyan-300 font-bold flex items-center space-x-1 cursor-pointer bg-cyan-950/60 hover:bg-cyan-900/60 px-2.5 py-1 rounded-lg border border-cyan-800/60 transition-colors"
-                >
-                  <Sparkles className="w-3 h-3 text-yellow-300" />
-                  <span>Autocompletar (admin / S3guro#2026)</span>
-                </button>
-              </div>
+              <p className="text-[11px] text-slate-500">Usa la contraseña definida en la variable DASHBOARD_PASSWORD del servidor.</p>
 
               <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/90 space-y-3">
                 <div className="flex items-center justify-between">
