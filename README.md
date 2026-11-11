@@ -10,6 +10,7 @@ The empirical capture path is separate from the historical traffic generators an
 - `POST /demo/login` records HTTP authentication requests handled by the Centinela demo login. Persistent storage must be configured.
 - Captured records are written to `public.centinela_auth_events` before the HTTP response is sent.
 - IP and user identifiers are HMAC-pseudonymized before storage. Raw passwords are never accepted by the capture endpoint or stored.
+- The exact five-dimensional feature vector used for each detector decision, its schema version, and measured inference latencies are stored with the event. No feature values are backfilled with random estimates.
 - Captured events are initially labeled `unknown`. A failed password is not automatically considered an attack.
 - The empirical event repository rejects simulator events. Exports read only events captured through the empirical path.
 - The detector starts untrained. It can be trained only from at least 50 benign events captured and explicitly labeled in the active experiment's training period.
@@ -62,7 +63,7 @@ For Render, set the secret variables in the Render dashboard. `render.yaml` decl
 
 ## Experiment setup and temporal split
 
-Create an experiment before collecting events. The API requires two ISO-8601 UTC cutoffs, fixed before collection begins:
+Create an experiment before collecting events. The API requires two future ISO-8601 UTC cutoffs, fixed before collection begins:
 
 ```http
 POST /api/experimentos
@@ -82,7 +83,7 @@ Each event is assigned by its server-observed timestamp:
 - From `train_end_at` until `validation_end_at`: `validation`.
 - At or after `validation_end_at`: `test`.
 
-Training uses only records labeled `benign` in the training split. Final classification metrics use only labeled events in the test split. Validation events are kept separate. An event with uncertain provenance remains `unknown` and is excluded from classification metrics. Do not move cutoffs after inspecting model results.
+Training may be started only after `train_end_at` and before `validation_end_at`. It uses only the exact stored feature vectors from records labeled `benign` in the training split, with a minimum of 50 windows. The trained baseline is frozen in the experiment metadata; another fit requires a new experiment. On restart, a frozen baseline is reconstructed from the same training vectors. Final classification metrics use only labeled events in the test split. Validation events remain separate. An event with uncertain provenance remains `unknown` and is excluded from classification metrics. Do not move cutoffs after inspecting model results.
 
 ## Integration from an authentication backend
 
