@@ -349,6 +349,15 @@ async function procesarIntentoCapturado(
 }
 
 // Middleware de autenticación de admin
+function bloquearSimulacionDuranteExperimento(req: Request, res: Response, next: NextFunction) {
+  if (getActiveExperimentId()) {
+    return res.status(409).json({
+      error: 'Las simulaciones están deshabilitadas durante un experimento empírico activo para evitar contaminar las ventanas de características.',
+    });
+  }
+  return next();
+}
+
 function requiereAdmin(req: Request, res: Response, next: NextFunction) {
   if (!DASHBOARD_PASSWORD || !SESSION_SECRET) {
     return res.status(503).json({ error: 'Autenticación administrativa no configurada en el servidor.' });
@@ -1649,7 +1658,7 @@ ${baselineData?.ablation_study ? baselineData.ablation_study.map((a: any) => `| 
 // 5. SIMULACIONES (Admin)
 // =================================================================
 
-app.post('/simular/ataque', requiereAdmin, async (req: Request, res: Response) => {
+app.post('/simular/ataque', requiereAdmin, bloquearSimulacionDuranteExperimento, async (req: Request, res: Response) => {
   const data = req.body || {};
   const tipo = data.tipo || 'rapido';
   const usuario = data.usuario || USUARIOS_COMUNES[Math.floor(Math.random() * USUARIOS_COMUNES.length)];
@@ -1689,7 +1698,7 @@ app.post('/simular/ataque', requiereAdmin, async (req: Request, res: Response) =
   res.json({ status: 'lanzado', tipo, usuario });
 });
 
-app.post('/simular/legitimo', requiereAdmin, (req: Request, res: Response) => {
+app.post('/simular/legitimo', requiereAdmin, bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const cantidad = parseInt(data.cantidad || '5', 10);
 
@@ -1707,7 +1716,7 @@ app.post('/simular/legitimo', requiereAdmin, (req: Request, res: Response) => {
   res.json({ status: 'lanzado', cantidad });
 });
 
-app.post('/simular/benchmark_masivo', requiereAdmin, (req: Request, res: Response) => {
+app.post('/simular/benchmark_masivo', requiereAdmin, bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const total = Math.min(30000, Math.max(50, parseInt((data.cantidad || req.query.cantidad || '25000') as string, 10)));
   const usuariosValidos = Object.keys(CREDENCIALES_VALIDAS);
@@ -1774,7 +1783,7 @@ app.post('/simular/benchmark_masivo', requiereAdmin, (req: Request, res: Respons
   });
 });
 
-app.post('/reset', requiereAdmin, (req: Request, res: Response) => {
+app.post('/reset', requiereAdmin, bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   db.limpiar();
   db.limpiarBloqueos();
   detectorReglas.reset();
@@ -1787,7 +1796,7 @@ app.post('/reset', requiereAdmin, (req: Request, res: Response) => {
 // 6. BOT ATACANTE REAL VÍA HTTP
 // =================================================================
 
-app.post('/lanzar_bot', requiereAdmin, async (req: Request, res: Response) => {
+app.post('/lanzar_bot', requiereAdmin, bloquearSimulacionDuranteExperimento, async (req: Request, res: Response) => {
   const data = req.body || {};
   const tipo = data.tipo || 'rapido';
   if (!['rapido', 'lento', 'distribuido'].includes(tipo)) {
