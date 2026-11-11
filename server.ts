@@ -873,9 +873,20 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
         slow_rule: '8 failures / 900 seconds',
         distributed_rule: '4 distinct IPs / 120 seconds',
         ml_features: 5,
+        feature_schema: 'centinela-auth-features-v2',
       },
       metadata: data.metadata && typeof data.metadata === 'object' ? data.metadata : {},
     });
+    // Each experiment begins with a clean in-memory detection state and no inherited model.
+    db.limpiar();
+    db.limpiarBloqueos();
+    detectorReglas.reset();
+    detectorML.resetForNewExperiment();
+    estadoModelo.fuente = 'sin_entrenar';
+    estadoModelo.detalle = 'Nuevo experimento: baseline pendiente de eventos benignos etiquetados.';
+    estadoModelo.muestras_entrenamiento = 0;
+    estadoModelo.cargando = false;
+    io.emit('entrenamiento_completo', estadoModelo);
     return res.status(201).json({ status: 'running', experiment });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo crear el experimento.';
