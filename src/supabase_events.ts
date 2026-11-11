@@ -341,6 +341,7 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
 
   return {
     source: 'centinela_supabase_observed_events',
+    experiment_id: experimentId === undefined ? activeExperimentId : experimentId,
     total_captured_events: all.length,
     labeled_events: labeled.length,
     unknown_events: all.length - labeled.length,
