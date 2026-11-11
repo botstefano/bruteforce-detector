@@ -14,9 +14,12 @@ import path from 'node:path';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 
 import {
   calculateObservedMetrics,
+  createExperimentRecord,
+  finishExperimentRecord,
   eventStoreStatus,
   fetchObservedEvents,
   labelObservedEvent,
@@ -295,12 +298,19 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
     return res.status(401).json({ error: 'Token de ingesta inválido.' });
   }
   const usuario = typeof data.usuario === 'string' ? data.usuario.trim() : '';
+  const reportedIp = typeof data.ip === 'string' ? data.ip.trim() : '';
   if (!usuario || usuario.length > 254 || typeof data.exitoso !== 'boolean') {
     return res.status(400).json({ error: 'Se requiere usuario válido y exitoso booleano.' });
   }
+  if (reportedIp && isIP(reportedIp) === 0) {
+    return res.status(400).json({ error: 'La IP informada por el backend no es válida.' });
+  }
 
   try {
-    const evento = await procesarIntentoCapturado(ipDelCliente(req), usuario, data.exitoso, 'integracion_autenticacion');
+    // La IP del cuerpo solo se acepta en este endpoint porque ya se validó el token
+    // de servicio a servicio; nunca se acepta de clientes públicos.
+    const ip = reportedIp || ipDelCliente(req);
+    const evento = await procesarIntentoCapturado(ip, usuario, data.exitoso, 'integracion_autenticacion');
     return res.json({
       event_id: evento.event_id,
       alerta: evento.bloqueado_ahora,
@@ -659,7 +669,8 @@ app.get('/api/bloqueadas', requiereAdmin, (req: Request, res: Response) => {
 // Dataset persistido: solo solicitudes observadas, nunca registros del simulador.
 app.get('/api/dataset/capturado', requiereAdmin, async (req: Request, res: Response) => {
   try {
-    const events = await fetchObservedEvents();
+    const requestedExperimentId = typeof req.query.experiment_id === 'string' ? req.query.experiment_id : undefined;
+    const events = await fetchObservedEvents(requestedExperimentId);
     const formato = typeof req.query.formato === 'string' ? req.query.formato : 'json';
     if (formato === 'csv') {
       const headers = Object.keys(events[0] ?? {
@@ -683,10 +694,48 @@ app.get('/api/dataset/capturado', requiereAdmin, async (req: Request, res: Respo
 
 app.get('/api/experimentos/metricas_capturadas', requiereAdmin, async (_req: Request, res: Response) => {
   try {
-    return res.json(await calculateObservedMetrics());
+    const experimentId = typeof _req.query.experiment_id === 'string' ? _req.query.experiment_id : undefined;
+    return res.json(await calculateObservedMetrics(experimentId));
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudieron calcular las métricas.';
     return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response) => {
+  const data = req.body || {};
+  const protocolName = typeof data.protocol_name === 'string' ? data.protocol_name.trim() : '';
+  const scenario = typeof data.scenario === 'string' ? data.scenario.trim() : '';
+  if (!protocolName || !scenario) {
+    return res.status(400).json({ error: 'Se requieren protocol_name y scenario.' });
+  }
+  try {
+    const experiment = await createExperimentRecord({
+      protocolName,
+      scenario,
+      description: typeof data.description === 'string' ? data.description : undefined,
+      detectorConfig: {
+        fast_rule: '5 failures / 60 seconds',
+        slow_rule: '8 failures / 900 seconds',
+        distributed_rule: '4 distinct IPs / 120 seconds',
+        ml_features: 5,
+      },
+      metadata: data.metadata && typeof data.metadata === 'object' ? data.metadata : {},
+    });
+    return res.status(201).json({ status: 'running', experiment });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo crear el experimento.';
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/experimentos/:experimentId/finalizar', requiereAdmin, async (req: Request, res: Response) => {
+  try {
+    const experiment = await finishExperimentRecord(req.params.experimentId);
+    return res.json({ status: 'completed', experiment });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo finalizar el experimento.';
+    return res.status(400).json({ error: message });
   }
 });
 
