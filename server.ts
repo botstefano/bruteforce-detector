@@ -2064,27 +2064,59 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => clearTimeout(expiryTimer));
 });
 
+async function restaurarVentanasRecientesDeDetectores(): Promise<number> {
+  const history = await fetchRecentObservedEventsForState(900);
+  for (const event of history) {
+    const timestamp = Date.parse(event.occurred_at) / 1000;
+    // Reproducir las últimas ventanas con las mismas claves HMAC usadas en la captura.
+    // No emitir eventos ni volver a persistirlos: solo reconstruir estado de ventana.
+    detectorReglas.evaluar(
+      event.source_ip_hash,
+      event.user_key_hash,
+      event.auth_success,
+      timestamp
+    );
+    detectorML.registrarYEvaluar(
+      event.source_ip_hash,
+      event.user_key_hash,
+      event.auth_success,
+      timestamp
+    );
+  }
+  return history.length;
+}
+
 // Iniciar servidor con middleware de Vite o estáticos en producción
 async function startServer() {
   if (eventStoreStatus().configured) {
     try {
       const activeExperiment = await restoreActiveExperimentRecord();
-      if (activeExperiment && getActiveExperimentState()?.trainingFrozen) {
-        console.log('Experimento y baseline congelado restaurados:', activeExperiment);
-        await entrenarModeloDesdeCapturasBenignas(true);
-        console.log(`Modelo restaurado con ${estadoModelo.muestras_entrenamiento} ventanas benignas capturadas.`);
+      if (activeExperiment) {
+        console.log('Experimento activo restaurado:', activeExperiment);
+        if (getActiveExperimentState()?.trainingFrozen) {
+          await entrenarModeloDesdeCapturasBenignas(true);
+          console.log(`Modelo restaurado con ${estadoModelo.muestras_entrenamiento} ventanas benignas capturadas.`);
+        } else {
+          estadoModelo.fuente = 'sin_entrenar';
+          estadoModelo.detalle = 'Experimento activo sin baseline congelado. Captura y etiqueta el periodo train antes de entrenar.';
+          estadoModelo.muestras_entrenamiento = 0;
+        }
+        const restoredEvents = await restaurarVentanasRecientesDeDetectores();
+        console.log(`Ventanas recientes de detectores restauradas desde Supabase: ${restoredEvents} eventos.`);
       } else {
         estadoModelo.fuente = 'sin_entrenar';
-        estadoModelo.detalle = activeExperiment
-          ? 'Experimento activo sin baseline congelado. Captura y etiqueta el periodo train antes de entrenar.'
-          : 'No hay experimento activo. Crea uno e inicia la recolección de eventos.';
+        estadoModelo.detalle = 'No hay experimento activo. Crea uno e inicia la recolección de eventos.';
         estadoModelo.muestras_entrenamiento = 0;
       }
     } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Error desconocido al restaurar estado.';
+      console.error('No se pudo restaurar el estado experimental desde Supabase:', detail);
+      eventCapturePaused = true;
+      eventCapturePauseReason = 'No se pudo restaurar el estado del experimento desde Supabase. La captura permanece pausada hasta verificar el almacenamiento.';
       estadoModelo.fuente = 'sin_entrenar';
-      estadoModelo.detalle = error instanceof Error ? error.message : 'No se pudo restaurar el entrenamiento desde Supabase.';
+      estadoModelo.detalle = eventCapturePauseReason;
       estadoModelo.muestras_entrenamiento = 0;
-      console.warn('Modelo iniciado sin entrenamiento desde observaciones:', estadoModelo.detalle);
+      console.warn('Captura iniciada en modo pausado por integridad experimental.');
     }
   } else {
     console.warn('Supabase no está configurado: la captura persistente y el entrenamiento empírico no están disponibles.');
