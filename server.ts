@@ -145,7 +145,7 @@ async function entrenarModeloDesdeCapturasBenignas(restaurarModeloCongelado = fa
     }
   }
 
-  const muestras = await fetchBenignTrainingSamples(120);
+  const muestras = await fetchBenignTrainingSamples();
   if (muestras.length < 50) {
     throw new Error(`Se necesitan al menos 50 ventanas benignas etiquetadas en el split train; disponibles: ${muestras.length}.`);
   }
@@ -315,6 +315,7 @@ function procesarIntento(
     razon_reglas: veredictoReglas.razon,
     alerta_ml: veredictoML.alerta,
     score_ml: veredictoML.score,
+    features: veredictoML.features,
     modelos_ml: veredictoML.modelos,
     origen,
     bloqueado_ahora: alerta,
