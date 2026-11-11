@@ -47,6 +47,8 @@ create table if not exists public.centinela_auth_events (
   alerta_ocsvm boolean not null default false,
   alerta_lof boolean not null default false,
   score_ml double precision,
+  features double precision[] not null,
+  feature_schema_version text not null default 'centinela-auth-features-v1',
   latency_rules_ms double precision,
   latency_ml_ms double precision,
   latency_total_ms double precision,
@@ -54,10 +56,17 @@ create table if not exists public.centinela_auth_events (
   config_version text,
   metadata jsonb not null default '{}'::jsonb,
   check (score_ml is null or (score_ml >= 0 and score_ml <= 1)),
+  check (cardinality(features) = 5),
   check (latency_rules_ms is null or latency_rules_ms >= 0),
   check (latency_ml_ms is null or latency_ml_ms >= 0),
   check (latency_total_ms is null or latency_total_ms >= 0)
 );
+
+-- Re-ejecutable también si una tabla de eventos de prueba ya existía.
+alter table public.centinela_auth_events
+  add column if not exists features double precision[];
+alter table public.centinela_auth_events
+  add column if not exists feature_schema_version text not null default 'centinela-auth-features-v1';
 
 -- Re-ejecutable también si la tabla ya existía antes de incorporar el split temporal.
 alter table public.centinela_auth_events
