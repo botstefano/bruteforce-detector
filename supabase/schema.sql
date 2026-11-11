@@ -37,6 +37,8 @@ create table if not exists public.centinela_auth_events (
   ground_truth_notes text,
   experiment_id uuid references public.centinela_experiments(id) on delete set null,
   scenario text,
+  dataset_split text not null default 'unassigned'
+    check (dataset_split in ('unassigned', 'train', 'validation', 'test')),
   request_id uuid,
   alerta_reglas boolean not null default false,
   razon_reglas text,
@@ -75,6 +77,8 @@ create index if not exists idx_centinela_events_experiment
   on public.centinela_auth_events (experiment_id, occurred_at);
 create index if not exists idx_centinela_events_truth
   on public.centinela_auth_events (ground_truth_label, occurred_at);
+create index if not exists idx_centinela_events_split
+  on public.centinela_auth_events (experiment_id, dataset_split, occurred_at);
 create index if not exists idx_centinela_events_simulated
   on public.centinela_auth_events (is_simulated, occurred_at);
 create index if not exists idx_centinela_events_source_ip_hash
