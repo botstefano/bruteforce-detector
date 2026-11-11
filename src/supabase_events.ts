@@ -133,6 +133,9 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
   if (!hashSecret) {
     throw new Error('Falta CENTINELA_HASH_SECRET para seudonimizar identificadores.');
   }
+  if (!activeExperimentId || !activeSplitBoundaries) {
+    throw new Error('No hay un experimento activo con divisiones temporales. Crea el experimento antes de capturar eventos.');
+  }
 
   const row = {
     event_id: event.event_id,
@@ -294,6 +297,16 @@ export async function createExperimentRecord(input: {
   metadata?: Record<string, unknown>;
 }) {
   if (!client || !hashSecret) throw new Error('El almacén persistente no está configurado.');
+  const { data: existing, error: existingError } = await client
+    .from('centinela_experiments')
+    .select('id, protocol_name')
+    .eq('status', 'running')
+    .limit(1)
+    .maybeSingle();
+  if (existingError) throw new Error(`No se pudo comprobar si existe otro experimento activo: ${existingError.message}`);
+  if (existing) {
+    throw new Error(`Ya existe un experimento activo (${existing.id}). Finalízalo antes de crear otro.`);
+  }
   const trainEndMs = Date.parse(input.trainEndAt);
   const validationEndMs = Date.parse(input.validationEndAt);
   if (!Number.isFinite(trainEndMs) || !Number.isFinite(validationEndMs) || trainEndMs <= Date.now() || validationEndMs <= trainEndMs) {
@@ -438,9 +451,21 @@ function calculateMetrics(
 }
 
 export async function calculateObservedMetrics(experimentId?: string | null) {
-  const all = await fetchObservedEvents(experimentId);
   const selectedExperimentId = experimentId === undefined ? activeExperimentId : experimentId;
-  const baselineFrozen = Boolean(selectedExperimentId && selectedExperimentId === activeExperimentId && activeTrainingFrozen);
+  if (!selectedExperimentId) {
+    throw new Error('Indica experiment_id para consultar las métricas de un experimento.');
+  }
+  if (!client || !hashSecret) throw new Error('El almacén persistente no está configurado.');
+  const { data: experiment, error: experimentError } = await client
+    .from('centinela_experiments')
+    .select('metadata, status')
+    .eq('id', selectedExperimentId)
+    .maybeSingle();
+  if (experimentError) throw new Error(`No se pudo recuperar el experimento: ${experimentError.message}`);
+  if (!experiment) throw new Error('El experimento solicitado no existe.');
+  const experimentMetadata = (experiment.metadata ?? {}) as Record<string, unknown>;
+  const baselineFrozen = experimentMetadata.training_frozen === true;
+  const all = await fetchObservedEvents(selectedExperimentId);
   const testEvents = all.filter((event) => event.dataset_split === 'test');
   const labeled = testEvents.filter((event) => event.ground_truth_label !== 'unknown');
   const benign = labeled.filter((event) => event.ground_truth_label === 'benign').length;
