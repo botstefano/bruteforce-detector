@@ -68,6 +68,9 @@ function validateConfiguration() {
   if (IS_PRODUCTION && target.protocol !== "https:") {
     throw new Error("CENTINELA_API_URL debe utilizar HTTPS en producción.");
   }
+  if (target.pathname !== "/" || target.search || target.hash || target.username || target.password) {
+    throw new Error("CENTINELA_API_URL debe ser únicamente el origen del servicio detector, sin rutas ni parámetros.");
+  }
   if (CENTINELA_INGEST_TOKEN.length < 32) {
     throw new Error("CENTINELA_INGEST_TOKEN debe contener al menos 32 caracteres.");
   }
@@ -281,7 +284,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, error.statusCode || 400, { error: error.message });
     }
 
-    const username = typeof data.username === "string" ? data.username.trim() : "";
+    const username = typeof data.username === "string" ? data.username.trim().toLowerCase() : "";
     const password = typeof data.password === "string" ? data.password : "";
 
     if (!/^[a-zA-Z0-9_.@-]{1,64}$/.test(username) || password.length > 256) {
