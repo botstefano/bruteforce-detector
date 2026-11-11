@@ -27,7 +27,9 @@ import {
   labelObservedEvent,
   persistObservedEvent,
   fetchBenignTrainingSamples,
+  fetchRecentObservedEventsForState,
   freezeActiveExperimentTraining,
+  getAnalyticsIdentifiers,
   getActiveExperimentId,
   getActiveExperimentState,
   type CapturedAuthEvent,
@@ -312,7 +314,9 @@ function procesarIntento(
   esAtaqueReal = 0,
   origen = 'simulador',
   esSimulado = 1,
-  yaEsBooleanoExitoso = false
+  yaEsBooleanoExitoso = false,
+  detectorIpKey = ip,
+  detectorUserKey = usuario
 ) {
   const ahora = Date.now() / 1000;
   let exitoso = false;
@@ -324,10 +328,10 @@ function procesarIntento(
 
   const totalStart = performance.now();
   const rulesStart = performance.now();
-  const veredictoReglas = detectorReglas.evaluar(ip, usuario, exitoso, ahora);
+  const veredictoReglas = detectorReglas.evaluar(detectorIpKey, detectorUserKey, exitoso, ahora);
   const latencyRulesMs = performance.now() - rulesStart;
   const mlStart = performance.now();
-  const veredictoML = detectorML.registrarYEvaluar(ip, usuario, exitoso, ahora);
+  const veredictoML = detectorML.registrarYEvaluar(detectorIpKey, detectorUserKey, exitoso, ahora);
   const latencyMlMs = performance.now() - mlStart;
   const latencyTotalMs = performance.now() - totalStart;
 
@@ -389,7 +393,8 @@ async function procesarIntentoCapturado(
     throw new Error(eventCapturePauseReason || 'La captura está detenida por un fallo de persistencia. Inicia un nuevo experimento tras recuperar Supabase.');
   }
   if (isIP(ip) === 0) throw new Error('No se pudo determinar una IP de origen válida y confiable.');
-  const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true);
+  const { ipKey, userKey } = getAnalyticsIdentifiers(ip, usuario);
+  const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true, ipKey, userKey);
   (evento as typeof evento & { metadata: Record<string, unknown>; campaign_id: string | null }).metadata = metadata;
   (evento as typeof evento & { campaign_id: string | null }).campaign_id =
     typeof metadata.campaign_id === 'string' ? metadata.campaign_id : null;
