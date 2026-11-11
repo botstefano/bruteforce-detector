@@ -40,6 +40,7 @@ export interface CapturedEventRow {
   ground_truth_notes: string | null;
   experiment_id: string | null;
   scenario: string | null;
+  dataset_split: 'unassigned' | 'train' | 'validation' | 'test';
   request_id: string | null;
   alerta_reglas: boolean;
   razon_reglas: string | null;
@@ -63,6 +64,15 @@ const supabaseKey =
   '';
 const hashSecret = process.env.CENTINELA_HASH_SECRET?.trim() ?? '';
 let activeExperimentId: string | null = process.env.CENTINELA_EXPERIMENT_ID?.trim() || null;
+let activeSplitBoundaries: { trainEndMs: number; validationEndMs: number } | null = null;
+
+function splitForTimestamp(timestampSeconds: number): 'unassigned' | 'train' | 'validation' | 'test' {
+  if (!activeSplitBoundaries) return 'unassigned';
+  const timestampMs = timestampSeconds * 1000;
+  if (timestampMs < activeSplitBoundaries.trainEndMs) return 'train';
+  if (timestampMs < activeSplitBoundaries.validationEndMs) return 'validation';
+  return 'test';
+}
 
 const client: SupabaseClient | null =
   supabaseUrl && supabaseKey
@@ -119,6 +129,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     ground_truth_notes: null,
     experiment_id: activeExperimentId,
     scenario: event.origen,
+    dataset_split: splitForTimestamp(event.timestamp),
     request_id: null,
     alerta_reglas: event.alerta_reglas,
     razon_reglas: event.razon_reglas,
@@ -178,7 +189,7 @@ export async function fetchObservedEvents(experimentId?: string | null): Promise
 
 export async function fetchBenignTrainingSamples(windowSeconds = 120): Promise<number[][]> {
   const events = (await fetchObservedEvents())
-    .filter((event) => event.ground_truth_label === 'benign')
+    .filter((event) => event.dataset_split === 'train' && event.ground_truth_label === 'benign')
     .sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at));
 
   const historyByIp = new Map<string, Array<{ timestamp: number; user: string }>>();
@@ -225,7 +236,7 @@ export async function restoreActiveExperimentRecord() {
 
   const { data, error } = await client
     .from('centinela_experiments')
-    .select('id, protocol_name, scenario, status, started_at')
+    .select('id, protocol_name, scenario, status, started_at, metadata')
     .eq('status', 'running')
     .order('started_at', { ascending: false })
     .limit(1)
@@ -234,17 +245,38 @@ export async function restoreActiveExperimentRecord() {
   if (error) throw new Error(`No se pudo recuperar el experimento activo: ${error.message}`);
   if (!data) return null;
   activeExperimentId = data.id as string;
+  const metadata = (data.metadata ?? {}) as Record<string, unknown>;
+  const trainEndMs = typeof metadata.train_end_at === 'string' ? Date.parse(metadata.train_end_at) : NaN;
+  const validationEndMs = typeof metadata.validation_end_at === 'string' ? Date.parse(metadata.validation_end_at) : NaN;
+  activeSplitBoundaries = Number.isFinite(trainEndMs) && Number.isFinite(validationEndMs) && validationEndMs > trainEndMs
+    ? { trainEndMs, validationEndMs }
+    : null;
   return data;
 }
 
 export async function createExperimentRecord(input: {
   protocolName: string;
   scenario: string;
+  trainEndAt: string;
+  validationEndAt: string;
   description?: string;
   detectorConfig?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }) {
   if (!client || !hashSecret) throw new Error('El almacén persistente no está configurado.');
+  const trainEndMs = Date.parse(input.trainEndAt);
+  const validationEndMs = Date.parse(input.validationEndAt);
+  if (!Number.isFinite(trainEndMs) || !Number.isFinite(validationEndMs) || validationEndMs <= trainEndMs) {
+    throw new Error('Define train_end_at y validation_end_at como fechas ISO válidas y validation_end_at posterior a train_end_at.');
+  }
+  const trainEndAt = new Date(trainEndMs).toISOString();
+  const validationEndAt = new Date(validationEndMs).toISOString();
+  const experimentMetadata = {
+    ...(input.metadata ?? {}),
+    train_end_at: trainEndAt,
+    validation_end_at: validationEndAt,
+    split_policy: 'temporal_by_event_timestamp_v1',
+  };
   const { data, error } = await client
     .from('centinela_experiments')
     .insert({
@@ -255,12 +287,13 @@ export async function createExperimentRecord(input: {
       started_at: new Date().toISOString(),
       code_version: process.env.CENTINELA_VERSION?.trim() || 'unversioned',
       detector_config: input.detectorConfig ?? {},
-      metadata: input.metadata ?? {},
+      metadata: experimentMetadata,
     })
     .select('id, protocol_name, scenario, status, started_at, code_version')
     .single();
   if (error) throw new Error(`No se pudo crear el experimento: ${error.message}`);
   activeExperimentId = data.id as string;
+  activeSplitBoundaries = { trainEndMs, validationEndMs };
   return data;
 }
 
@@ -275,7 +308,10 @@ export async function finishExperimentRecord(experimentId: string) {
     .maybeSingle();
   if (error) throw new Error(`No se pudo finalizar el experimento: ${error.message}`);
   if (!data) throw new Error('No existe un experimento activo con ese identificador.');
-  if (activeExperimentId === experimentId) activeExperimentId = null;
+  if (activeExperimentId === experimentId) {
+    activeExperimentId = null;
+    activeSplitBoundaries = null;
+  }
   return data;
 }
 
@@ -340,7 +376,8 @@ function calculateMetrics(
 
 export async function calculateObservedMetrics(experimentId?: string | null) {
   const all = await fetchObservedEvents(experimentId);
-  const labeled = all.filter((event) => event.ground_truth_label !== 'unknown');
+  const testEvents = all.filter((event) => event.dataset_split === 'test');
+  const labeled = testEvents.filter((event) => event.ground_truth_label !== 'unknown');
   const benign = labeled.filter((event) => event.ground_truth_label === 'benign').length;
   const attacks = labeled.filter((event) => event.ground_truth_label === 'attack').length;
 
@@ -355,16 +392,19 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
     ? values.reduce((sum, value) => sum + value, 0) / values.length
     : null;
   const latency = {
-    rules_mean_ms: mean(all.map((event) => event.latency_rules_ms).filter(Number.isFinite)),
-    ml_mean_ms: mean(all.map((event) => event.latency_ml_ms).filter(Number.isFinite)),
-    total_mean_ms: mean(all.map((event) => event.latency_total_ms).filter(Number.isFinite)),
-    sample_size: all.length,
+    rules_mean_ms: mean(testEvents.map((event) => event.latency_rules_ms).filter(Number.isFinite)),
+    ml_mean_ms: mean(testEvents.map((event) => event.latency_ml_ms).filter(Number.isFinite)),
+    total_mean_ms: mean(testEvents.map((event) => event.latency_total_ms).filter(Number.isFinite)),
+    sample_size: testEvents.length,
   };
 
   return {
     source: 'centinela_supabase_observed_events',
     experiment_id: experimentId === undefined ? activeExperimentId : experimentId,
     total_captured_events: all.length,
+    train_events: all.filter((event) => event.dataset_split === 'train').length,
+    validation_events: all.filter((event) => event.dataset_split === 'validation').length,
+    test_events: testEvents.length,
     labeled_events: labeled.length,
     unknown_events: all.length - labeled.length,
     benign_events: benign,
@@ -372,7 +412,7 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
     metrics: methods,
     latency,
     note: labeled.length === 0
-      ? 'No hay eventos etiquetados; no se calculan métricas de clasificación.'
-      : 'Las métricas incluyen exclusivamente eventos capturados y etiquetados como benignos o ataques.',
+      ? 'No hay eventos de prueba etiquetados; no se calculan métricas de clasificación.'
+      : 'Las métricas de clasificación se calculan exclusivamente sobre eventos capturados, etiquetados y reservados para el periodo de prueba.'
   };
 }
