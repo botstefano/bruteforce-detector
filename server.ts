@@ -62,17 +62,20 @@ const allowedSocketOrigins = new Set(
 );
 const io = new SocketIOServer(server, {
   cors: {
-    origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      try {
-        const requested = new URL(origin);
-        if (allowedSocketOrigins.has(origin)) return callback(null, true);
-      } catch {
-        // Invalid Origin is rejected below.
-      }
-      return callback(new Error('Origin no autorizado para Socket.IO'));
-    },
+    origin: Array.from(allowedSocketOrigins),
     credentials: true,
+  },
+  allowRequest: (req, callback) => {
+    const origin = req.headers.origin;
+    if (!origin) return callback(null, true);
+    try {
+      const originHost = new URL(origin).host.toLowerCase();
+      const requestHost = String(req.headers.host || '').toLowerCase();
+      const sameOrigin = Boolean(requestHost) && originHost === requestHost;
+      callback(null, sameOrigin || allowedSocketOrigins.has(origin));
+    } catch {
+      callback(null, false);
+    }
   },
 });
 
@@ -163,6 +166,29 @@ function adminSessionToken(): string {
   if (!DASHBOARD_PASSWORD || !SESSION_SECRET) return '';
   return createHmac('sha256', SESSION_SECRET).update(DASHBOARD_PASSWORD).digest('hex');
 }
+
+function extraerCookie(rawCookie: string, nombre: string): string {
+  for (const fragment of rawCookie.split(';')) {
+    const [key, ...valueParts] = fragment.trim().split('=');
+    if (key === nombre) {
+      const value = valueParts.join('=');
+      try { return decodeURIComponent(value); } catch { return ''; }
+    }
+  }
+  return '';
+}
+
+io.use((socket, next) => {
+  if (!DASHBOARD_PASSWORD || !SESSION_SECRET) {
+    return next(new Error('Autenticación del panel no configurada.'));
+  }
+  const rawCookie = socket.request.headers.cookie || '';
+  const sessionCookie = extraerCookie(rawCookie, 'admin_session');
+  if (!sessionCookie || !safeStringEqual(sessionCookie, adminSessionToken())) {
+    return next(new Error('No autorizado: inicia sesión en Centinela.'));
+  }
+  return next();
+});
 
 function validarTokenIngesta(req: Request): boolean {
   if (!CENTINELA_INGEST_TOKEN) return false;
@@ -667,6 +693,11 @@ app.post('/login-admin', (req: Request, res: Response) => {
 app.post('/logout-admin', (req: Request, res: Response) => {
   res.clearCookie('admin_session');
   res.json({ status: 'ok', mensaje: 'Sesión cerrada correctamente' });
+});
+
+// La sesión del panel se valida en servidor; localStorage nunca concede acceso.
+app.get('/api/session', requiereAdmin, (_req: Request, res: Response) => {
+  return res.json({ authenticated: true });
 });
 
 // =================================================================
