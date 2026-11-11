@@ -449,7 +449,7 @@ let contadorVulnerable = 0;
 
 // --- LOGIN 1: VULNERABLE (Sin protección) ---
 
-app.post('/demo/vulnerable/login', (req: Request, res: Response) => {
+app.post('/demo/vulnerable/login', bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   contadorVulnerable++;
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
@@ -540,7 +540,7 @@ app.get('/api/captcha/nuevo', (req: Request, res: Response) => {
 
 // --- LOGIN 2: CAPTCHA (Desafío anti-bot real) ---
 
-app.post('/demo/captcha/login', (req: Request, res: Response) => {
+app.post('/demo/captcha/login', bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
   const usuario = (data.usuario || '').trim();
@@ -586,7 +586,7 @@ app.post('/demo/captcha/login', (req: Request, res: Response) => {
 
 // --- LOGIN 3: 2FA / TOTP (Doble factor) ---
 
-app.post('/demo/2fa/login-paso1', (req: Request, res: Response) => {
+app.post('/demo/2fa/login-paso1', bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
   const usuario = (data.usuario || '').trim();
@@ -601,7 +601,7 @@ app.post('/demo/2fa/login-paso1', (req: Request, res: Response) => {
   return res.status(401).json({ status: 'fallo', mensaje: 'Usuario o contraseña incorrectos' });
 });
 
-app.post('/demo/2fa/login-paso2', (req: Request, res: Response) => {
+app.post('/demo/2fa/login-paso2', bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
   const usuario = (data.usuario || '').trim();
