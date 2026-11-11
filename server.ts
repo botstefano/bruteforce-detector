@@ -119,6 +119,8 @@ const CREDENCIALES_VALIDAS = cargarCredencialesDemo();
 // Inicializar detectores
 const detectorReglas = new DetectorReglas();
 const detectorML = new DetectorML();
+let eventCapturePaused = false;
+let eventCapturePauseReason: string | null = null;
 
 const estadoModelo = {
   fuente: 'sin_entrenar',
@@ -382,12 +384,22 @@ async function procesarIntentoCapturado(
   origen: string,
   metadata: Record<string, unknown> = {}
 ) {
+  if (eventCapturePaused) {
+    throw new Error(eventCapturePauseReason || 'La captura está detenida por un fallo de persistencia. Inicia un nuevo experimento tras recuperar Supabase.');
+  }
   if (isIP(ip) === 0) throw new Error('No se pudo determinar una IP de origen válida y confiable.');
   const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true);
   (evento as typeof evento & { metadata: Record<string, unknown>; campaign_id: string | null }).metadata = metadata;
   (evento as typeof evento & { campaign_id: string | null }).campaign_id =
     typeof metadata.campaign_id === 'string' ? metadata.campaign_id : null;
-  await persistObservedEvent(evento as CapturedAuthEvent);
+  try {
+    await persistObservedEvent(evento as CapturedAuthEvent);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'Error desconocido de persistencia.';
+    eventCapturePaused = true;
+    eventCapturePauseReason = `Captura pausada tras un fallo de escritura en Supabase: ${detail}. Inicia un experimento nuevo después de verificar el almacenamiento.`;
+    throw new Error(eventCapturePauseReason);
+  }
   io.emit('nuevo_evento', evento);
   return evento;
 }
@@ -422,11 +434,13 @@ function requiereAdmin(req: Request, res: Response, next: NextFunction) {
 app.get('/health', (req: Request, res: Response) => {
   const eventStore = eventStoreStatus();
   res.json({
-    status: 'ok',
+    status: eventCapturePaused ? 'degraded' : 'ok',
     service: 'centinela-v2-detector',
     timestamp: Date.now() / 1000,
     db_ok: db.checkConnection(),
     event_store: eventStore,
+    capture_paused: eventCapturePaused,
+    capture_pause_reason: eventCapturePauseReason,
   });
 });
 
@@ -939,6 +953,8 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
     db.limpiarBloqueos();
     detectorReglas.reset();
     detectorML.resetForNewExperiment();
+    eventCapturePaused = false;
+    eventCapturePauseReason = null;
     estadoModelo.fuente = 'sin_entrenar';
     estadoModelo.detalle = 'Nuevo experimento: baseline pendiente de eventos benignos etiquetados.';
     estadoModelo.muestras_entrenamiento = 0;
