@@ -25,6 +25,7 @@ export interface CapturedAuthEvent {
   latency_rules_ms: number;
   latency_ml_ms: number;
   latency_total_ms: number;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CapturedEventRow {
@@ -161,7 +162,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     latency_total_ms: event.latency_total_ms,
     detector_version: process.env.CENTINELA_VERSION?.trim() || 'unversioned',
     config_version: process.env.CENTINELA_CONFIG_VERSION?.trim() || 'unversioned',
-    metadata: {},
+    metadata: event.metadata ?? {},
   };
 
   const { error } = await client.from('centinela_auth_events').insert(row);
