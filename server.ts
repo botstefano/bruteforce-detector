@@ -94,14 +94,23 @@ const SESSION_SECRET = (process.env.SECRET_KEY || '').trim();
 
 if (TRUST_PROXY_HOPS > 0) app.set('trust proxy', TRUST_PROXY_HOPS);
 
-// Credenciales válidas para el login interno y demo
-const CREDENCIALES_VALIDAS: Record<string, string> = {
-  admin: 'S3guro#2026',
-  jperez: 'Trujillo!456',
-  mgarcia: 'Contrasena_88',
-  carla: 'MiClave!789',
-  roberto: 'Roberto2026!',
-};
+// Las credenciales de demostración se inyectan solo como secreto de servidor.
+// No se incluyen cuentas ni contraseñas por defecto en el repositorio.
+function cargarCredencialesDemo(): Record<string, string> {
+  const raw = process.env.CENTINELA_DEMO_CREDENTIALS_JSON || '{}';
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).filter(([username, password]) =>
+        username.trim().length > 0 && typeof password === 'string' && password.length >= 8
+      )
+    );
+  } catch {
+    console.error('CENTINELA_DEMO_CREDENTIALS_JSON debe contener un objeto JSON de usuarios y contraseñas.');
+    return {};
+  }
+}
+const CREDENCIALES_VALIDAS = cargarCredencialesDemo();
 
 // Inicializar detectores
 const detectorReglas = new DetectorReglas();
