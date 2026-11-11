@@ -344,7 +344,9 @@ async function procesarIntentoCapturado(
 ) {
   if (isIP(ip) === 0) throw new Error('No se pudo determinar una IP de origen válida y confiable.');
   const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true);
-  (evento as typeof evento & { metadata: Record<string, unknown> }).metadata = metadata;
+  (evento as typeof evento & { metadata: Record<string, unknown>; campaign_id: string | null }).metadata = metadata;
+  (evento as typeof evento & { campaign_id: string | null }).campaign_id =
+    typeof metadata.campaign_id === 'string' ? metadata.campaign_id : null;
   await persistObservedEvent(evento as CapturedAuthEvent);
   io.emit('nuevo_evento', evento);
   return evento;
@@ -416,6 +418,8 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
   }
   const usuario = typeof data.usuario === 'string' ? data.usuario.trim() : '';
   const reportedIp = typeof data.ip === 'string' ? data.ip.trim() : '';
+  const campaignId = typeof data.campaign_id === 'string' ? data.campaign_id.trim() : '';
+  if (campaignId.length > 120) return res.status(400).json({ error: 'campaign_id no puede superar 120 caracteres.' });
   if (!usuario || usuario.length > 254 || typeof data.exitoso !== 'boolean') {
     return res.status(400).json({ error: 'Se requiere usuario válido y exitoso booleano.' });
   }
@@ -427,7 +431,13 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
     // La IP del cuerpo solo se acepta en este endpoint porque ya se validó el token
     // de servicio a servicio; nunca se acepta de clientes públicos.
     const ip = reportedIp || ipDelCliente(req);
-    const evento = await procesarIntentoCapturado(ip, usuario, data.exitoso, 'integracion_autenticacion');
+    const evento = await procesarIntentoCapturado(
+      ip,
+      usuario,
+      data.exitoso,
+      'integracion_autenticacion',
+      campaignId ? { campaign_id: campaignId } : {}
+    );
     return res.json({
       event_id: evento.event_id,
       alerta: evento.bloqueado_ahora,
