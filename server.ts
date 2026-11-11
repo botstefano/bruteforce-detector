@@ -162,9 +162,27 @@ function safeStringEqual(candidate: string, expected: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+const ADMIN_SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+
 function adminSessionToken(): string {
   if (!DASHBOARD_PASSWORD || !SESSION_SECRET) return '';
-  return createHmac('sha256', SESSION_SECRET).update(DASHBOARD_PASSWORD).digest('hex');
+  const expiresAt = Math.floor((Date.now() + ADMIN_SESSION_DURATION_MS) / 1000).toString();
+  const signature = createHmac('sha256', SESSION_SECRET)
+    .update(`centinela-admin:${expiresAt}`)
+    .digest('hex');
+  return `${expiresAt}.${signature}`;
+}
+
+function validarSesionAdmin(candidate: string): boolean {
+  if (!SESSION_SECRET || !candidate) return false;
+  const [expiresAtRaw, signature, extra] = candidate.split('.');
+  if (!expiresAtRaw || !signature || extra !== undefined) return false;
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt * 1000 <= Date.now()) return false;
+  const expected = createHmac('sha256', SESSION_SECRET)
+    .update(`centinela-admin:${expiresAtRaw}`)
+    .digest('hex');
+  return safeStringEqual(signature, expected);
 }
 
 function extraerCookie(rawCookie: string, nombre: string): string {
@@ -184,7 +202,7 @@ io.use((socket, next) => {
   }
   const rawCookie = socket.request.headers.cookie || '';
   const sessionCookie = extraerCookie(rawCookie, 'admin_session');
-  if (!sessionCookie || !safeStringEqual(sessionCookie, adminSessionToken())) {
+  if (!validarSesionAdmin(sessionCookie)) {
     return next(new Error('No autorizado: inicia sesión en Centinela.'));
   }
   return next();
@@ -299,7 +317,7 @@ function requiereAdmin(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization || '';
   const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
   const sessionCookie = req.cookies?.admin_session || '';
-  if (safeStringEqual(token, DASHBOARD_PASSWORD) || safeStringEqual(sessionCookie, adminSessionToken())) {
+  if (safeStringEqual(token, DASHBOARD_PASSWORD) || validarSesionAdmin(sessionCookie)) {
     return next();
   }
   return res.status(401).json({ error: 'No autorizado.' });
@@ -685,7 +703,7 @@ app.post('/login-admin', (req: Request, res: Response) => {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
     path: '/',
-    maxAge: 8 * 60 * 60 * 1000,
+    maxAge: ADMIN_SESSION_DURATION_MS,
   });
   return res.json({ status: 'ok', redirect: '/', mensaje: 'Autenticación exitosa' });
 });
