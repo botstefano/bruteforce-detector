@@ -1,0 +1,33 @@
+name: Lab Auth checks
+
+on:
+  pull_request:
+    paths:
+      - "lab-auth/**"
+      - ".github/workflows/lab-auth-check.yml"
+  push:
+    branches:
+      - "feature/lab-auth-render-service"
+    paths:
+      - "lab-auth/**"
+      - ".github/workflows/lab-auth-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check server syntax
+        run: node --check lab-auth/server.js
+      - name: Check browser script syntax
+        run: node --check lab-auth/public/app.js
+      - name: Check package script
+        run: npm --prefix lab-auth run check

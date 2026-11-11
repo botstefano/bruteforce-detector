@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07111f">
+  <meta name="description" content="Laboratorio experimental de autenticación integrado con Centinela v2.">
+  <title>Centinela · Laboratorio de autenticación</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Centinela Auth Lab, inicio">
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <span>
+          <strong>CENTINELA</strong>
+          <small>AUTH LAB</small>
+        </span>
+      </a>
+      <span class="environment"><span class="pulse"></span> ENTORNO EXPERIMENTAL</span>
+    </header>
+
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">LABORATORIO DE AUTENTICACIÓN</p>
+        <h1>Acceso de<br><span>laboratorio</span></h1>
+        <p class="intro">Realiza tus pruebas de autenticación autorizadas. Cada intento se procesa y se registra en Centinela v2 para su revisión experimental.</p>
+        <div class="flow-note">
+          <span class="flow-icon" aria-hidden="true">↗</span>
+          <span>Los eventos y sus etiquetas se consultan exclusivamente en el panel de Centinela.</span>
+        </div>
+      </div>
+
+      <section class="login-card" aria-labelledby="login-title">
+        <div class="card-heading">
+          <div class="lock-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <rect x="4" y="10" width="16" height="11" rx="2" stroke="currentColor" stroke-width="1.7"/>
+              <path d="M8 10V7a4 4 0 0 1 8 0v3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+              <path d="M12 14v3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div>
+            <p class="eyebrow">CUENTA DE PRUEBA</p>
+            <h2 id="login-title">Iniciar sesión</h2>
+          </div>
+        </div>
+
+        <form id="login-form" novalidate>
+          <label for="username">Usuario</label>
+          <input id="username" name="username" type="text" maxlength="64" autocomplete="username" placeholder="Ej. lab01" required>
+          <label for="password">Contraseña</label>
+          <input id="password" name="password" type="password" maxlength="256" autocomplete="current-password" placeholder="Introduce tu contraseña" required>
+          <button id="submit-button" type="submit">
+            <span>Iniciar sesión</span>
+            <span aria-hidden="true">→</span>
+          </button>
+        </form>
+
+        <div id="result" class="result" role="status" aria-live="polite" hidden></div>
+        <p class="privacy-note">Tu contraseña se valida en este laboratorio y nunca se transmite a Centinela. El detector recibe únicamente el usuario, el resultado del intento y la IP de origen verificada.</p>
+      </section>
+    </section>
+
+    <footer class="footer">
+      <span>Centinela Auth Lab · Investigación experimental</span>
+      <span>Captura y etiquetado centralizados en Centinela v2</span>
+    </footer>
+  </main>
+</body>
+</html>
