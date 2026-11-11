@@ -62,6 +62,7 @@ const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
   '';
 const hashSecret = process.env.CENTINELA_HASH_SECRET?.trim() ?? '';
+let activeExperimentId: string | null = process.env.CENTINELA_EXPERIMENT_ID?.trim() || null;
 
 const client: SupabaseClient | null =
   supabaseUrl && supabaseKey
@@ -112,7 +113,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     ground_truth_method: null,
     ground_truth_updated_at: null,
     ground_truth_notes: null,
-    experiment_id: process.env.CENTINELA_EXPERIMENT_ID?.trim() || null,
+    experiment_id: activeExperimentId,
     scenario: event.origen,
     request_id: null,
     alerta_reglas: event.alerta_reglas,
@@ -136,7 +137,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
   }
 }
 
-export async function fetchObservedEvents(): Promise<CapturedEventRow[]> {
+export async function fetchObservedEvents(experimentId?: string | null): Promise<CapturedEventRow[]> {
   if (!client || !hashSecret) {
     throw new Error('El almacén persistente de Centinela no está configurado.');
   }
@@ -147,12 +148,14 @@ export async function fetchObservedEvents(): Promise<CapturedEventRow[]> {
 
   for (let offset = 0; offset < maxRows; offset += pageSize) {
     const end = Math.min(offset + pageSize - 1, maxRows - 1);
-    const { data, error } = await client
+    let query = client
       .from('centinela_auth_events')
       .select('*')
       .eq('is_simulated', false)
-      .order('occurred_at', { ascending: true })
-      .range(offset, end);
+      .order('occurred_at', { ascending: true });
+    const filterExperimentId = experimentId === undefined ? activeExperimentId : experimentId;
+    if (filterExperimentId) query = query.eq('experiment_id', filterExperimentId);
+    const { data, error } = await query.range(offset, end);
 
     if (error) {
       throw new Error(`No se pudieron consultar los eventos: ${error.message}`);
@@ -210,6 +213,48 @@ export async function fetchBenignTrainingSamples(windowSeconds = 120): Promise<n
   }
 
   return samples;
+}
+
+export async function createExperimentRecord(input: {
+  protocolName: string;
+  scenario: string;
+  description?: string;
+  detectorConfig?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}) {
+  if (!client || !hashSecret) throw new Error('El almacén persistente no está configurado.');
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .insert({
+      protocol_name: input.protocolName.trim(),
+      scenario: input.scenario.trim(),
+      description: input.description?.trim() || null,
+      status: 'running',
+      started_at: new Date().toISOString(),
+      code_version: process.env.CENTINELA_VERSION?.trim() || 'unversioned',
+      detector_config: input.detectorConfig ?? {},
+      metadata: input.metadata ?? {},
+    })
+    .select('id, protocol_name, scenario, status, started_at, code_version')
+    .single();
+  if (error) throw new Error(`No se pudo crear el experimento: ${error.message}`);
+  activeExperimentId = data.id as string;
+  return data;
+}
+
+export async function finishExperimentRecord(experimentId: string) {
+  if (!client || !hashSecret) throw new Error('El almacén persistente no está configurado.');
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ status: 'completed', finished_at: new Date().toISOString() })
+    .eq('id', experimentId)
+    .eq('status', 'running')
+    .select('id, protocol_name, scenario, status, started_at, finished_at')
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo finalizar el experimento: ${error.message}`);
+  if (!data) throw new Error('No existe un experimento activo con ese identificador.');
+  if (activeExperimentId === experimentId) activeExperimentId = null;
+  return data;
 }
 
 export async function labelObservedEvent(input: {
@@ -271,8 +316,8 @@ function calculateMetrics(
   };
 }
 
-export async function calculateObservedMetrics() {
-  const all = await fetchObservedEvents();
+export async function calculateObservedMetrics(experimentId?: string | null) {
+  const all = await fetchObservedEvents(experimentId);
   const labeled = all.filter((event) => event.ground_truth_label !== 'unknown');
   const benign = labeled.filter((event) => event.ground_truth_label === 'benign').length;
   const attacks = labeled.filter((event) => event.ground_truth_label === 'attack').length;
