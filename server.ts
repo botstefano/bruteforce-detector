@@ -685,7 +685,7 @@ app.get('/api/dataset/capturado', requiereAdmin, async (req: Request, res: Respo
       const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
       const csv = [headers.join(','), ...events.map((event) =>
         headers.map((header) => escapeCsv((event as unknown as Record<string, unknown>)[header])).join(',')
-      )].join('\\n');
+      )].join('\n');
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename="centinela_eventos_capturados.csv"');
       return res.send(csv);
