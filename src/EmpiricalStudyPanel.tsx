@@ -53,6 +53,8 @@ interface LabelDraft {
   rationale: string;
 }
 
+const EVENTS_PER_PAGE = 20;
+
 async function readJson(response: Response): Promise<any> {
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -143,7 +145,6 @@ export function EmpiricalStudyPanel() {
     return result;
   }, [events]);
 
-  const EVENTS_PER_PAGE = 20;
   const sortedEvents = useMemo(
     () => [...events].sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at)),
     [events]
