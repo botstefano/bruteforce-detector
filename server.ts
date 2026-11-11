@@ -13,6 +13,16 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+
+import {
+  calculateObservedMetrics,
+  eventStoreStatus,
+  fetchObservedEvents,
+  labelObservedEvent,
+  persistObservedEvent,
+  type CapturedAuthEvent,
+} from './src/supabase_events.js';
 
 import { db } from './src/database.js';
 import { DetectorReglas } from './src/detector_reglas.js';
@@ -48,9 +58,14 @@ if (!fs.existsSync(uploadDir)) {
 }
 const upload = multer({ dest: uploadDir, limits: { fileSize: 50 * 1024 * 1024 } });
 
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const DURACION_BLOQUEO_SEGUNDOS = parseInt(process.env.DURACION_BLOQUEO_SEGUNDOS || '300', 10);
 const DASHBOARD_PASSWORD = (process.env.DASHBOARD_PASSWORD || '').trim();
+const CENTINELA_INGEST_TOKEN = (process.env.CENTINELA_INGEST_TOKEN || '').trim();
+const TRUST_PROXY_HOPS = Math.max(0, parseInt(process.env.TRUST_PROXY_HOPS || '0', 10));
+const SESSION_SECRET = (process.env.SECRET_KEY || '').trim();
+
+if (TRUST_PROXY_HOPS > 0) app.set('trust proxy', TRUST_PROXY_HOPS);
 
 // Credenciales válidas para el login interno y demo
 const CREDENCIALES_VALIDAS: Record<string, string> = {
@@ -91,16 +106,28 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // Helper de extracción de IP
-function ipDelCliente(req: Request, dataOverride?: { ip?: string }): string {
-  if (dataOverride && dataOverride.ip && typeof dataOverride.ip === 'string') {
-    return dataOverride.ip.trim();
-  }
-  const xff = req.headers['x-forwarded-for'];
-  if (xff) {
-    const raw = Array.isArray(xff) ? xff[0] : xff;
-    return raw.split(',')[0].trim();
-  }
-  return req.ip || req.socket.remoteAddress || '127.0.0.1';
+function ipDelCliente(req: Request, _dataOverride?: { ip?: string }): string {
+  // Express resuelve req.ip usando solo la cantidad de proxies de confianza configurada.
+  // Nunca se acepta una IP enviada dentro del cuerpo de una petición.
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+function safeStringEqual(candidate: string, expected: string): boolean {
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function adminSessionToken(): string {
+  if (!DASHBOARD_PASSWORD || !SESSION_SECRET) return '';
+  return createHmac('sha256', SESSION_SECRET).update(DASHBOARD_PASSWORD).digest('hex');
+}
+
+function validarTokenIngesta(req: Request): boolean {
+  if (!CENTINELA_INGEST_TOKEN) return false;
+  const auth = req.headers.authorization || '';
+  const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+  return safeStringEqual(token, CENTINELA_INGEST_TOKEN);
 }
 
 function ipAleatoria(): string {
@@ -130,8 +157,14 @@ function procesarIntento(
     exitoso = CREDENCIALES_VALIDAS[usuario] === passwordOExitoso;
   }
 
+  const totalStart = performance.now();
+  const rulesStart = performance.now();
   const veredictoReglas = detectorReglas.evaluar(ip, usuario, exitoso, ahora);
+  const latencyRulesMs = performance.now() - rulesStart;
+  const mlStart = performance.now();
   const veredictoML = detectorML.registrarYEvaluar(ip, usuario, exitoso, ahora);
+  const latencyMlMs = performance.now() - mlStart;
+  const latencyTotalMs = performance.now() - totalStart;
 
   const alerta = veredictoReglas.alerta || veredictoML.alerta;
   if (alerta) {
@@ -156,6 +189,7 @@ function procesarIntento(
 
   const evento = {
     id: eventoId,
+    event_id: randomUUID(),
     timestamp: ahora,
     ip,
     usuario,
@@ -169,33 +203,38 @@ function procesarIntento(
     origen,
     bloqueado_ahora: alerta,
     es_simulado: Boolean(esSimulado),
+    latency_rules_ms: latencyRulesMs,
+    latency_ml_ms: latencyMlMs,
+    latency_total_ms: latencyTotalMs,
   };
 
   io.emit('nuevo_evento', evento);
   return evento;
 }
 
+async function procesarIntentoCapturado(
+  ip: string,
+  usuario: string,
+  exitoso: boolean,
+  origen: string
+) {
+  const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true);
+  await persistObservedEvent(evento as CapturedAuthEvent);
+  return evento;
+}
+
 // Middleware de autenticación de admin
 function requiereAdmin(req: Request, res: Response, next: NextFunction) {
-  // En modo applet interactivo, permitir acceso a las APIs si no hay password estricto o si hay sesión
-  if (!DASHBOARD_PASSWORD) {
-    return next();
+  if (!DASHBOARD_PASSWORD || !SESSION_SECRET) {
+    return res.status(503).json({ error: 'Autenticación administrativa no configurada en el servidor.' });
   }
   const auth = req.headers.authorization || '';
   const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
   const sessionCookie = req.cookies?.admin_session || '';
-
-  const clavesAceptadas = [
-    DASHBOARD_PASSWORD,
-    'S3guro#2026',
-    'admin',
-  ].filter(Boolean);
-
-  if (clavesAceptadas.includes(token) || clavesAceptadas.includes(sessionCookie)) {
+  if (safeStringEqual(token, DASHBOARD_PASSWORD) || safeStringEqual(sessionCookie, adminSessionToken())) {
     return next();
   }
-  // En caso de que se use desde la UI de React en el mismo origen:
-  return next();
+  return res.status(401).json({ error: 'No autorizado.' });
 }
 
 // =================================================================
@@ -203,11 +242,13 @@ function requiereAdmin(req: Request, res: Response, next: NextFunction) {
 // =================================================================
 
 app.get('/health', (req: Request, res: Response) => {
+  const eventStore = eventStoreStatus();
   res.json({
     status: 'ok',
     service: 'centinela-v2-detector',
     timestamp: Date.now() / 1000,
     db_ok: db.checkConnection(),
+    event_store: eventStore,
   });
 });
 
@@ -228,20 +269,34 @@ app.post('/evaluar', (req: Request, res: Response) => {
   return res.status(200).json({ bloqueado: false });
 });
 
-app.post('/registrar_intento', (req: Request, res: Response) => {
+app.post('/registrar_intento', async (req: Request, res: Response) => {
   const data = req.body || {};
-  const ip = data.ip || ipDelCliente(req, data);
-  const usuario = data.usuario || '';
-  const exitoso = Boolean(data.exitoso);
+  const status = eventStoreStatus();
+  if (!status.configured || !CENTINELA_INGEST_TOKEN) {
+    return res.status(503).json({ error: 'La captura persistente no está configurada.' });
+  }
+  if (!validarTokenIngesta(req)) {
+    return res.status(401).json({ error: 'Token de ingesta inválido.' });
+  }
+  const usuario = typeof data.usuario === 'string' ? data.usuario.trim() : '';
+  if (!usuario || usuario.length > 254 || typeof data.exitoso !== 'boolean') {
+    return res.status(400).json({ error: 'Se requiere usuario válido y exitoso booleano.' });
+  }
 
-  const evento = procesarIntento(ip, usuario, exitoso, 0, 'produccion_real', 0, true);
-
-  return res.json({
-    alerta: evento.bloqueado_ahora,
-    alerta_reglas: evento.alerta_reglas,
-    alerta_ml: evento.alerta_ml,
-    bloqueado_ahora: evento.bloqueado_ahora,
-  });
+  try {
+    const evento = await procesarIntentoCapturado(ipDelCliente(req), usuario, data.exitoso, 'integracion_autenticacion');
+    return res.json({
+      event_id: evento.event_id,
+      alerta: evento.bloqueado_ahora,
+      alerta_reglas: evento.alerta_reglas,
+      alerta_ml: evento.alerta_ml,
+      bloqueado_ahora: evento.bloqueado_ahora,
+      persisted: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Error guardando el evento.';
+    return res.status(503).json({ error: message, persisted: false });
+  }
 });
 
 // =================================================================
