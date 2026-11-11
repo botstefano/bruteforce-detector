@@ -91,6 +91,11 @@ def parse_timestamp(value: Any) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
+def js_round_two(value: float) -> float:
+    # Match Math.round(value * 100) / 100 for non-negative feature values.
+    return math.floor(value * 100.0 + 0.5) / 100.0
+
+
 def build_benign_training_baseline(rows: list[dict[str, Any]]) -> np.ndarray:
     """
     Reconstruct features using only independently labeled benign training events.
@@ -128,8 +133,8 @@ def build_benign_training_baseline(rows: list[dict[str, Any]]) -> np.ndarray:
         vectors.append([
             float(len(timestamps)),
             float(unique_users),
-            round(interval_mean, 2),
-            round(interval_std, 2),
+            js_round_two(interval_mean),
+            js_round_two(interval_std),
             float(row["_timestamp"].hour),
         ])
 
@@ -376,7 +381,7 @@ def main() -> int:
     runtime_fields = {
         "rules": "alerta_reglas",
         "isolation_forest_runtime": "alerta_iforest",
-        "ml_ensemble_runtime": "alerta_ml",
+        "ml_primary_decision_runtime": "alerta_ml",
     }
     runtime_metrics: dict[str, Any] = {}
     for name, field in runtime_fields.items():
@@ -440,9 +445,11 @@ def main() -> int:
             "metrics": runtime_metrics,
             "measured_inference_latency_ms": runtime_latency,
             "interpretation": (
-                "These are the decisions made by the running Node application. "
-                "The legacy OCSVM and LOF TypeScript components are not treated as standard "
-                "One-Class SVM or LOF baselines; use the separately fitted scikit-learn models above."
+                "These are the decisions made by the running Node application. The primary ML decision "
+                "combines a 2-of-3 vote with an additional Isolation Forest trigger; it is not a pure "
+                "majority-vote ensemble. The legacy TypeScript OCSVM and LOF components are approximate "
+                "distance detectors, not canonical implementations; use the separately fitted "
+                "scikit-learn models above for standard algorithm comparisons."
             ),
         },
         "protocol": {
