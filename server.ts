@@ -17,6 +17,7 @@ import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 
 import {
+  abortExperimentRecord,
   calculateObservedMetrics,
   createExperimentRecord,
   finishExperimentRecord,
@@ -965,6 +966,27 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo crear el experimento.';
     return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/experimentos/:experimentId/abortar', requiereAdmin, async (req: Request, res: Response) => {
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (!reason) return res.status(400).json({ error: 'Se requiere reason para registrar la causa del aborto.' });
+  try {
+    const experiment = await abortExperimentRecord(singleRouteParam(req.params.experimentId), reason);
+    eventCapturePaused = false;
+    eventCapturePauseReason = null;
+    db.limpiar();
+    db.limpiarBloqueos();
+    detectorReglas.reset();
+    detectorML.resetForNewExperiment();
+    estadoModelo.fuente = 'sin_entrenar';
+    estadoModelo.detalle = 'El experimento anterior fue abortado. Cree un nuevo experimento para reanudar la captura.';
+    estadoModelo.muestras_entrenamiento = 0;
+    return res.json({ status: 'aborted', experiment });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo abortar el experimento.';
+    return res.status(400).json({ error: message });
   }
 });
 
