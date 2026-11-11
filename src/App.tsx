@@ -41,6 +41,7 @@ import {
 import { RealCaptchaCanvas } from './RealCaptchaCanvas';
 import { CicidsDatasetView } from './CicidsDatasetView';
 import { ReporteAcademicoView } from './ReporteAcademicoView';
+import { EmpiricalStudyPanel } from './EmpiricalStudyPanel';
 import { CicidsEvaluationSummary } from './cicids_parser';
 
 interface Intento {
@@ -114,7 +115,7 @@ interface EstadoModelo {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'dataset_cicids' | 'report' | 'demos' | 'training'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'dataset_cicids' | 'empirical' | 'report' | 'demos' | 'training'>('dashboard');
   const [eventos, setEventos] = useState<Intento[]>([]);
   const [metricas, setMetricas] = useState<MetricasResumen | null>(null);
   const [ipsBloqueadas, setIpsBloqueadas] = useState<Record<string, number>>({});
@@ -748,7 +749,18 @@ export default function App() {
                 )}
               </button>
               <button
-                onClick={() => setActiveTab('report')}
+                onClick={() => setActiveTab('empirical')}
+                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
+                  activeTab === 'empirical'
+                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Database className="w-4 h-4 text-cyan-400" />
+                <span>Captura Empírica</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('report')
                 className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
                   activeTab === 'report'
                     ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
@@ -1061,6 +1073,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {activeTab === 'empirical' && <EmpiricalStudyPanel />}
 
         {activeTab === 'simulator' && (
           <div className="space-y-6 animate-fadeIn">
