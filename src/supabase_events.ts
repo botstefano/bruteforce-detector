@@ -215,6 +215,24 @@ export async function fetchBenignTrainingSamples(windowSeconds = 120): Promise<n
   return samples;
 }
 
+export async function restoreActiveExperimentRecord() {
+  if (!client || !hashSecret) return null;
+  if (activeExperimentId) return { id: activeExperimentId, restored_from: 'environment' };
+
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .select('id, protocol_name, scenario, status, started_at')
+    .eq('status', 'running')
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`No se pudo recuperar el experimento activo: ${error.message}`);
+  if (!data) return null;
+  activeExperimentId = data.id as string;
+  return data;
+}
+
 export async function createExperimentRecord(input: {
   protocolName: string;
   scenario: string;
