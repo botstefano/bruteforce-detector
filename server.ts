@@ -888,6 +888,7 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
         distributed_rule: '4 distinct IPs / 120 seconds',
         ml_features: 5,
         feature_schema: 'centinela-auth-features-v2',
+        isolation_forest_random_seed: 42,
       },
       metadata: data.metadata && typeof data.metadata === 'object' ? data.metadata : {},
     });
