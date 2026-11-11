@@ -63,7 +63,7 @@ const supabaseKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY?.trim() ||
   '';
 const hashSecret = process.env.CENTINELA_HASH_SECRET?.trim() ?? '';
-let activeExperimentId: string | null = process.env.CENTINELA_EXPERIMENT_ID?.trim() || null;
+let activeExperimentId: string | null = null;
 let activeSplitBoundaries: { trainEndMs: number; validationEndMs: number } | null = null;
 
 function splitForTimestamp(timestampSeconds: number): 'unassigned' | 'train' | 'validation' | 'test' {
@@ -407,10 +407,11 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
     validation_events: all.filter((event) => event.dataset_split === 'validation').length,
     test_events: testEvents.length,
     labeled_events: labeled.length,
-    unknown_events: all.length - labeled.length,
+    unknown_events: all.filter((event) => event.ground_truth_label === 'unknown').length,
+    test_unknown_events: testEvents.filter((event) => event.ground_truth_label === 'unknown').length,
     benign_events: benign,
     attack_events: attacks,
-    metrics: methods,
+    metrics: labeled.length > 0 ? methods : null,
     latency,
     note: labeled.length === 0
       ? 'No hay eventos de prueba etiquetados; no se calculan métricas de clasificación.'
