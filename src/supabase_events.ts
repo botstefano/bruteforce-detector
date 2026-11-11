@@ -100,7 +100,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     throw new Error('Falta CENTINELA_HASH_SECRET para seudonimizar identificadores.');
   }
 
-  const row: Omit<CapturedEventRow, 'received_at'> = {
+  const row = {
     event_id: event.event_id,
     occurred_at: new Date(event.timestamp * 1000).toISOString(),
     source_ip_hash: hashIdentifier(event.ip),
@@ -169,6 +169,49 @@ export async function fetchObservedEvents(): Promise<CapturedEventRow[]> {
   return rows;
 }
 
+export async function fetchBenignTrainingSamples(windowSeconds = 120): Promise<number[][]> {
+  const events = (await fetchObservedEvents())
+    .filter((event) => event.ground_truth_label === 'benign')
+    .sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at));
+
+  const historyByIp = new Map<string, Array<{ timestamp: number; user: string }>>();
+  const samples: number[][] = [];
+
+  for (const event of events) {
+    const timestamp = Date.parse(event.occurred_at) / 1000;
+    const queue = (historyByIp.get(event.source_ip_hash) ?? [])
+      .filter((item) => item.timestamp >= timestamp - windowSeconds);
+
+    // El detector online incorpora únicamente los intentos fallidos antes de extraer features.
+    if (!event.auth_success) {
+      queue.push({ timestamp, user: event.user_key_hash });
+    }
+    historyByIp.set(event.source_ip_hash, queue);
+
+    const timestamps = queue.map((item) => item.timestamp).sort((a, b) => a - b);
+    const distinctUsers = new Set(queue.map((item) => item.user)).size;
+    let intervalMean = windowSeconds;
+    let intervalStd = 0;
+
+    if (timestamps.length >= 2) {
+      const intervals = timestamps.slice(1).map((value, index) => value - timestamps[index]);
+      intervalMean = intervals.reduce((sum, value) => sum + value, 0) / intervals.length;
+      const variance = intervals.reduce((sum, value) => sum + (value - intervalMean) ** 2, 0) / intervals.length;
+      intervalStd = Math.sqrt(variance);
+    }
+
+    samples.push([
+      timestamps.length,
+      distinctUsers,
+      Math.round(intervalMean * 100) / 100,
+      Math.round(intervalStd * 100) / 100,
+      new Date(timestamp * 1000).getHours(),
+    ]);
+  }
+
+  return samples;
+}
+
 export async function labelObservedEvent(input: {
   eventId: string;
   label: Exclude<GroundTruthLabel, 'unknown'>;
@@ -202,6 +245,7 @@ function calculateMetrics(
   prediction: (event: CapturedEventRow) => boolean
 ) {
   let tp = 0, fp = 0, fn = 0, tn = 0;
+
   for (const event of events) {
     const predicted = prediction(event);
     const actual = event.ground_truth_label === 'attack';
@@ -209,7 +253,6 @@ function calculateMetrics(
     else if (!actual && predicted) fp++;
     else if (actual && !predicted) fn++;
     else tn++;
-
   }
 
   const precision = tp + fp ? tp / (tp + fp) : 0;
