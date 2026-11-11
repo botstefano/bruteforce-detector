@@ -395,6 +395,45 @@ export async function freezeActiveExperimentTraining(sampleCount: number) {
   return data;
 }
 
+export async function abortExperimentRecord(experimentId: string, reason: string) {
+  if (!client || !hashSecret) throw new Error('El almacén persistente no está configurado.');
+  const trimmedReason = reason.trim();
+  if (!trimmedReason) throw new Error('Se requiere una causa de aborto para preservar la trazabilidad.');
+
+  const { data: current, error: readError } = await client
+    .from('centinela_experiments')
+    .select('id, metadata')
+    .eq('id', experimentId)
+    .eq('status', 'running')
+    .maybeSingle();
+  if (readError) throw new Error(`No se pudo consultar el experimento: ${readError.message}`);
+  if (!current) throw new Error('No existe un experimento activo con ese identificador.');
+
+  const metadata = {
+    ...((current.metadata ?? {}) as Record<string, unknown>),
+    aborted: true,
+    abort_reason: trimmedReason,
+    aborted_at: new Date().toISOString(),
+  };
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ status: 'aborted', finished_at: new Date().toISOString(), metadata })
+    .eq('id', experimentId)
+    .eq('status', 'running')
+    .select('id, protocol_name, scenario, status, started_at, finished_at, metadata')
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo abortar el experimento: ${error.message}`);
+  if (!data) throw new Error('El experimento dejó de estar activo antes de abortarlo.');
+
+  if (activeExperimentId === experimentId) {
+    activeExperimentId = null;
+    activeExperimentMetadata = {};
+    activeSplitBoundaries = null;
+    activeTrainingFrozen = false;
+  }
+  return data;
+}
+
 export async function labelObservedEvent(input: {
   eventId: string;
   label: Exclude<GroundTruthLabel, 'unknown'>;
