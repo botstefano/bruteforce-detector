@@ -199,7 +199,11 @@ export default function App() {
       showToast('Sistema reiniciado');
     });
 
-    socket.on('connect_error', () => setPanelAutenticado(false));
+    socket.on('connect_error', () => {
+      fetch('/api/session', { credentials: 'same-origin' })
+        .then((response) => { if (!response.ok) setPanelAutenticado(false); })
+        .catch(() => undefined);
+    });
 
     fetch('/api/session', { credentials: 'same-origin' })
       .then(async (response) => {
@@ -490,6 +494,7 @@ export default function App() {
       const data = await res.json();
       if (res.ok) {
         setPanelAutenticado(true);
+        await fetchData();
         showToast('Acceso autorizado a Centinela');
       } else {
         setGateError(data.error || 'Fallo de autenticación');
