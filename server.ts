@@ -54,8 +54,26 @@ dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
+const allowedSocketOrigins = new Set(
+  (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin && origin !== '*')
+);
 const io = new SocketIOServer(server, {
-  cors: { origin: '*' },
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      try {
+        const requested = new URL(origin);
+        if (allowedSocketOrigins.has(origin)) return callback(null, true);
+      } catch {
+        // Invalid Origin is rejected below.
+      }
+      return callback(new Error('Origin no autorizado para Socket.IO'));
+    },
+    credentials: true,
+  },
 });
 
 const uploadDir = '/tmp/cicids_uploads';
