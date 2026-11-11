@@ -311,7 +311,7 @@ export class DetectorML {
   private ocsvm: OneClassSVMModel;
   private lof: LocalOutlierFactorModel;
   public entrenado = false;
-  public fuenteActual = 'sintetico';
+  public fuenteActual = 'sin_entrenar';
   private intentosPorIp: Map<string, IntentoIpML[]> = new Map();
 
   constructor(ventanaFeatures = 120, contamination = 0.15) {
