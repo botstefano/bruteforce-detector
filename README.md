@@ -83,7 +83,7 @@ Each event is assigned by its server-observed timestamp:
 - From `train_end_at` until `validation_end_at`: `validation`.
 - At or after `validation_end_at`: `test`.
 
-Training may be started only after `train_end_at` and before `validation_end_at`. It uses only the exact stored feature vectors from records labeled `benign` in the training split, with a minimum of 50 windows. The trained baseline is frozen in the experiment metadata; another fit requires a new experiment. On restart, a frozen baseline is reconstructed from the same training vectors. Final classification metrics use only labeled events in the test split. Validation events remain separate. An event with uncertain provenance remains `unknown` and is excluded from classification metrics. Do not move cutoffs after inspecting model results.
+Training may be started only after `train_end_at` and before `validation_end_at`. It reconstructs a clean baseline using only events labeled `benign` in the training split, with a minimum of 50 windows. This avoids contaminating the benign baseline when a live feature window originally included an attack that was labeled only later. The feature vector seen online for every event is still stored unchanged for audit and evaluation. The trained baseline is frozen in the experiment metadata; another fit requires a new experiment. On restart, the same benign-only baseline is reconstructed deterministically using the recorded Isolation Forest seed. Final classification metrics use only labeled events in the test split. Validation events remain separate. An event with uncertain provenance remains `unknown` and is excluded from classification metrics. Do not move cutoffs after inspecting model results.
 
 ## Integration from an authentication backend
 
@@ -131,6 +131,14 @@ npm run dev
 npm run build
 ```
 
+
+
+After an experiment is finalized, pass its exact `experiment_id` when exporting or requesting metrics; the API refuses to combine multiple experiments implicitly:
+
+```http
+GET /api/dataset/capturado?experiment_id=EXPERIMENT_UUID&formato=csv
+GET /api/experimentos/metricas_capturadas?experiment_id=EXPERIMENT_UUID
+```
 
 ## Offline empirical evaluation from Supabase exports
 
