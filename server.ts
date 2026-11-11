@@ -1870,9 +1870,18 @@ app.post('/entrenar/upload_cicids', requiereAdmin, (_req: Request, res: Response
   return res.status(410).json({ error: 'No se entrenará el modelo de autenticación con flujos CICIDS convertidos. Utiliza eventos de autenticación observados.' });
 });
 
-// Socket.IO conexión
+// Socket.IO: cerrar canales cuando vence la cookie que los autorizó.
 io.on('connection', (socket) => {
-  // Conexión exitosa para streaming
+  const rawCookie = socket.request.headers.cookie || '';
+  const sessionCookie = extraerCookie(rawCookie, 'admin_session');
+  const expiresAtSeconds = Number(sessionCookie.split('.')[0]);
+  const remainingMs = expiresAtSeconds * 1000 - Date.now();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    socket.disconnect(true);
+    return;
+  }
+  const expiryTimer = setTimeout(() => socket.disconnect(true), remainingMs);
+  socket.on('disconnect', () => clearTimeout(expiryTimer));
 });
 
 // Iniciar servidor con middleware de Vite o estáticos en producción
