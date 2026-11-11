@@ -644,15 +644,15 @@ app.get('/api/eventos', requiereAdmin, (req: Request, res: Response) => {
   res.json(db.obtenerIntentosRecientes(300));
 });
 
-app.get('/api/metricas', (req: Request, res: Response) => {
+app.get('/api/metricas', requiereAdmin, (req: Request, res: Response) => {
   res.json(db.metricasResumen());
 });
 
-app.get('/api/produccion', (req: Request, res: Response) => {
+app.get('/api/produccion', requiereAdmin, (req: Request, res: Response) => {
   res.json(db.contadorProduccion());
 });
 
-app.get('/api/bloqueadas', (req: Request, res: Response) => {
+app.get('/api/bloqueadas', requiereAdmin, (req: Request, res: Response) => {
   res.json(db.listarIpsBloqueadas());
 });
 
@@ -761,7 +761,7 @@ app.get('/api/exportar_dataset', requiereAdmin, (req: Request, res: Response) =>
   return res.send(csvContent);
 });
 
-app.get('/api/exportar_metricas', (req: Request, res: Response) => {
+app.get('/api/exportar_metricas', requiereAdmin, (req: Request, res: Response) => {
   const formato = (req.query.formato as string) || 'csv';
   const m = db.metricasResumen();
 
@@ -1030,6 +1030,7 @@ app.post('/api/cicids/entrenar_con_dataset', requiereAdmin, (_req: Request, res:
 
 // Experimento 1: Protocolo Oficial UNB CICIDS-2017 (10 semillas, split 30/70 temporal)
 app.get('/api/experimentos/protocolo_unb', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   try {
     const resultado = evaluarProtocoloUnb10Semillas(datasetCicidsActual);
     res.json(resultado);
@@ -1041,6 +1042,7 @@ app.get('/api/experimentos/protocolo_unb', (req: Request, res: Response) => {
 
 // Experimento 2: Simulación Rigurosa Multi-Semilla (10 semillas, Media ± Desviación Estándar)
 app.get('/api/experimentos/simulacion_multisemilla', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   const semillas = [42, 101, 2024, 7, 13, 88, 555, 777, 999, 1337];
   
   // Escalado de Botnet simulado sobre 10 semillas independientes
@@ -1143,6 +1145,7 @@ app.get('/api/experimentos/simulacion_multisemilla', (req: Request, res: Respons
 
 // Descargar paquete integral JSON con hashes SHA-256 para el revisor y DOI
 app.get('/api/experimentos/exportar_paquete_revisor', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   const unb = evaluarProtocoloUnb10Semillas(datasetCicidsActual);
   
   const paqueteRevisor = {
@@ -1213,6 +1216,7 @@ Local Outlier Factor & ${(unb.metricas10Semillas[3].precisionMedia * 100).toFixe
 
 // 1. EXPERIMENTO: Variación del Tamaño del Botnet en Ataques Distribuidos
 app.get('/api/experimentos/botnet_distribuido', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   res.json({
     titulo: 'Impacto del Tamaño del Botnet en la Tasa de Detección (Prueba de Tesis Central)',
     descripcion: 'Comparativa de sensibilidad (Recall) entre WAF heurístico por IP vs Ensamble ML al dispersar el ataque en un enjambre de 10 a 1,000 direcciones IP.',
@@ -1284,6 +1288,7 @@ app.get('/api/experimentos/botnet_distribuido', (req: Request, res: Response) =>
 
 // 2. EXPERIMENTO: Estudio de Ablación de Características (Feature Ablation)
 app.get('/api/experimentos/ablacion', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   res.json({
     titulo: 'Estudio de Ablación del Vector de Comportamiento (Feature Ablation Study)',
     descripcion: 'Evaluación del impacto individual de cada característica en el rendimiento de detección (F1-Score), entrenando y evaluando con exclusión sistemática de una variable a la vez.',
@@ -1346,6 +1351,7 @@ app.get('/api/experimentos/ablacion', (req: Request, res: Response) => {
 
 // 3. EXPERIMENTO: Escenario de Atacante con Ritmo Humano (Human-Mimicry)
 app.get('/api/experimentos/trafico_real', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   let humanData: any = null;
   const jsonPath = path.join(process.cwd(), 'results_baseline', 'resultados_metricas.json');
   if (fs.existsSync(jsonPath)) {
