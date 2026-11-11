@@ -1735,124 +1735,16 @@ app.post('/lanzar_bot', requiereAdmin, async (req: Request, res: Response) => {
 // 7. ENTRENAMIENTO ML (Upload y Reset)
 // =================================================================
 
-app.post('/entrenar/reset_sintetico', requiereAdmin, (req: Request, res: Response) => {
-  detectorML.reset();
-  const muestras = generarDatasetCicids2017(50000);
-  detectorML.entrenarConDatosNormales(muestras, 'cicids2017');
-  estadoModelo.fuente = 'cicids2017';
-  estadoModelo.detalle = 'Entrenado con 50,000 flujos benignos de alta resolución basados en CICIDS2017.';
-  estadoModelo.cargando = false;
-  io.emit('entrenamiento_completo', estadoModelo);
-  res.json(estadoModelo);
+app.post('/entrenar/reset_sintetico', requiereAdmin, (_req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Entrenamiento no disponible: el estudio empírico usa exclusivamente eventos benignos capturados y etiquetados.' });
 });
 
-app.post('/entrenar/cargar_cicids_precargado', requiereAdmin, (req: Request, res: Response) => {
-  detectorML.reset();
-  const data = req.body || {};
-  const cantidad = Math.min(50000, Math.max(100, parseInt((data.cantidad || req.query.cantidad || '50000') as string, 10)));
-  const muestras = generarDatasetCicids2017(cantidad);
-  detectorML.entrenarConDatosNormales(muestras, 'cicids2017');
-  estadoModelo.fuente = 'cicids2017';
-  estadoModelo.detalle = `Entrenado con ${cantidad.toLocaleString()} flujos benignos de alta resolución basados en CICIDS2017.`;
-  estadoModelo.cargando = false;
-  io.emit('entrenamiento_completo', estadoModelo);
-  res.json(estadoModelo);
+app.post('/entrenar/cargar_cicids_precargado', requiereAdmin, (_req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Esta ruta pertenece al protocolo anterior y no modifica el modelo de captura experimental.' });
 });
 
-app.post('/entrenar/upload_cicids', requiereAdmin, upload.array('archivos'), async (req: Request, res: Response) => {
-  const files = (req.files as Express.Multer.File[]) || [];
-  if (files.length === 0) {
-    return res.status(400).json({ error: 'No se seleccionó ningún archivo CSV' });
-  }
-
-  estadoModelo.cargando = true;
-  io.emit('entrenamiento_progreso', { mensaje: `Analizando ${files.length} archivo(s) CSV subido(s)...` });
-
-  setTimeout(async () => {
-    try {
-      const muestrasBenignas: number[][] = [];
-
-      for (const file of files) {
-        if (!file.originalname.toLowerCase().endsWith('.csv')) {
-          try { fs.unlinkSync(file.path); } catch {}
-          continue;
-        }
-
-        io.emit('entrenamiento_progreso', { mensaje: `Leyendo ${file.originalname}...` });
-        const contenido = fs.readFileSync(file.path, 'utf-8');
-        const lineas = contenido.split(/\r?\n/).filter((l) => l.trim().length > 0);
-        
-        if (lineas.length <= 1) {
-          try { fs.unlinkSync(file.path); } catch {}
-          continue;
-        }
-
-        // Limpiar encabezados de comillas y espacios (formato CICIDS2017 estándar de ISCX)
-        const encabezado = lineas[0].split(',').map((h) => h.replace(/["\r]/g, '').trim().toLowerCase());
-        let labelIdx = encabezado.findIndex((h) => h.includes('label'));
-        if (labelIdx === -1) {
-          // Si no tiene columna 'label', la última columna suele ser el target
-          labelIdx = encabezado.length - 1;
-        }
-
-        // Buscar columnas útiles si existen en CICIDS2017: Flow Duration, Flow IAT Mean, etc.
-        const idxDuration = encabezado.findIndex((h) => h.includes('duration') || h.includes('flow duration'));
-        const idxIatMean = encabezado.findIndex((h) => h.includes('iat mean'));
-
-        // Procesar hasta 2500 registros benignos por archivo para evitar agotar memoria
-        let encontradosEnArchivo = 0;
-        for (let i = 1; i < lineas.length && encontradosEnArchivo < 2500; i++) {
-          const columnas = lineas[i].split(',').map((c) => c.replace(/["\r]/g, '').trim());
-          const label = (columnas[labelIdx] || '').toLowerCase();
-          const esBenigno = label === '' || label.includes('benign') || label.includes('normal') || label === '0';
-
-          if (esBenigno) {
-            encontradosEnArchivo++;
-            
-            // Si el CSV contiene métricas de tiempo reales de CICIDS2017
-            let intervaloProm = 45.0 + Math.random() * 60.0;
-            if (idxIatMean >= 0) {
-              const val = parseFloat(columnas[idxIatMean]);
-              if (!isNaN(val) && val > 0) intervaloProm = Math.min(120, Math.max(10, val / 1000000)); // microseg a seg
-            }
-
-            const numIntentos = Math.random() < 0.75 ? 0 : 1;
-            const numUsuarios = numIntentos > 0 ? 1 : 0;
-            const intervaloStd = Math.random() * 25;
-            const hora = Math.floor(Math.random() * 24);
-
-            muestrasBenignas.push([numIntentos, numUsuarios, intervaloProm, intervaloStd, hora]);
-          }
-        }
-
-        try {
-          fs.unlinkSync(file.path);
-        } catch {}
-      }
-
-      if (muestrasBenignas.length === 0) {
-        throw new Error('No se detectaron filas benignas (BENIGN) en los CSVs subidos.');
-      }
-
-      io.emit('entrenamiento_progreso', {
-        mensaje: `Entrenando algoritmos (Isolation Forest, OC-SVM, LOF) con ${muestrasBenignas.length} muestras extraídas...`
-      });
-
-      // Entrenar los 3 algoritmos de ML
-      detectorML.entrenarConDatosNormales(muestrasBenignas, 'cicids2017');
-      estadoModelo.fuente = 'cicids2017';
-      estadoModelo.detalle = `Entrenado con ${muestrasBenignas.length} vectores benignos extraídos de tus archivos CSV de CICIDS2017.`;
-      estadoModelo.cargando = false;
-
-      io.emit('entrenamiento_completo', estadoModelo);
-    } catch (err: unknown) {
-      estadoModelo.cargando = false;
-      const msg = err instanceof Error ? err.message : String(err);
-      io.emit('entrenamiento_error', { mensaje: msg });
-    }
-  }, 80);
-
-  res.json({ status: 'entrenamiento_iniciado', archivos_guardados: files.length });
+app.post('/entrenar/upload_cicids', requiereAdmin, (_req: Request, res: Response) => {
+  return res.status(410).json({ error: 'No se entrenará el modelo de autenticación con flujos CICIDS convertidos. Utiliza eventos de autenticación observados.' });
 });
 
 // Socket.IO conexión
