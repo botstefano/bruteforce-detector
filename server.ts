@@ -442,12 +442,13 @@ function requiereAdmin(req: Request, res: Response, next: NextFunction) {
 app.get('/health', async (_req: Request, res: Response) => {
   const eventStore = eventStoreStatus();
   const supabaseOk = await checkSupabaseConnection();
+  const activeExperimentReady = Boolean(getActiveExperimentState());
   const captureReady =
     eventStore.configured &&
     supabaseOk &&
-    Boolean(CENTINELA_INGEST_TOKEN) &&
-    Boolean(getActiveExperimentId()) &&
+    activeExperimentReady &&
     !eventCapturePaused;
+  const integrationReady = captureReady && Boolean(CENTINELA_INGEST_TOKEN);
 
   res.json({
     status: eventCapturePaused || !eventStore.configured || !supabaseOk ? 'degraded' : 'ok',
@@ -460,7 +461,9 @@ app.get('/health', async (_req: Request, res: Response) => {
     event_store: eventStore,
     ingest_token_configured: Boolean(CENTINELA_INGEST_TOKEN),
     active_experiment: Boolean(getActiveExperimentId()),
+    active_experiment_boundaries_valid: activeExperimentReady,
     capture_ready: captureReady,
+    backend_integration_ready: integrationReady,
     capture_paused: eventCapturePaused,
     capture_pause_reason: eventCapturePauseReason,
   });
