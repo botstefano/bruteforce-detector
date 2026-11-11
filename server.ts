@@ -469,6 +469,15 @@ app.get('/health', async (_req: Request, res: Response) => {
   });
 });
 
+app.get('/api/experimentos/estado', requiereAdmin, (_req: Request, res: Response) => {
+  return res.json({
+    active_experiment: getActiveExperimentState(),
+    capture_paused: eventCapturePaused,
+    capture_pause_reason: eventCapturePauseReason,
+    event_store: eventStoreStatus(),
+  });
+});
+
 app.post('/evaluar', (req: Request, res: Response) => {
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
