@@ -396,8 +396,9 @@ async function procesarIntentoCapturado(
     await persistObservedEvent(evento as CapturedAuthEvent);
   } catch (error) {
     const detail = error instanceof Error ? error.message : 'Error desconocido de persistencia.';
+    console.error('Fallo de persistencia de evento en Supabase; captura detenida:', detail);
     eventCapturePaused = true;
-    eventCapturePauseReason = `Captura pausada tras un fallo de escritura en Supabase: ${detail}. Inicia un experimento nuevo después de verificar el almacenamiento.`;
+    eventCapturePauseReason = 'Persistencia en Supabase falló. La captura permanece detenida hasta verificar el almacenamiento e iniciar un experimento nuevo.';
     throw new Error(eventCapturePauseReason);
   }
   io.emit('nuevo_evento', evento);
