@@ -1,6 +1,6 @@
 -- Esquema de referencia Centinela para Supabase.
 -- Aplicar en un proyecto de desarrollo tras revisar el SQL.
--- El backend Node usa SUPABASE_SERVICE_ROLE_KEY; nunca incluirla en el cliente.
+-- El backend Node usa SUPABASE_SECRET_KEY (o la clave heredada service-role); nunca incluirla en el cliente.
 
 create extension if not exists pgcrypto;
 
@@ -109,7 +109,7 @@ returns jsonb
 language plpgsql
 security invoker
 set search_path = public
-as $
+as $function$
 declare
   v_previous_label text;
   v_now timestamptz := now();
@@ -150,7 +150,7 @@ begin
     'labeled_at', v_now
   );
 end;
-$;
+$function$;
 
 revoke all on function public.label_centinela_event(uuid, text, text, text, text) from public, anon, authenticated;
 grant execute on function public.label_centinela_event(uuid, text, text, text, text) to service_role;
