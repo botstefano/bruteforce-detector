@@ -75,6 +75,10 @@ const client: SupabaseClient | null =
       })
     : null;
 
+export function getActiveExperimentId(): string | null {
+  return activeExperimentId;
+}
+
 export function eventStoreStatus() {
   return {
     configured: Boolean(client && hashSecret),
