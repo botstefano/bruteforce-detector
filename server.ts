@@ -21,12 +21,13 @@ import {
   fetchObservedEvents,
   labelObservedEvent,
   persistObservedEvent,
+  fetchBenignTrainingSamples,
   type CapturedAuthEvent,
 } from './src/supabase_events.js';
 
 import { db } from './src/database.js';
 import { DetectorReglas } from './src/detector_reglas.js';
-import { DetectorML, generarMuestrasNormales } from './src/detector_ml.js';
+import { DetectorML } from './src/detector_ml.js';
 import { generarDatasetCicids2017 } from './src/dataset_cicids.js';
 import {
   parsearCicidsCsv,
@@ -79,14 +80,28 @@ const CREDENCIALES_VALIDAS: Record<string, string> = {
 // Inicializar detectores
 const detectorReglas = new DetectorReglas();
 const detectorML = new DetectorML();
-const muestrasCicidsInicial = generarDatasetCicids2017(50000);
-detectorML.entrenarConDatosNormales(muestrasCicidsInicial, 'cicids2017');
 
 const estadoModelo = {
-  fuente: 'cicids2017',
-  detalle: 'Entrenado con 50,000 flujos benignos de alta resolución basados en CICIDS2017.',
+  fuente: 'sin_entrenar',
+  detalle: 'Sin entrenamiento. Se requieren eventos benignos capturados y etiquetados en Supabase.',
   cargando: false,
+  muestras_entrenamiento: 0,
 };
+
+async function entrenarModeloDesdeCapturasBenignas() {
+  const muestras = await fetchBenignTrainingSamples(120);
+  if (muestras.length < 50) {
+    throw new Error(`Se necesitan al menos 50 eventos benignos etiquetados; disponibles: ${muestras.length}.`);
+  }
+  detectorML.reset();
+  detectorML.entrenarConDatosNormales(muestras, 'eventos_benignos_capturados');
+  estadoModelo.fuente = 'eventos_benignos_capturados';
+  estadoModelo.detalle = 'Entrenado exclusivamente con ventanas derivadas de eventos de autenticación capturados y etiquetados como benignos en Supabase.';
+  estadoModelo.muestras_entrenamiento = muestras.length;
+  estadoModelo.cargando = false;
+  io.emit('entrenamiento_completo', estadoModelo);
+  return estadoModelo;
+}
 
 // Dataset y Evaluación CICIDS-2017 (2,500 flujos pre-cargados)
 let datasetCicidsActual: CicidsFlowRecord[] = generarMuestraRealCicids2500();
@@ -893,67 +908,31 @@ app.get('/api/exportar_metricas', (req: Request, res: Response) => {
   return res.send(csv);
 });
 
-app.post('/entrenar/reentrenar_con_trafico', requiereAdmin, (req: Request, res: Response) => {
-  const intentos = db.obtenerTodosIntentos();
-  const intentosBenignos = intentos.filter((i) => i.es_ataque_real === 0);
-
-  if (intentosBenignos.length < 5) {
-    return res.status(400).json({
-      error: `Se requieren al menos 5 eventos legítimos/benignos registrados (actuales: ${intentosBenignos.length}). Simula o envía tráfico legítimo primero.`
-    });
+app.post('/entrenar/reentrenar_con_trafico', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    return res.json(await entrenarModeloDesdeCapturasBenignas());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo entrenar con los eventos capturados.';
+    return res.status(400).json({ error: message });
   }
-
-  // Extraer vectores de características de los eventos benignos registrados
-  const muestras: number[][] = [];
-  for (const b of intentosBenignos) {
-    const hora = new Date(b.timestamp * 1000).getHours();
-    muestras.push([
-      b.exitoso ? 0 : 1,
-      1,
-      45.0 + Math.random() * 60.0,
-      10.0 + Math.random() * 20.0,
-      hora
-    ]);
-  }
-
-  detectorML.entrenarConDatosNormales(muestras, 'trafico_en_vivo');
-  estadoModelo.fuente = 'trafico_en_vivo';
-  estadoModelo.detalle = `Re-entrenado dinámicamente con ${muestras.length} eventos benignos capturados en vivo por Centinela.`;
-  estadoModelo.cargando = false;
-
-  io.emit('entrenamiento_completo', estadoModelo);
-  return res.json(estadoModelo);
 });
 
-app.post('/entrenar/con_trafico', requiereAdmin, (req: Request, res: Response) => {
-  const intentos = db.obtenerTodosIntentos();
-  const intentosBenignos = intentos.filter((i) => i.es_ataque_real === 0);
-
-  if (intentosBenignos.length < 5) {
-    return res.status(400).json({
-      error: `Se requieren al menos 5 eventos legítimos/benignos registrados (actuales: ${intentosBenignos.length}). Simula o envía tráfico legítimo primero.`
-    });
+app.post('/entrenar/con_trafico', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    return res.json(await entrenarModeloDesdeCapturasBenignas());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo entrenar con los eventos capturados.';
+    return res.status(400).json({ error: message });
   }
+});
 
-  const muestras: number[][] = [];
-  for (const b of intentosBenignos) {
-    const hora = new Date(b.timestamp * 1000).getHours();
-    muestras.push([
-      b.exitoso ? 0 : 1,
-      1,
-      45.0 + Math.random() * 60.0,
-      10.0 + Math.random() * 20.0,
-      hora
-    ]);
+app.post('/api/experimentos/entrenar_con_eventos_capturados', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    return res.json(await entrenarModeloDesdeCapturasBenignas());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo entrenar con los eventos capturados.';
+    return res.status(400).json({ error: message });
   }
-
-  detectorML.entrenarConDatosNormales(muestras, 'trafico_en_vivo');
-  estadoModelo.fuente = 'trafico_en_vivo';
-  estadoModelo.detalle = `Re-entrenado dinámicamente con ${muestras.length} eventos benignos capturados en vivo por Centinela.`;
-  estadoModelo.cargando = false;
-
-  io.emit('entrenamiento_completo', estadoModelo);
-  return res.json(estadoModelo);
 });
 
 app.get('/api/estado_modelo', (req: Request, res: Response) => {
