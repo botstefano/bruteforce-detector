@@ -140,9 +140,7 @@ export default function App() {
   const [botIntervalo, setBotIntervalo] = useState(0.3);
 
   // Gate de autenticación con CAPTCHA para entrar a Centinela
-  const [panelAutenticado, setPanelAutenticado] = useState<boolean>(() => {
-    return localStorage.getItem('centinela_sesion_activa') === 'true';
-  });
+  const [panelAutenticado, setPanelAutenticado] = useState(false);
   const [gateUser, setGateUser] = useState('admin');
   const [gatePass, setGatePass] = useState('');
   const [gateCaptchaId, setGateCaptchaId] = useState('');
@@ -171,11 +169,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Fetch initial data
-    fetchData();
-
-    // Socket.io connection
-    const socket = io();
+    // Socket.IO remains disconnected until the server validates the HttpOnly session.
+    const socket = io({ autoConnect: false, withCredentials: true });
     socketRef.current = socket;
 
     socket.on('nuevo_evento', (evento: Intento) => {
@@ -204,10 +199,31 @@ export default function App() {
       showToast('Sistema reiniciado');
     });
 
+    socket.on('connect_error', () => setPanelAutenticado(false));
+
+    fetch('/api/session', { credentials: 'same-origin' })
+      .then(async (response) => {
+        if (!response.ok) {
+          setPanelAutenticado(false);
+          return;
+        }
+        setPanelAutenticado(true);
+        await fetchData();
+      })
+      .catch(() => setPanelAutenticado(false));
+
     return () => {
       socket.disconnect();
+      socketRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    if (panelAutenticado) socket.connect();
+    else socket.disconnect();
+  }, [panelAutenticado]);
 
   const fetchData = async () => {
     try {
@@ -473,7 +489,6 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        localStorage.setItem('centinela_sesion_activa', 'true');
         setPanelAutenticado(true);
         showToast('Acceso autorizado a Centinela');
       } else {
@@ -664,20 +679,9 @@ export default function App() {
               </button>
             </form>
 
-            <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col items-center space-y-2">
-              <button
-                type="button"
-                onClick={() => {
-                  localStorage.setItem('centinela_sesion_activa', 'true');
-                  setPanelAutenticado(true);
-                  showToast('Acceso directo al panel activado');
-                }}
-                className="text-xs text-slate-400 hover:text-cyan-300 underline transition-colors cursor-pointer"
-              >
-                ¿Deseas omitir el inicio de sesión y entrar directamente al panel? Haz clic aquí
-              </button>
+            <div className="mt-4 pt-4 border-t border-slate-800/80">
               <p className="text-[10px] text-slate-500 text-center">
-                El servidor consume y destruye el token de CAPTCHA al validarlo para prevenir ataques por fuerza bruta.
+                El acceso al panel se valida en el servidor mediante una cookie de sesión HttpOnly.
               </p>
             </div>
           </div>
@@ -788,7 +792,6 @@ export default function App() {
               </button>
               <button
                 onClick={() => {
-                  localStorage.removeItem('centinela_sesion_activa');
                   setPanelAutenticado(false);
                   setGateCaptchaReset((prev) => prev + 1);
                   setGateCaptchaInput('');
