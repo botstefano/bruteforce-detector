@@ -245,6 +245,46 @@ io.use((socket, next) => {
   return next();
 });
 
+const adminLoginFailures = new Map<string, { count: number; windowStartedAt: number; blockedUntil: number }>();
+const ADMIN_LOGIN_MAX_FAILURES = 5;
+const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+
+function comprobarLimiteLoginAdmin(req: Request, res: Response, next: NextFunction) {
+  const ip = ipDelCliente(req);
+  const entry = adminLoginFailures.get(ip);
+  const now = Date.now();
+  if (entry && entry.blockedUntil > now) {
+    const retryAfter = Math.ceil((entry.blockedUntil - now) / 1000);
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Demasiados intentos fallidos. Intenta nuevamente más tarde.' });
+  }
+  if (entry && entry.windowStartedAt + ADMIN_LOGIN_WINDOW_MS <= now) {
+    adminLoginFailures.delete(ip);
+  }
+  if (adminLoginFailures.size > 10000) {
+    for (const [key, value] of adminLoginFailures) {
+      if (value.blockedUntil <= now && value.windowStartedAt + ADMIN_LOGIN_WINDOW_MS <= now) {
+        adminLoginFailures.delete(key);
+      }
+    }
+  }
+  return next();
+}
+
+function registrarFalloLoginAdmin(ip: string): void {
+  const now = Date.now();
+  const current = adminLoginFailures.get(ip);
+  const base = current && current.windowStartedAt + ADMIN_LOGIN_WINDOW_MS > now
+    ? current
+    : { count: 0, windowStartedAt: now, blockedUntil: 0 };
+  base.count += 1;
+  if (base.count >= ADMIN_LOGIN_MAX_FAILURES) {
+    base.blockedUntil = now + ADMIN_LOGIN_LOCKOUT_MS;
+  }
+  adminLoginFailures.set(ip, base);
+}
+
 function validarTokenIngesta(req: Request): boolean {
   if (!CENTINELA_INGEST_TOKEN) return false;
   const auth = req.headers.authorization || '';
@@ -772,7 +812,7 @@ app.post('/login', async (req: Request, res: Response) => {
 // 3. AUTENTICACIÓN ADMIN (API)
 // =================================================================
 
-app.post('/login-admin', (req: Request, res: Response) => {
+app.post('/login-admin', comprobarLimiteLoginAdmin, (req: Request, res: Response) => {
   const pwd = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
   const captcha = typeof req.body?.captcha === 'string' ? req.body.captcha.trim() : '';
   const captchaId = typeof req.body?.captchaId === 'string' ? req.body.captchaId.trim() : '';
@@ -784,9 +824,11 @@ app.post('/login-admin', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Código CAPTCHA incorrecto o expirado.' });
   }
   if (!safeStringEqual(pwd, DASHBOARD_PASSWORD)) {
-    return res.status(401).json({ error: 'Contraseña incorrecta.' });
+    registrarFalloLoginAdmin(ipDelCliente(req));
+    return res.status(401).json({ error: 'Credenciales incorrectas.' });
   }
 
+  adminLoginFailures.delete(ipDelCliente(req));
   res.cookie('admin_session', adminSessionToken(), {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
