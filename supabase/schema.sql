@@ -25,8 +25,8 @@ create table if not exists public.centinela_auth_events (
   event_id uuid not null default gen_random_uuid() unique,
   occurred_at timestamptz not null,
   received_at timestamptz not null default now(),
-  source_ip_hash text,
-  user_key_hash text,
+  source_ip_hash text not null,
+  user_key_hash text not null,
   auth_success boolean not null,
   origin text not null,
   is_simulated boolean not null default false,
@@ -58,6 +58,23 @@ create table if not exists public.centinela_auth_events (
   check (latency_ml_ms is null or latency_ml_ms >= 0),
   check (latency_total_ms is null or latency_total_ms >= 0)
 );
+
+-- Re-ejecutable también si la tabla ya existía antes de incorporar el split temporal.
+alter table public.centinela_auth_events
+  add column if not exists dataset_split text not null default 'unassigned';
+do $constraints$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'centinela_auth_events_dataset_split_check'
+      and conrelid = 'public.centinela_auth_events'::regclass
+  ) then
+    alter table public.centinela_auth_events
+      add constraint centinela_auth_events_dataset_split_check
+      check (dataset_split in ('unassigned', 'train', 'validation', 'test'));
+  end if;
+end;
+$constraints$;
 
 create table if not exists public.centinela_event_label_history (
   id bigint generated always as identity primary key,
