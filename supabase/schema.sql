@@ -90,6 +90,67 @@ revoke all on table public.centinela_experiments from anon, authenticated;
 revoke all on table public.centinela_auth_events from anon, authenticated;
 revoke all on table public.centinela_event_label_history from anon, authenticated;
 
-grant all on table public.centinela_experiments to service_role;
-grant all on table public.centinela_auth_events to service_role;
-grant all on table public.centinela_event_label_history to service_role;
+grant select, insert, update on table public.centinela_experiments to service_role;
+grant select, insert, update on table public.centinela_auth_events to service_role;
+grant select, insert on table public.centinela_event_label_history to service_role;
+
+grant usage, select on sequence public.centinela_auth_events_id_seq to service_role;
+grant usage, select on sequence public.centinela_event_label_history_id_seq to service_role;
+
+-- Etiquetado transaccional: actualiza el evento y registra su historial juntos.
+create or replace function public.label_centinela_event(
+  p_event_id uuid,
+  p_label text,
+  p_method text,
+  p_rationale text,
+  p_labeled_by text default null
+)
+returns jsonb
+language plpgsql
+security invoker
+set search_path = public
+as $
+declare
+  v_previous_label text;
+  v_now timestamptz := now();
+begin
+  if p_label not in ('benign', 'attack') then
+    raise exception 'Etiqueta no permitida';
+  end if;
+  if nullif(trim(p_method), '') is null or nullif(trim(p_rationale), '') is null then
+    raise exception 'El método y la justificación son obligatorios';
+  end if;
+
+  select ground_truth_label into v_previous_label
+  from public.centinela_auth_events
+  where event_id = p_event_id and is_simulated = false
+  for update;
+
+  if not found then
+    raise exception 'Evento capturado no encontrado';
+  end if;
+
+  update public.centinela_auth_events
+  set ground_truth_label = p_label,
+      ground_truth_method = trim(p_method),
+      ground_truth_notes = trim(p_rationale),
+      ground_truth_updated_at = v_now
+  where event_id = p_event_id and is_simulated = false;
+
+  insert into public.centinela_event_label_history (
+    event_id, previous_label, new_label, labeling_method, rationale, labeled_by
+  ) values (
+    p_event_id, v_previous_label, p_label, trim(p_method), trim(p_rationale), nullif(trim(p_labeled_by), '')
+  );
+
+  return jsonb_build_object(
+    'event_id', p_event_id,
+    'previous_label', v_previous_label,
+    'label', p_label,
+    'labeled_at', v_now
+  );
+end;
+$;
+
+revoke all on function public.label_centinela_event(uuid, text, text, text, text) from public, anon, authenticated;
+grant execute on function public.label_centinela_event(uuid, text, text, text, text) to service_role;
