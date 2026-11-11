@@ -35,7 +35,7 @@ The server-to-server capture token is independent of the dashboard password. Nev
 | `GET /api/dataset/capturado` | Export captured, non-simulator events as JSON; add `?formato=csv` for CSV. |
 | `GET /api/experimentos/metricas_capturadas` | Calculate classification metrics exclusively on labeled test-split events. |
 | `GET /api/session` | Validate the admin session for the dashboard and Socket.IO. |
-| `GET /health` | Probe the Supabase table with the server key and report `supabase_ok`, store configuration, ingest-token presence, active experiment, and `capture_ready`. `db_ok` now reflects the Supabase read probe; `local_store_ok` describes the in-memory dashboard cache. |
+| `GET /health` | Probe the Supabase table with the server key and report `supabase_ok`, store configuration, ingest-token presence, active experiment, `capture_ready` for the built-in capture path, and `backend_integration_ready` for `/registrar_intento`. `db_ok` reflects the Supabase read probe; `local_store_ok` describes the in-memory dashboard cache. |
 
 Dataset, labeling, experiment, evaluation, and administrative event endpoints require admin authentication. Use the dashboard's HttpOnly session cookie or a trusted server-side `Authorization: Bearer $DASHBOARD_PASSWORD` header.
 
