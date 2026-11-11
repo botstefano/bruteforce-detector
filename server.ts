@@ -26,7 +26,9 @@ import {
   labelObservedEvent,
   persistObservedEvent,
   fetchBenignTrainingSamples,
+  freezeActiveExperimentTraining,
   getActiveExperimentId,
+  getActiveExperimentState,
   type CapturedAuthEvent,
 } from './src/supabase_events.js';
 
@@ -123,18 +125,38 @@ const estadoModelo = {
   muestras_entrenamiento: 0,
 };
 
-async function entrenarModeloDesdeCapturasBenignas() {
-  if (!getActiveExperimentId()) {
-    throw new Error('Crea un experimento activo antes de entrenar con los eventos capturados.');
+async function entrenarModeloDesdeCapturasBenignas(restaurarModeloCongelado = false) {
+  const experiment = getActiveExperimentState();
+  if (!experiment) {
+    throw new Error('Crea un experimento activo con train_end_at y validation_end_at antes de entrenar.');
   }
+  if (restaurarModeloCongelado) {
+    if (!experiment.trainingFrozen) throw new Error('No existe un modelo congelado para restaurar.');
+  } else {
+    if (experiment.trainingFrozen) {
+      throw new Error('El modelo ya está congelado para este experimento. Crea un experimento nuevo para reentrenar.');
+    }
+    const now = Date.now();
+    if (now < experiment.trainEndMs) {
+      throw new Error('El periodo de entrenamiento sigue abierto. Espera a train_end_at para cerrar y congelar el conjunto de entrenamiento.');
+    }
+    if (now >= experiment.validationEndMs) {
+      throw new Error('El periodo de prueba ya comenzó. No se permite entrenar ni ajustar el modelo durante la prueba.');
+    }
+  }
+
   const muestras = await fetchBenignTrainingSamples(120);
   if (muestras.length < 50) {
-    throw new Error(`Se necesitan al menos 50 eventos benignos etiquetados; disponibles: ${muestras.length}.`);
+    throw new Error(`Se necesitan al menos 50 ventanas benignas etiquetadas en el split train; disponibles: ${muestras.length}.`);
+  }
+
+  if (!restaurarModeloCongelado) {
+    await freezeActiveExperimentTraining(muestras.length);
   }
   detectorML.reset();
   detectorML.entrenarConDatosNormales(muestras, 'eventos_benignos_capturados');
   estadoModelo.fuente = 'eventos_benignos_capturados';
-  estadoModelo.detalle = 'Entrenado exclusivamente con ventanas derivadas de eventos de autenticación capturados y etiquetados como benignos en Supabase.';
+  estadoModelo.detalle = 'Entrenado exclusivamente con ventanas derivadas de eventos capturados y etiquetados como benignos en el split temporal train de Supabase.';
   estadoModelo.muestras_entrenamiento = muestras.length;
   estadoModelo.cargando = false;
   io.emit('entrenamiento_completo', estadoModelo);
@@ -1898,13 +1920,15 @@ async function startServer() {
   if (eventStoreStatus().configured) {
     try {
       const activeExperiment = await restoreActiveExperimentRecord();
-      if (activeExperiment) {
-        console.log('Experimento activo restaurado:', activeExperiment);
-        await entrenarModeloDesdeCapturasBenignas();
+      if (activeExperiment && getActiveExperimentState()?.trainingFrozen) {
+        console.log('Experimento y baseline congelado restaurados:', activeExperiment);
+        await entrenarModeloDesdeCapturasBenignas(true);
         console.log(`Modelo restaurado con ${estadoModelo.muestras_entrenamiento} ventanas benignas capturadas.`);
       } else {
         estadoModelo.fuente = 'sin_entrenar';
-        estadoModelo.detalle = 'No hay experimento activo. Crea uno e inicia la recolección de eventos benignos.';
+        estadoModelo.detalle = activeExperiment
+          ? 'Experimento activo sin baseline congelado. Captura y etiqueta el periodo train antes de entrenar.'
+          : 'No hay experimento activo. Crea uno e inicia la recolección de eventos.';
         estadoModelo.muestras_entrenamiento = 0;
       }
     } catch (error) {
