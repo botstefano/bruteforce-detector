@@ -814,8 +814,8 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
   if (!protocolName || !scenario || !trainEndAt || !validationEndAt) {
     return res.status(400).json({ error: 'Se requieren protocol_name, scenario, train_end_at y validation_end_at (fechas ISO). El periodo posterior a validation_end_at se reserva para prueba.' });
   }
-  if (!Number.isFinite(Date.parse(trainEndAt)) || !Number.isFinite(Date.parse(validationEndAt)) || Date.parse(validationEndAt) <= Date.parse(trainEndAt)) {
-    return res.status(400).json({ error: 'Las fechas ISO deben ser válidas y validation_end_at posterior a train_end_at.' });
+  if (!Number.isFinite(Date.parse(trainEndAt)) || !Number.isFinite(Date.parse(validationEndAt)) || Date.parse(trainEndAt) <= Date.now() || Date.parse(validationEndAt) <= Date.parse(trainEndAt)) {
+    return res.status(400).json({ error: 'Usa fechas ISO futuras: train_end_at debe ser posterior a ahora y validation_end_at posterior a train_end_at.' });
   }
   try {
     const experiment = await createExperimentRecord({
