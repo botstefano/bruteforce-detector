@@ -1018,21 +1018,10 @@ app.post('/api/cicids/evaluar_umbral', (req: Request, res: Response) => {
   });
 });
 
-// Entrenar Centinela con flujos benignos del dataset importado
-app.post('/api/cicids/entrenar_con_dataset', requiereAdmin, (req: Request, res: Response) => {
-  const benignos = datasetCicidsActual.filter((r) => !r.isAttack);
-  if (benignos.length < 10) {
-    return res.status(400).json({ error: 'El dataset requiere al menos 10 flujos BENIGN para calibrar el modelo.' });
-  }
-
-  const muestras = benignos.map((b) => b.features);
-  detectorML.entrenarConDatosNormales(muestras, 'cicids2017_importado');
-  estadoModelo.fuente = 'cicids2017_importado';
-  estadoModelo.detalle = `Calibrado con ${muestras.length} flujos benignos extraídos del dataset CICIDS-2017 importado.`;
-  estadoModelo.cargando = false;
-
-  io.emit('entrenamiento_completo', estadoModelo);
-  res.json({ status: 'ok', estadoModelo, flujosEntrenamiento: muestras.length });
+// CICIDS es un benchmark de flujos de red, no una fuente de eventos de autenticación.
+// Se conserva la ruta para compatibilidad, pero no modifica el modelo del estudio empírico.
+app.post('/api/cicids/entrenar_con_dataset', requiereAdmin, (_req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Entrenamiento deshabilitado: el detector de autenticación solo se entrena con eventos benignos observados y etiquetados.' });
 });
 
 // =========================================================================
@@ -1754,6 +1743,20 @@ io.on('connection', (socket) => {
 
 // Iniciar servidor con middleware de Vite o estáticos en producción
 async function startServer() {
+  if (eventStoreStatus().configured) {
+    try {
+      await entrenarModeloDesdeCapturasBenignas();
+      console.log(`Modelo restaurado con ${estadoModelo.muestras_entrenamiento} ventanas benignas capturadas.`);
+    } catch (error) {
+      estadoModelo.fuente = 'sin_entrenar';
+      estadoModelo.detalle = error instanceof Error ? error.message : 'No se pudo restaurar el entrenamiento desde Supabase.';
+      estadoModelo.muestras_entrenamiento = 0;
+      console.warn('Modelo iniciado sin entrenamiento desde observaciones:', estadoModelo.detalle);
+    }
+  } else {
+    console.warn('Supabase no está configurado: la captura persistente y el entrenamiento empírico no están disponibles.');
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
