@@ -281,8 +281,8 @@ export async function createExperimentRecord(input: {
   if (!client || !hashSecret) throw new Error('El almacén persistente no está configurado.');
   const trainEndMs = Date.parse(input.trainEndAt);
   const validationEndMs = Date.parse(input.validationEndAt);
-  if (!Number.isFinite(trainEndMs) || !Number.isFinite(validationEndMs) || validationEndMs <= trainEndMs) {
-    throw new Error('Define train_end_at y validation_end_at como fechas ISO válidas y validation_end_at posterior a train_end_at.');
+  if (!Number.isFinite(trainEndMs) || !Number.isFinite(validationEndMs) || trainEndMs <= Date.now() || validationEndMs <= trainEndMs) {
+    throw new Error('Define train_end_at y validation_end_at como fechas ISO futuras, con validation_end_at posterior a train_end_at.');
   }
   const trainEndAt = new Date(trainEndMs).toISOString();
   const validationEndAt = new Date(validationEndMs).toISOString();
