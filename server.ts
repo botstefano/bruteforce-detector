@@ -339,10 +339,12 @@ async function procesarIntentoCapturado(
   ip: string,
   usuario: string,
   exitoso: boolean,
-  origen: string
+  origen: string,
+  metadata: Record<string, unknown> = {}
 ) {
   if (isIP(ip) === 0) throw new Error('No se pudo determinar una IP de origen válida y confiable.');
   const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true);
+  (evento as typeof evento & { metadata: Record<string, unknown> }).metadata = metadata;
   await persistObservedEvent(evento as CapturedAuthEvent);
   io.emit('nuevo_evento', evento);
   return evento;
@@ -644,14 +646,29 @@ app.post('/demo/login', async (req: Request, res: Response) => {
   const password = data.password || '';
   if (!usuario || usuario.length > 254) return res.status(400).json({ error: 'Usuario inválido.' });
 
-  // PASO 1: Evaluar si la IP ya está bloqueada
+  // Registrar también las solicitudes que ya llegan desde una IP bloqueada.
+  // De otro modo se perdería precisamente parte del tráfico que el control está rechazando.
   const [bloqueada, restante] = db.ipEstaBloqueada(ip);
   if (bloqueada) {
-    return res.status(403).json({
-      status: 'rechazado',
-      mensaje: 'Demasiados intentos sospechosos. Intenta más tarde.',
-      segundos_restantes: restante,
-    });
+    try {
+      const eventoBloqueado = await procesarIntentoCapturado(
+        ip,
+        usuario,
+        false,
+        'demo_login',
+        { blocked_before_authentication: true, remaining_block_seconds: restante }
+      );
+      return res.status(403).json({
+        status: 'rechazado',
+        mensaje: 'Demasiados intentos sospechosos. Intenta más tarde.',
+        segundos_restantes: restante,
+        event_id: eventoBloqueado.event_id,
+        persisted: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo guardar el evento.';
+      return res.status(503).json({ error: message, persisted: false });
+    }
   }
 
   // PASO 2: Lógica de autenticación del sitio demo
