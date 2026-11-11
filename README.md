@@ -34,10 +34,15 @@ The server-to-server capture token is independent of the dashboard password. Nev
 | `POST /api/experimentos/entrenar_con_eventos_capturados` | Train from labeled benign windows in the training split (minimum 50). |
 | `GET /api/dataset/capturado` | Export captured, non-simulator events as JSON; add `?formato=csv` for CSV. |
 | `GET /api/experimentos/metricas_capturadas` | Calculate classification metrics exclusively on labeled test-split events. |
+| `GET /api/experimentos/estado` | Return the active experiment's immutable temporal boundaries and capture state to the authenticated dashboard. |
 | `GET /api/session` | Validate the admin session for the dashboard and Socket.IO. |
 | `GET /health` | Probe the Supabase table with the server key and report `supabase_ok`, store configuration, ingest-token presence, active experiment, `capture_ready` for the built-in capture path, and `backend_integration_ready` for `/registrar_intento`. `db_ok` reflects the Supabase read probe; `local_store_ok` describes the in-memory dashboard cache. |
 
 Dataset, labeling, experiment, evaluation, and administrative event endpoints require admin authentication. Use the dashboard's HttpOnly session cookie or a trusted server-side `Authorization: Bearer $DASHBOARD_PASSWORD` header.
+
+## Dashboard workflow
+
+After signing into the admin dashboard, open **Captura Empírica** to inspect the live Supabase health probe, create an experiment with preregistered train/validation cutoffs, review captured events, record independently justified labels, freeze the benign-only baseline, finalize or abort the run, and export its CSV. Only the 50 most recent events are shown in the panel; the authenticated export contains the complete selected experiment. The panel does not create simulated traffic or infer ground truth from detector alerts.
 
 ## Supabase setup
 
