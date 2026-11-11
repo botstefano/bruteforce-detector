@@ -58,7 +58,7 @@ function createSeededRandom(seed: number): () => number {
 }
 
 function cFactor(n: number): number {
-  if (n <= 1) return 1;
+  if (n <= 1) return 0;
   if (n === 2) return 1;
   const eulerMascheroni = 0.5772156649;
   return 2 * (Math.log(n - 1) + eulerMascheroni) - (2 * (n - 1)) / n;
@@ -153,10 +153,13 @@ class IsolationForestModel {
     this.trees = [];
     const rng = createSeededRandom(this.randomSeed);
     for (let i = 0; i < this.nEstimators; i++) {
+      // Uniform random sub-sampling without replacement (Isolation Forest protocol).
+      const indexes = Array.from({ length: X.length }, (_, index) => index);
       const subSample: number[][] = [];
       for (let j = 0; j < n; j++) {
-        const idx = Math.floor(rng() * X.length);
-        subSample.push(X[idx]);
+        const selected = j + Math.floor(rng() * (indexes.length - j));
+        [indexes[j], indexes[selected]] = [indexes[selected], indexes[j]];
+        subSample.push(X[indexes[j]]);
       }
       this.trees.push(new IsolationTree(subSample, 0, maxHeight, rng));
     }
