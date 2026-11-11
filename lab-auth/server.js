@@ -92,12 +92,14 @@ function authenticate(username, password) {
 }
 
 function clientIpFromRender(req) {
-  // Render routes public requests through Cloudflare. CF-Connecting-IP is set
-  // by Cloudflare and is preferred over the client-controllable X-Forwarded-For chain.
-  const cloudflareIp = req.headers["cf-connecting-ip"];
-  const candidate = Array.isArray(cloudflareIp) ? cloudflareIp[0] : cloudflareIp;
+  // Render documents X-Forwarded-For as the client-IP source for public Web Services.
+  // Its edge/load-balancer infrastructure supplies this header. Use the left-most
+  // valid address (the originating client), never a value sent in the JSON body.
+  const forwarded = req.headers["x-forwarded-for"];
+  const chain = Array.isArray(forwarded) ? forwarded.join(",") : String(forwarded || "");
+  const firstAddress = chain.split(",")[0]?.trim() || "";
 
-  if (candidate && isIP(candidate.trim())) return candidate.trim();
+  if (firstAddress && isIP(firstAddress)) return firstAddress;
 
   if (!IS_PRODUCTION) {
     const localIp = req.socket.remoteAddress || "127.0.0.1";

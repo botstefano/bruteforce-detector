@@ -66,7 +66,7 @@ Si Centinela no confirma el registro, el laboratorio muestra un error y no afirm
 
 - El token de ingesta existe solo en variables de entorno del servidor.
 - La contraseña se valida en este servicio y nunca se reenvía a Centinela.
-- Se utiliza el encabezado `CF-Connecting-IP` que Render documenta para identificar la IP real del cliente detrás de su infraestructura de proxy.
+- Se utiliza el encabezado `X-Forwarded-For` que Render documenta para identificar la IP del cliente. El servicio toma la primera dirección válida de la cadena y no acepta una IP suministrada por el navegador en el cuerpo JSON.
 - Se aplica un límite de 60 solicitudes de login por minuto y por IP.
 - Las respuestas incluyen políticas de no-cache, CSP, protección contra framing y otras cabeceras de seguridad.
 - La aplicación no guarda sesiones ni contraseñas. Es un testbed de login, no un portal de producción.
@@ -87,4 +87,4 @@ cp .env.example .env
 node --env-file=.env server.js
 ```
 
-En local, la IP se toma del socket local. En producción, el servicio exige una IP válida en `CF-Connecting-IP` antes de enviar el evento a Centinela.
+En local, la IP se toma del socket local. En producción, el servicio exige una IP válida en `X-Forwarded-For` antes de enviar el evento a Centinela.
