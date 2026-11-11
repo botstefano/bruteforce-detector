@@ -182,20 +182,24 @@ export async function fetchObservedEvents(experimentId?: string | null): Promise
     throw new Error('El almacén persistente de Centinela no está configurado.');
   }
 
+  const filterExperimentId = experimentId === undefined ? activeExperimentId : experimentId;
+  if (!filterExperimentId) {
+    throw new Error('Indica experiment_id para evitar mezclar conjuntos de experimentos diferentes.');
+  }
+
   const rows: CapturedEventRow[] = [];
   const pageSize = 1000;
   const maxRows = 100000;
 
   for (let offset = 0; offset < maxRows; offset += pageSize) {
     const end = Math.min(offset + pageSize - 1, maxRows - 1);
-    let query = client
+    const { data, error } = await client
       .from('centinela_auth_events')
       .select('*')
       .eq('is_simulated', false)
-      .order('occurred_at', { ascending: true });
-    const filterExperimentId = experimentId === undefined ? activeExperimentId : experimentId;
-    if (filterExperimentId) query = query.eq('experiment_id', filterExperimentId);
-    const { data, error } = await query.range(offset, end);
+      .eq('experiment_id', filterExperimentId)
+      .order('occurred_at', { ascending: true })
+      .range(offset, end);
 
     if (error) {
       throw new Error(`No se pudieron consultar los eventos: ${error.message}`);
