@@ -37,8 +37,9 @@ services:
         value: 1
       - key: DURACION_BLOQUEO_SEGUNDOS
         value: 300
+      # Set this to comma-separated exact dashboard origins only if the dashboard is hosted on a different origin.
       - key: ALLOWED_ORIGINS
-        value: "*"
+        sync: false
 
     autoDeploy: true
     healthCheckPath: /health
