@@ -19,6 +19,22 @@ services:
         generateValue: true
       - key: DASHBOARD_PASSWORD
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: CENTINELA_HASH_SECRET
+        sync: false
+      - key: CENTINELA_INGEST_TOKEN
+        sync: false
+      - key: CENTINELA_EXPERIMENT_ID
+        sync: false
+      - key: CENTINELA_VERSION
+        value: "research-capture-v1"
+      - key: CENTINELA_CONFIG_VERSION
+        value: "1"
+      - key: TRUST_PROXY_HOPS
+        value: 1
       - key: DURACION_BLOQUEO_SEGUNDOS
         value: 300
       - key: ALLOWED_ORIGINS
