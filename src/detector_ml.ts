@@ -307,6 +307,7 @@ class LocalOutlierFactorModel {
 // =========================================================================
 export class DetectorML {
   private ventanaFeatures: number;
+  private contamination: number;
   private iforest: IsolationForestModel;
   private ocsvm: OneClassSVMModel;
   private lof: LocalOutlierFactorModel;
@@ -316,6 +317,7 @@ export class DetectorML {
 
   constructor(ventanaFeatures = 120, contamination = 0.15) {
     this.ventanaFeatures = ventanaFeatures;
+    this.contamination = contamination;
     this.iforest = new IsolationForestModel(100, contamination);
     this.ocsvm = new OneClassSVMModel(contamination);
     this.lof = new LocalOutlierFactorModel(12);
@@ -424,6 +426,15 @@ export class DetectorML {
 
   public reset(): void {
     this.intentosPorIp.clear();
+  }
+
+  public resetForNewExperiment(): void {
+    this.intentosPorIp.clear();
+    this.iforest = new IsolationForestModel(100, this.contamination);
+    this.ocsvm = new OneClassSVMModel(this.contamination);
+    this.lof = new LocalOutlierFactorModel(12);
+    this.entrenado = false;
+    this.fuenteActual = 'sin_entrenar';
   }
 }
 
