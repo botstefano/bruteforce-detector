@@ -74,6 +74,7 @@ export function EmpiricalStudyPanel() {
   const [health, setHealth] = useState<HealthSnapshot | null>(null);
   const [experiment, setExperiment] = useState<ActiveExperiment | null>(null);
   const [events, setEvents] = useState<CapturedEvent[]>([]);
+  const [eventPage, setEventPage] = useState(1);
   const [protocolName, setProtocolName] = useState('centinela-auth-study-v1');
   const [scenario, setScenario] = useState('authorized-authentication-testbed');
   const [description, setDescription] = useState('Captura preregistrada de solicitudes reales de autenticación observadas por Centinela.');
@@ -142,9 +143,17 @@ export function EmpiricalStudyPanel() {
     return result;
   }, [events]);
 
-  const recentEvents = useMemo(
-    () => [...events].sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at)).slice(0, 50),
+  const EVENTS_PER_PAGE = 20;
+  const sortedEvents = useMemo(
+    () => [...events].sort((a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at)),
     [events]
+  );
+  const totalEventPages = Math.max(1, Math.ceil(sortedEvents.length / EVENTS_PER_PAGE));
+  const firstVisibleEvent = sortedEvents.length === 0 ? 0 : (eventPage - 1) * EVENTS_PER_PAGE + 1;
+  const lastVisibleEvent = Math.min(eventPage * EVENTS_PER_PAGE, sortedEvents.length);
+  const paginatedEvents = useMemo(
+    () => sortedEvents.slice((eventPage - 1) * EVENTS_PER_PAGE, eventPage * EVENTS_PER_PAGE),
+    [sortedEvents, eventPage]
   );
 
   const sendAction = async (name: string, url: string, body?: Record<string, unknown>) => {
@@ -379,13 +388,36 @@ export function EmpiricalStudyPanel() {
           <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-xl space-y-4">
             <div>
               <h3 className="text-base font-bold text-white">Revisión y etiquetado auditado</h3>
-              <p className="text-xs text-slate-400 mt-1">Se muestran los 50 eventos más recientes. Las etiquetas deben basarse en registros de sesiones legítimas o manifiestos independientes de campañas autorizadas, nunca en las alertas de Centinela.</p>
+              <p className="text-xs text-slate-400 mt-1">Se muestran todos los eventos del experimento, ordenados del más reciente al más antiguo, en páginas de 20 registros. Las etiquetas deben basarse en registros de sesiones legítimas o manifiestos independientes de campañas autorizadas, nunca en las alertas de Centinela.</p>
             </div>
-            {recentEvents.length === 0 ? (
+            {sortedEvents.length === 0 ? (
               <p className="text-sm text-slate-500">Todavía no hay eventos capturados. El ingreso ocurre mediante el login del testbed o desde un backend autorizado que invoque /registrar_intento.</p>
             ) : (
               <div className="space-y-3">
-                {recentEvents.map((item) => {
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 px-4 py-3">
+                  <p className="text-xs text-slate-300">
+                    Mostrando <strong className="text-white">{firstVisibleEvent}–{lastVisibleEvent}</strong> de <strong className="text-white">{sortedEvents.length}</strong> eventos · Página {eventPage} de {totalEventPages}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEventPage((page) => Math.max(1, page - 1))}
+                      disabled={eventPage <= 1}
+                      className="px-3 py-2 rounded-lg border border-slate-700 text-slate-200 text-xs font-semibold hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Anterior
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEventPage((page) => Math.min(totalEventPages, page + 1))}
+                      disabled={eventPage >= totalEventPages}
+                      className="px-3 py-2 rounded-lg border border-cyan-500/40 text-cyan-200 text-xs font-semibold hover:bg-cyan-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Siguiente
+                    </button>
+                  </div>
+                </div>
+                {paginatedEvents.map((item) => {
                   const draft = drafts[item.event_id] ?? { method: '', rationale: '' };
                   return (
                     <div key={item.event_id} className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
@@ -421,6 +453,29 @@ export function EmpiricalStudyPanel() {
                     </div>
                   );
                 })}
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950 px-4 py-3">
+                  <p className="text-xs text-slate-300">
+                    Mostrando <strong className="text-white">{firstVisibleEvent}–{lastVisibleEvent}</strong> de <strong className="text-white">{sortedEvents.length}</strong> eventos · Página {eventPage} de {totalEventPages}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEventPage((page) => Math.max(1, page - 1))}
+                      disabled={eventPage <= 1}
+                      className="px-3 py-2 rounded-lg border border-slate-700 text-slate-200 text-xs font-semibold hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Anterior
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEventPage((page) => Math.min(totalEventPages, page + 1))}
+                      disabled={eventPage >= totalEventPages}
+                      className="px-3 py-2 rounded-lg border border-cyan-500/40 text-cyan-200 text-xs font-semibold hover:bg-cyan-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Siguiente
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>
