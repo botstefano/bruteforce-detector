@@ -760,7 +760,7 @@ export default function App() {
                 <span>Captura Empírica</span>
               </button>
               <button
-                onClick={() => setActiveTab('report')
+                onClick={() => setActiveTab('report')}
                 className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
                   activeTab === 'report'
                     ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
