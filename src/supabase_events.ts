@@ -25,6 +25,7 @@ export interface CapturedAuthEvent {
   latency_rules_ms: number;
   latency_ml_ms: number;
   latency_total_ms: number;
+  campaign_id?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -43,6 +44,7 @@ export interface CapturedEventRow {
   ground_truth_notes: string | null;
   experiment_id: string | null;
   scenario: string | null;
+  campaign_id: string | null;
   dataset_split: 'unassigned' | 'train' | 'validation' | 'test';
   request_id: string | null;
   alerta_reglas: boolean;
@@ -146,6 +148,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     ground_truth_notes: null,
     experiment_id: activeExperimentId,
     scenario: event.origen,
+    campaign_id: event.campaign_id ?? null,
     dataset_split: splitForTimestamp(event.timestamp),
     request_id: null,
     alerta_reglas: event.alerta_reglas,
