@@ -493,11 +493,15 @@ app.post('/demo/2fa/login-paso2', (req: Request, res: Response) => {
 
 // --- LOGIN 4: CENTINELA (El login original protegido) ---
 
-app.post('/demo/login', (req: Request, res: Response) => {
+app.post('/demo/login', async (req: Request, res: Response) => {
   const data = req.body || {};
-  const ip = ipDelCliente(req, data);
-  const usuario = (data.usuario || '').trim();
+  if (!eventStoreStatus().configured) {
+    return res.status(503).json({ error: 'La captura persistente de eventos no está configurada.' });
+  }
+  const ip = ipDelCliente(req);
+  const usuario = typeof data.usuario === 'string' ? data.usuario.trim() : '';
   const password = data.password || '';
+  if (!usuario || usuario.length > 254) return res.status(400).json({ error: 'Usuario inválido.' });
 
   // PASO 1: Evaluar si la IP ya está bloqueada
   const [bloqueada, restante] = db.ipEstaBloqueada(ip);
@@ -513,7 +517,13 @@ app.post('/demo/login', (req: Request, res: Response) => {
   const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
 
   // PASO 3: Registrar el intento en Centinela (tráfico real es_simulado=0)
-  const evento = procesarIntento(ip, usuario, exitoso, 0, 'demo_login', 0, true);
+  let evento;
+  try {
+    evento = await procesarIntentoCapturado(ip, usuario, exitoso, 'demo_login');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo guardar el evento.';
+    return res.status(503).json({ error: message, persisted: false });
+  }
 
   if (exitoso) {
     return res.status(200).json({ status: 'ok', mensaje: 'Autenticado correctamente' });
@@ -540,11 +550,15 @@ app.post('/demo/login', (req: Request, res: Response) => {
 });
 
 // Login de prueba interno (usado para pruebas internas)
-app.post('/login', (req: Request, res: Response) => {
+app.post('/login', async (req: Request, res: Response) => {
   const data = req.body || {};
-  const ip = ipDelCliente(req, data);
-  const usuario = (data.usuario || '').trim();
+  if (!eventStoreStatus().configured) {
+    return res.status(503).json({ error: 'La captura persistente de eventos no está configurada.' });
+  }
+  const ip = ipDelCliente(req);
+  const usuario = typeof data.usuario === 'string' ? data.usuario.trim() : '';
   const password = data.password || '';
+  if (!usuario || usuario.length > 254) return res.status(400).json({ error: 'Usuario inválido.' });
 
   const [bloqueada, restante] = db.ipEstaBloqueada(ip);
   if (bloqueada) {
@@ -554,7 +568,14 @@ app.post('/login', (req: Request, res: Response) => {
     });
   }
 
-  const evento = procesarIntento(ip, usuario, password, 0, 'login_prueba_interno', 1);
+  let evento;
+  try {
+    const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
+    evento = await procesarIntentoCapturado(ip, usuario, exitoso, 'login_prueba_interno');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo guardar el evento.';
+    return res.status(503).json({ error: message, persisted: false });
+  }
 
   if (evento.alerta_reglas || evento.alerta_ml) {
     return res.status(429).json({ status: 'bloqueado', mensaje: 'Actividad sospechosa detectada' });
@@ -570,44 +591,28 @@ app.post('/login', (req: Request, res: Response) => {
 // =================================================================
 
 app.post('/login-admin', (req: Request, res: Response) => {
-  const usuario = (req.body.usuario || req.body.username || 'admin').trim().toLowerCase();
-  const pwd = (req.body.password || '').trim();
-  const captcha = (req.body.captcha || '').trim();
-  const captchaId = (req.body.captchaId || '').trim();
+  const pwd = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
+  const captcha = typeof req.body?.captcha === 'string' ? req.body.captcha.trim() : '';
+  const captchaId = typeof req.body?.captchaId === 'string' ? req.body.captchaId.trim() : '';
 
-  // Desafío CAPTCHA obligatorio para entrar al panel de Centinela
+  if (!DASHBOARD_PASSWORD || !SESSION_SECRET) {
+    return res.status(503).json({ error: 'Configura DASHBOARD_PASSWORD y SECRET_KEY en el servidor.' });
+  }
   if (!captchaId || !validarYConsumirCaptcha(captchaId, captcha)) {
-    return res.status(400).json({ error: 'Código CAPTCHA incorrecto o expirado. Ingresa los 5 caracteres que ves en pantalla.' });
+    return res.status(400).json({ error: 'Código CAPTCHA incorrecto o expirado.' });
+  }
+  if (!safeStringEqual(pwd, DASHBOARD_PASSWORD)) {
+    return res.status(401).json({ error: 'Contraseña incorrecta.' });
   }
 
-  const clavesAceptadas = [
-    (DASHBOARD_PASSWORD || '').trim(),
-    'S3guro#2026',
-    's3guro#2026',
-    'admin',
-    'admin123',
-    'centinela',
-    '123456',
-    CREDENCIALES_VALIDAS[usuario],
-    CREDENCIALES_VALIDAS['admin'],
-  ].filter(Boolean);
-
-  const esValida = clavesAceptadas.some(
-    (c) => c === pwd || c?.toLowerCase() === pwd.toLowerCase()
-  ) || !DASHBOARD_PASSWORD;
-
-  if (esValida) {
-    res.cookie('admin_session', 'S3guro#2026', {
-      httpOnly: false,
-      sameSite: 'lax',
-      maxAge: 8 * 60 * 60 * 1000,
-    });
-    return res.json({ status: 'ok', redirect: '/', mensaje: 'Autenticación exitosa' });
-  }
-
-  return res.status(401).json({
-    error: 'Contraseña incorrecta. Puedes usar la clave por defecto: S3guro#2026 o admin.',
+  res.cookie('admin_session', adminSessionToken(), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    path: '/',
+    maxAge: 8 * 60 * 60 * 1000,
   });
+  return res.json({ status: 'ok', redirect: '/', mensaje: 'Autenticación exitosa' });
 });
 
 app.post('/logout-admin', (req: Request, res: Response) => {
@@ -633,6 +638,60 @@ app.get('/api/produccion', (req: Request, res: Response) => {
 
 app.get('/api/bloqueadas', (req: Request, res: Response) => {
   res.json(db.listarIpsBloqueadas());
+});
+
+// Dataset persistido: solo solicitudes observadas, nunca registros del simulador.
+app.get('/api/dataset/capturado', requiereAdmin, async (req: Request, res: Response) => {
+  try {
+    const events = await fetchObservedEvents();
+    const formato = typeof req.query.formato === 'string' ? req.query.formato : 'json';
+    if (formato === 'csv') {
+      const headers = Object.keys(events[0] ?? {
+        event_id: '', occurred_at: '', source_ip_hash: '', user_key_hash: '',
+        auth_success: '', origin: '', ground_truth_label: '', alerta_reglas: '', alerta_ml: '',
+      });
+      const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+      const csv = [headers.join(','), ...events.map((event) =>
+        headers.map((header) => escapeCsv((event as unknown as Record<string, unknown>)[header])).join(',')
+      )].join('\\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="centinela_eventos_capturados.csv"');
+      return res.send(csv);
+    }
+    return res.json({ total: events.length, source: 'supabase_observed_events', events });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo exportar el conjunto de datos.';
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/experimentos/metricas_capturadas', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    return res.json(await calculateObservedMetrics());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudieron calcular las métricas.';
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/eventos/:eventId/etiqueta', requiereAdmin, async (req: Request, res: Response) => {
+  const { label, method, rationale, labeledBy } = req.body || {};
+  if (!['benign', 'attack'].includes(label) || typeof method !== 'string' || typeof rationale !== 'string') {
+    return res.status(400).json({ error: 'Se requiere label benign/attack, method y rationale.' });
+  }
+  try {
+    const result = await labelObservedEvent({
+      eventId: req.params.eventId,
+      label,
+      method,
+      rationale,
+      labeledBy: typeof labeledBy === 'string' ? labeledBy : undefined,
+    });
+    return res.json({ status: 'ok', result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo etiquetar el evento.';
+    return res.status(500).json({ error: message });
+  }
 });
 
 // Reporte manejado por la SPA de React
