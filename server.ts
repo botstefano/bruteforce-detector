@@ -13,10 +13,32 @@ import multer from 'multer';
 import path from 'node:path';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
+
+import {
+  abortExperimentRecord,
+  calculateObservedMetrics,
+  checkSupabaseConnection,
+  createExperimentRecord,
+  finishExperimentRecord,
+  eventStoreStatus,
+  fetchObservedEvents,
+  restoreActiveExperimentRecord,
+  labelObservedEvent,
+  persistObservedEvent,
+  fetchBenignTrainingSamples,
+  fetchRecentObservedEventsForState,
+  freezeActiveExperimentTraining,
+  getAnalyticsIdentifiers,
+  getActiveExperimentId,
+  getActiveExperimentState,
+  type CapturedAuthEvent,
+} from './src/supabase_events.js';
 
 import { db } from './src/database.js';
 import { DetectorReglas } from './src/detector_reglas.js';
-import { DetectorML, generarMuestrasNormales } from './src/detector_ml.js';
+import { DetectorML } from './src/detector_ml.js';
 import { generarDatasetCicids2017 } from './src/dataset_cicids.js';
 import {
   parsearCicidsCsv,
@@ -38,8 +60,29 @@ dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
+const allowedSocketOrigins = new Set(
+  (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin && origin !== '*')
+);
 const io = new SocketIOServer(server, {
-  cors: { origin: '*' },
+  cors: {
+    origin: Array.from(allowedSocketOrigins),
+    credentials: true,
+  },
+  allowRequest: (req, callback) => {
+    const origin = req.headers.origin;
+    if (!origin) return callback(null, true);
+    try {
+      const originHost = new URL(origin).host.toLowerCase();
+      const requestHost = String(req.headers.host || '').toLowerCase();
+      const sameOrigin = Boolean(requestHost) && originHost === requestHost;
+      callback(null, sameOrigin || allowedSocketOrigins.has(origin));
+    } catch {
+      callback(null, false);
+    }
+  },
 });
 
 const uploadDir = '/tmp/cicids_uploads';
@@ -48,30 +91,85 @@ if (!fs.existsSync(uploadDir)) {
 }
 const upload = multer({ dest: uploadDir, limits: { fileSize: 50 * 1024 * 1024 } });
 
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const DURACION_BLOQUEO_SEGUNDOS = parseInt(process.env.DURACION_BLOQUEO_SEGUNDOS || '300', 10);
 const DASHBOARD_PASSWORD = (process.env.DASHBOARD_PASSWORD || '').trim();
+const CENTINELA_INGEST_TOKEN = (process.env.CENTINELA_INGEST_TOKEN || '').trim();
+const TRUST_PROXY_HOPS = Math.max(0, parseInt(process.env.TRUST_PROXY_HOPS || '0', 10));
+const SESSION_SECRET = (process.env.SECRET_KEY || '').trim();
 
-// Credenciales válidas para el login interno y demo
-const CREDENCIALES_VALIDAS: Record<string, string> = {
-  admin: 'S3guro#2026',
-  jperez: 'Trujillo!456',
-  mgarcia: 'Contrasena_88',
-  carla: 'MiClave!789',
-  roberto: 'Roberto2026!',
-};
+if (TRUST_PROXY_HOPS > 0) app.set('trust proxy', TRUST_PROXY_HOPS);
+
+// Las credenciales de demostración se inyectan solo como secreto de servidor.
+// No se incluyen cuentas ni contraseñas por defecto en el repositorio.
+function cargarCredencialesDemo(): Record<string, string> {
+  const raw = process.env.CENTINELA_DEMO_CREDENTIALS_JSON || '{}';
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const credentials: Record<string, string> = {};
+    for (const [username, password] of Object.entries(parsed)) {
+      if (username.trim().length > 0 && typeof password === 'string' && password.length >= 8) {
+        credentials[username] = password;
+      }
+    }
+    return credentials;
+  } catch {
+    console.error('CENTINELA_DEMO_CREDENTIALS_JSON debe contener un objeto JSON de usuarios y contraseñas.');
+    return {};
+  }
+}
+const CREDENCIALES_VALIDAS = cargarCredencialesDemo();
 
 // Inicializar detectores
 const detectorReglas = new DetectorReglas();
 const detectorML = new DetectorML();
-const muestrasCicidsInicial = generarDatasetCicids2017(50000);
-detectorML.entrenarConDatosNormales(muestrasCicidsInicial, 'cicids2017');
+let eventCapturePaused = false;
+let eventCapturePauseReason: string | null = null;
 
 const estadoModelo = {
-  fuente: 'cicids2017',
-  detalle: 'Entrenado con 50,000 flujos benignos de alta resolución basados en CICIDS2017.',
+  fuente: 'sin_entrenar',
+  detalle: 'Sin entrenamiento. Se requieren eventos benignos capturados y etiquetados en Supabase.',
   cargando: false,
+  muestras_entrenamiento: 0,
 };
+
+async function entrenarModeloDesdeCapturasBenignas(restaurarModeloCongelado = false) {
+  const experiment = getActiveExperimentState();
+  if (!experiment) {
+    throw new Error('Crea un experimento activo con train_end_at y validation_end_at antes de entrenar.');
+  }
+  if (restaurarModeloCongelado) {
+    if (!experiment.trainingFrozen) throw new Error('No existe un modelo congelado para restaurar.');
+  } else {
+    if (experiment.trainingFrozen) {
+      throw new Error('El modelo ya está congelado para este experimento. Crea un experimento nuevo para reentrenar.');
+    }
+    const now = Date.now();
+    if (now < experiment.trainEndMs) {
+      throw new Error('El periodo de entrenamiento sigue abierto. Espera a train_end_at para cerrar y congelar el conjunto de entrenamiento.');
+    }
+    if (now >= experiment.validationEndMs) {
+      throw new Error('El periodo de prueba ya comenzó. No se permite entrenar ni ajustar el modelo durante la prueba.');
+    }
+  }
+
+  const muestras = await fetchBenignTrainingSamples();
+  if (muestras.length < 50) {
+    throw new Error(`Se necesitan al menos 50 ventanas benignas etiquetadas en el split train; disponibles: ${muestras.length}.`);
+  }
+
+  if (!restaurarModeloCongelado) {
+    await freezeActiveExperimentTraining(muestras.length);
+  }
+  detectorML.reset();
+  detectorML.entrenarConDatosNormales(muestras, 'eventos_benignos_capturados');
+  estadoModelo.fuente = 'eventos_benignos_capturados';
+  estadoModelo.detalle = 'Entrenado exclusivamente con ventanas derivadas de eventos capturados y etiquetados como benignos en el split temporal train de Supabase.';
+  estadoModelo.muestras_entrenamiento = muestras.length;
+  estadoModelo.cargando = false;
+  io.emit('entrenamiento_completo', estadoModelo);
+  return estadoModelo;
+}
 
 // Dataset y Evaluación CICIDS-2017 (2,500 flujos pre-cargados)
 let datasetCicidsActual: CicidsFlowRecord[] = generarMuestraRealCicids2500();
@@ -91,16 +189,113 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 // Helper de extracción de IP
-function ipDelCliente(req: Request, dataOverride?: { ip?: string }): string {
-  if (dataOverride && dataOverride.ip && typeof dataOverride.ip === 'string') {
-    return dataOverride.ip.trim();
+function ipDelCliente(req: Request, _dataOverride?: { ip?: string }): string {
+  // Express resuelve req.ip usando solo la cantidad de proxies de confianza configurada.
+  // Nunca se acepta una IP enviada dentro del cuerpo de una petición.
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+function safeStringEqual(candidate: string, expected: string): boolean {
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+const ADMIN_SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+
+function adminSessionToken(): string {
+  if (!DASHBOARD_PASSWORD || !SESSION_SECRET) return '';
+  const expiresAt = Math.floor((Date.now() + ADMIN_SESSION_DURATION_MS) / 1000).toString();
+  const signature = createHmac('sha256', SESSION_SECRET)
+    .update(`centinela-admin:${expiresAt}`)
+    .digest('hex');
+  return `${expiresAt}.${signature}`;
+}
+
+function validarSesionAdmin(candidate: string): boolean {
+  if (!SESSION_SECRET || !candidate) return false;
+  const [expiresAtRaw, signature, extra] = candidate.split('.');
+  if (!expiresAtRaw || !signature || extra !== undefined) return false;
+  const expiresAt = Number(expiresAtRaw);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt * 1000 <= Date.now()) return false;
+  const expected = createHmac('sha256', SESSION_SECRET)
+    .update(`centinela-admin:${expiresAtRaw}`)
+    .digest('hex');
+  return safeStringEqual(signature, expected);
+}
+
+function singleRouteParam(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? (value[0] || '') : (value || '');
+}
+
+function extraerCookie(rawCookie: string, nombre: string): string {
+  for (const fragment of rawCookie.split(';')) {
+    const [key, ...valueParts] = fragment.trim().split('=');
+    if (key === nombre) {
+      const value = valueParts.join('=');
+      try { return decodeURIComponent(value); } catch { return ''; }
+    }
   }
-  const xff = req.headers['x-forwarded-for'];
-  if (xff) {
-    const raw = Array.isArray(xff) ? xff[0] : xff;
-    return raw.split(',')[0].trim();
+  return '';
+}
+
+io.use((socket, next) => {
+  if (!DASHBOARD_PASSWORD || !SESSION_SECRET) {
+    return next(new Error('Autenticación del panel no configurada.'));
   }
-  return req.ip || req.socket.remoteAddress || '127.0.0.1';
+  const rawCookie = socket.request.headers.cookie || '';
+  const sessionCookie = extraerCookie(rawCookie, 'admin_session');
+  if (!validarSesionAdmin(sessionCookie)) {
+    return next(new Error('No autorizado: inicia sesión en Centinela.'));
+  }
+  return next();
+});
+
+const adminLoginFailures = new Map<string, { count: number; windowStartedAt: number; blockedUntil: number }>();
+const ADMIN_LOGIN_MAX_FAILURES = 5;
+const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+
+function comprobarLimiteLoginAdmin(req: Request, res: Response, next: NextFunction) {
+  const ip = ipDelCliente(req);
+  const entry = adminLoginFailures.get(ip);
+  const now = Date.now();
+  if (entry && entry.blockedUntil > now) {
+    const retryAfter = Math.ceil((entry.blockedUntil - now) / 1000);
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Demasiados intentos fallidos. Intenta nuevamente más tarde.' });
+  }
+  if (entry && entry.windowStartedAt + ADMIN_LOGIN_WINDOW_MS <= now) {
+    adminLoginFailures.delete(ip);
+  }
+  if (adminLoginFailures.size > 10000) {
+    for (const [key, value] of adminLoginFailures) {
+      if (value.blockedUntil <= now && value.windowStartedAt + ADMIN_LOGIN_WINDOW_MS <= now) {
+        adminLoginFailures.delete(key);
+      }
+    }
+  }
+  return next();
+}
+
+function registrarFalloLoginAdmin(ip: string): void {
+  const now = Date.now();
+  const current = adminLoginFailures.get(ip);
+  const base = current && current.windowStartedAt + ADMIN_LOGIN_WINDOW_MS > now
+    ? current
+    : { count: 0, windowStartedAt: now, blockedUntil: 0 };
+  base.count += 1;
+  if (base.count >= ADMIN_LOGIN_MAX_FAILURES) {
+    base.blockedUntil = now + ADMIN_LOGIN_LOCKOUT_MS;
+  }
+  adminLoginFailures.set(ip, base);
+}
+
+function validarTokenIngesta(req: Request): boolean {
+  if (!CENTINELA_INGEST_TOKEN) return false;
+  const auth = req.headers.authorization || '';
+  const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+  return safeStringEqual(token, CENTINELA_INGEST_TOKEN);
 }
 
 function ipAleatoria(): string {
@@ -120,7 +315,9 @@ function procesarIntento(
   esAtaqueReal = 0,
   origen = 'simulador',
   esSimulado = 1,
-  yaEsBooleanoExitoso = false
+  yaEsBooleanoExitoso = false,
+  detectorIpKey = ip,
+  detectorUserKey = usuario
 ) {
   const ahora = Date.now() / 1000;
   let exitoso = false;
@@ -130,8 +327,14 @@ function procesarIntento(
     exitoso = CREDENCIALES_VALIDAS[usuario] === passwordOExitoso;
   }
 
-  const veredictoReglas = detectorReglas.evaluar(ip, usuario, exitoso, ahora);
-  const veredictoML = detectorML.registrarYEvaluar(ip, usuario, exitoso, ahora);
+  const totalStart = performance.now();
+  const rulesStart = performance.now();
+  const veredictoReglas = detectorReglas.evaluar(detectorIpKey, detectorUserKey, exitoso, ahora);
+  const latencyRulesMs = performance.now() - rulesStart;
+  const mlStart = performance.now();
+  const veredictoML = detectorML.registrarYEvaluar(detectorIpKey, detectorUserKey, exitoso, ahora);
+  const latencyMlMs = performance.now() - mlStart;
+  const latencyTotalMs = performance.now() - totalStart;
 
   const alerta = veredictoReglas.alerta || veredictoML.alerta;
   if (alerta) {
@@ -156,6 +359,7 @@ function procesarIntento(
 
   const evento = {
     id: eventoId,
+    event_id: randomUUID(),
     timestamp: ahora,
     ip,
     usuario,
@@ -165,49 +369,112 @@ function procesarIntento(
     razon_reglas: veredictoReglas.razon,
     alerta_ml: veredictoML.alerta,
     score_ml: veredictoML.score,
+    features: veredictoML.features,
     modelos_ml: veredictoML.modelos,
     origen,
     bloqueado_ahora: alerta,
     es_simulado: Boolean(esSimulado),
+    latency_rules_ms: latencyRulesMs,
+    latency_ml_ms: latencyMlMs,
+    latency_total_ms: latencyTotalMs,
   };
 
+  if (esSimulado) io.emit('nuevo_evento', evento);
+  return evento;
+}
+
+async function procesarIntentoCapturado(
+  ip: string,
+  usuario: string,
+  exitoso: boolean,
+  origen: string,
+  metadata: Record<string, unknown> = {}
+) {
+  if (eventCapturePaused) {
+    throw new Error(eventCapturePauseReason || 'La captura está detenida por un fallo de persistencia. Inicia un nuevo experimento tras recuperar Supabase.');
+  }
+  if (isIP(ip) === 0) throw new Error('No se pudo determinar una IP de origen válida y confiable.');
+  const { ipKey, userKey } = getAnalyticsIdentifiers(ip, usuario);
+  const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true, ipKey, userKey);
+  (evento as typeof evento & { metadata: Record<string, unknown>; campaign_id: string | null }).metadata = metadata;
+  (evento as typeof evento & { campaign_id: string | null }).campaign_id =
+    typeof metadata.campaign_id === 'string' ? metadata.campaign_id : null;
+  try {
+    await persistObservedEvent(evento as CapturedAuthEvent);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : 'Error desconocido de persistencia.';
+    console.error('Fallo de persistencia de evento en Supabase; captura detenida:', detail);
+    eventCapturePaused = true;
+    eventCapturePauseReason = 'Persistencia en Supabase falló. La captura permanece detenida hasta verificar el almacenamiento e iniciar un experimento nuevo.';
+    throw new Error(eventCapturePauseReason);
+  }
   io.emit('nuevo_evento', evento);
   return evento;
 }
 
 // Middleware de autenticación de admin
+function bloquearSimulacionDuranteExperimento(req: Request, res: Response, next: NextFunction) {
+  if (getActiveExperimentId()) {
+    return res.status(409).json({
+      error: 'Las simulaciones están deshabilitadas durante un experimento empírico activo para evitar contaminar las ventanas de características.',
+    });
+  }
+  return next();
+}
+
 function requiereAdmin(req: Request, res: Response, next: NextFunction) {
-  // En modo applet interactivo, permitir acceso a las APIs si no hay password estricto o si hay sesión
-  if (!DASHBOARD_PASSWORD) {
-    return next();
+  if (!DASHBOARD_PASSWORD || !SESSION_SECRET) {
+    return res.status(503).json({ error: 'Autenticación administrativa no configurada en el servidor.' });
   }
   const auth = req.headers.authorization || '';
   const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
   const sessionCookie = req.cookies?.admin_session || '';
-
-  const clavesAceptadas = [
-    DASHBOARD_PASSWORD,
-    'S3guro#2026',
-    'admin',
-  ].filter(Boolean);
-
-  if (clavesAceptadas.includes(token) || clavesAceptadas.includes(sessionCookie)) {
+  if (safeStringEqual(token, DASHBOARD_PASSWORD) || validarSesionAdmin(sessionCookie)) {
     return next();
   }
-  // En caso de que se use desde la UI de React en el mismo origen:
-  return next();
+  return res.status(401).json({ error: 'No autorizado.' });
 }
 
 // =================================================================
 // 1. ENDPOINTS GENÉRICOS DE PROTECCIÓN (usados por cualquier login)
 // =================================================================
 
-app.get('/health', (req: Request, res: Response) => {
+app.get('/health', async (_req: Request, res: Response) => {
+  const eventStore = eventStoreStatus();
+  const supabaseOk = await checkSupabaseConnection();
+  const activeExperimentReady = Boolean(getActiveExperimentState());
+  const captureReady =
+    eventStore.configured &&
+    supabaseOk &&
+    activeExperimentReady &&
+    !eventCapturePaused;
+  const integrationReady = captureReady && Boolean(CENTINELA_INGEST_TOKEN);
+
   res.json({
-    status: 'ok',
+    status: eventCapturePaused || !eventStore.configured || !supabaseOk ? 'degraded' : 'ok',
     service: 'centinela-v2-detector',
     timestamp: Date.now() / 1000,
-    db_ok: db.checkConnection(),
+    // db_ok now represents a real read probe against Supabase, not the in-memory cache.
+    db_ok: supabaseOk,
+    supabase_ok: supabaseOk,
+    local_store_ok: db.checkConnection(),
+    event_store: eventStore,
+    ingest_token_configured: Boolean(CENTINELA_INGEST_TOKEN),
+    active_experiment: Boolean(getActiveExperimentId()),
+    active_experiment_boundaries_valid: activeExperimentReady,
+    capture_ready: captureReady,
+    backend_integration_ready: integrationReady,
+    capture_paused: eventCapturePaused,
+    capture_pause_reason: eventCapturePauseReason,
+  });
+});
+
+app.get('/api/experimentos/estado', requiereAdmin, (_req: Request, res: Response) => {
+  return res.json({
+    active_experiment: getActiveExperimentState(),
+    capture_paused: eventCapturePaused,
+    capture_pause_reason: eventCapturePauseReason,
+    event_store: eventStoreStatus(),
   });
 });
 
@@ -228,20 +495,49 @@ app.post('/evaluar', (req: Request, res: Response) => {
   return res.status(200).json({ bloqueado: false });
 });
 
-app.post('/registrar_intento', (req: Request, res: Response) => {
+app.post('/registrar_intento', async (req: Request, res: Response) => {
   const data = req.body || {};
-  const ip = data.ip || ipDelCliente(req, data);
-  const usuario = data.usuario || '';
-  const exitoso = Boolean(data.exitoso);
+  const status = eventStoreStatus();
+  if (!status.configured || !CENTINELA_INGEST_TOKEN) {
+    return res.status(503).json({ error: 'La captura persistente no está configurada.' });
+  }
+  if (!validarTokenIngesta(req)) {
+    return res.status(401).json({ error: 'Token de ingesta inválido.' });
+  }
+  const usuario = typeof data.usuario === 'string' ? data.usuario.trim() : '';
+  const reportedIp = typeof data.ip === 'string' ? data.ip.trim() : '';
+  const campaignId = typeof data.campaign_id === 'string' ? data.campaign_id.trim() : '';
+  if (campaignId.length > 120) return res.status(400).json({ error: 'campaign_id no puede superar 120 caracteres.' });
+  if (!usuario || usuario.length > 254 || typeof data.exitoso !== 'boolean') {
+    return res.status(400).json({ error: 'Se requiere usuario válido y exitoso booleano.' });
+  }
+  if (reportedIp && isIP(reportedIp) === 0) {
+    return res.status(400).json({ error: 'La IP informada por el backend no es válida.' });
+  }
 
-  const evento = procesarIntento(ip, usuario, exitoso, 0, 'produccion_real', 0, true);
-
-  return res.json({
-    alerta: evento.bloqueado_ahora,
-    alerta_reglas: evento.alerta_reglas,
-    alerta_ml: evento.alerta_ml,
-    bloqueado_ahora: evento.bloqueado_ahora,
-  });
+  try {
+    // La IP del cuerpo solo se acepta en este endpoint porque ya se validó el token
+    // de servicio a servicio; nunca se acepta de clientes públicos.
+    const ip = reportedIp || ipDelCliente(req);
+    const evento = await procesarIntentoCapturado(
+      ip,
+      usuario,
+      data.exitoso,
+      'integracion_autenticacion',
+      campaignId ? { campaign_id: campaignId } : {}
+    );
+    return res.json({
+      event_id: evento.event_id,
+      alerta: evento.bloqueado_ahora,
+      alerta_reglas: evento.alerta_reglas,
+      alerta_ml: evento.alerta_ml,
+      bloqueado_ahora: evento.bloqueado_ahora,
+      persisted: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Error guardando el evento.';
+    return res.status(503).json({ error: message, persisted: false });
+  }
 });
 
 // =================================================================
@@ -253,7 +549,7 @@ let contadorVulnerable = 0;
 
 // --- LOGIN 1: VULNERABLE (Sin protección) ---
 
-app.post('/demo/vulnerable/login', (req: Request, res: Response) => {
+app.post('/demo/vulnerable/login', bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   contadorVulnerable++;
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
@@ -344,7 +640,7 @@ app.get('/api/captcha/nuevo', (req: Request, res: Response) => {
 
 // --- LOGIN 2: CAPTCHA (Desafío anti-bot real) ---
 
-app.post('/demo/captcha/login', (req: Request, res: Response) => {
+app.post('/demo/captcha/login', bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
   const usuario = (data.usuario || '').trim();
@@ -390,7 +686,7 @@ app.post('/demo/captcha/login', (req: Request, res: Response) => {
 
 // --- LOGIN 3: 2FA / TOTP (Doble factor) ---
 
-app.post('/demo/2fa/login-paso1', (req: Request, res: Response) => {
+app.post('/demo/2fa/login-paso1', bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
   const usuario = (data.usuario || '').trim();
@@ -405,7 +701,7 @@ app.post('/demo/2fa/login-paso1', (req: Request, res: Response) => {
   return res.status(401).json({ status: 'fallo', mensaje: 'Usuario o contraseña incorrectos' });
 });
 
-app.post('/demo/2fa/login-paso2', (req: Request, res: Response) => {
+app.post('/demo/2fa/login-paso2', bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
   const usuario = (data.usuario || '').trim();
@@ -438,27 +734,52 @@ app.post('/demo/2fa/login-paso2', (req: Request, res: Response) => {
 
 // --- LOGIN 4: CENTINELA (El login original protegido) ---
 
-app.post('/demo/login', (req: Request, res: Response) => {
+app.post('/demo/login', async (req: Request, res: Response) => {
   const data = req.body || {};
-  const ip = ipDelCliente(req, data);
-  const usuario = (data.usuario || '').trim();
+  if (!eventStoreStatus().configured) {
+    return res.status(503).json({ error: 'La captura persistente de eventos no está configurada.' });
+  }
+  const ip = ipDelCliente(req);
+  const usuario = typeof data.usuario === 'string' ? data.usuario.trim() : '';
   const password = data.password || '';
+  if (!usuario || usuario.length > 254) return res.status(400).json({ error: 'Usuario inválido.' });
 
-  // PASO 1: Evaluar si la IP ya está bloqueada
+  // Registrar también las solicitudes que ya llegan desde una IP bloqueada.
+  // De otro modo se perdería precisamente parte del tráfico que el control está rechazando.
   const [bloqueada, restante] = db.ipEstaBloqueada(ip);
   if (bloqueada) {
-    return res.status(403).json({
-      status: 'rechazado',
-      mensaje: 'Demasiados intentos sospechosos. Intenta más tarde.',
-      segundos_restantes: restante,
-    });
+    try {
+      const eventoBloqueado = await procesarIntentoCapturado(
+        ip,
+        usuario,
+        false,
+        'demo_login',
+        { blocked_before_authentication: true, remaining_block_seconds: restante }
+      );
+      return res.status(403).json({
+        status: 'rechazado',
+        mensaje: 'Demasiados intentos sospechosos. Intenta más tarde.',
+        segundos_restantes: restante,
+        event_id: eventoBloqueado.event_id,
+        persisted: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo guardar el evento.';
+      return res.status(503).json({ error: message, persisted: false });
+    }
   }
 
   // PASO 2: Lógica de autenticación del sitio demo
   const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
 
   // PASO 3: Registrar el intento en Centinela (tráfico real es_simulado=0)
-  const evento = procesarIntento(ip, usuario, exitoso, 0, 'demo_login', 0, true);
+  let evento: ReturnType<typeof procesarIntento>;
+  try {
+    evento = await procesarIntentoCapturado(ip, usuario, exitoso, 'demo_login');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo guardar el evento.';
+    return res.status(503).json({ error: message, persisted: false });
+  }
 
   if (exitoso) {
     return res.status(200).json({ status: 'ok', mensaje: 'Autenticado correctamente' });
@@ -485,21 +806,46 @@ app.post('/demo/login', (req: Request, res: Response) => {
 });
 
 // Login de prueba interno (usado para pruebas internas)
-app.post('/login', (req: Request, res: Response) => {
+app.post('/login', async (req: Request, res: Response) => {
   const data = req.body || {};
-  const ip = ipDelCliente(req, data);
-  const usuario = (data.usuario || '').trim();
+  if (!eventStoreStatus().configured) {
+    return res.status(503).json({ error: 'La captura persistente de eventos no está configurada.' });
+  }
+  const ip = ipDelCliente(req);
+  const usuario = typeof data.usuario === 'string' ? data.usuario.trim() : '';
   const password = data.password || '';
+  if (!usuario || usuario.length > 254) return res.status(400).json({ error: 'Usuario inválido.' });
 
   const [bloqueada, restante] = db.ipEstaBloqueada(ip);
   if (bloqueada) {
-    return res.status(403).json({
-      status: 'rechazado',
-      mensaje: `IP bloqueada, intenta en ${restante}s`,
-    });
+    try {
+      const eventoBloqueado = await procesarIntentoCapturado(
+        ip,
+        usuario,
+        false,
+        'login_prueba_interno',
+        { blocked_before_authentication: true, remaining_block_seconds: restante }
+      );
+      return res.status(403).json({
+        status: 'rechazado',
+        mensaje: `IP bloqueada, intenta en ${restante}s`,
+        event_id: eventoBloqueado.event_id,
+        persisted: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo guardar el evento.';
+      return res.status(503).json({ error: message, persisted: false });
+    }
   }
 
-  const evento = procesarIntento(ip, usuario, password, 0, 'login_prueba_interno', 1);
+  let evento: ReturnType<typeof procesarIntento>;
+  try {
+    const exitoso = CREDENCIALES_VALIDAS[usuario] === password;
+    evento = await procesarIntentoCapturado(ip, usuario, exitoso, 'login_prueba_interno');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo guardar el evento.';
+    return res.status(503).json({ error: message, persisted: false });
+  }
 
   if (evento.alerta_reglas || evento.alerta_ml) {
     return res.status(429).json({ status: 'bloqueado', mensaje: 'Actividad sospechosa detectada' });
@@ -514,50 +860,41 @@ app.post('/login', (req: Request, res: Response) => {
 // 3. AUTENTICACIÓN ADMIN (API)
 // =================================================================
 
-app.post('/login-admin', (req: Request, res: Response) => {
-  const usuario = (req.body.usuario || req.body.username || 'admin').trim().toLowerCase();
-  const pwd = (req.body.password || '').trim();
-  const captcha = (req.body.captcha || '').trim();
-  const captchaId = (req.body.captchaId || '').trim();
+app.post('/login-admin', comprobarLimiteLoginAdmin, (req: Request, res: Response) => {
+  const pwd = typeof req.body?.password === 'string' ? req.body.password.trim() : '';
+  const captcha = typeof req.body?.captcha === 'string' ? req.body.captcha.trim() : '';
+  const captchaId = typeof req.body?.captchaId === 'string' ? req.body.captchaId.trim() : '';
 
-  // Desafío CAPTCHA obligatorio para entrar al panel de Centinela
+  if (!DASHBOARD_PASSWORD || !SESSION_SECRET) {
+    return res.status(503).json({ error: 'Configura DASHBOARD_PASSWORD y SECRET_KEY en el servidor.' });
+  }
   if (!captchaId || !validarYConsumirCaptcha(captchaId, captcha)) {
-    return res.status(400).json({ error: 'Código CAPTCHA incorrecto o expirado. Ingresa los 5 caracteres que ves en pantalla.' });
+    return res.status(400).json({ error: 'Código CAPTCHA incorrecto o expirado.' });
+  }
+  if (!safeStringEqual(pwd, DASHBOARD_PASSWORD)) {
+    registrarFalloLoginAdmin(ipDelCliente(req));
+    return res.status(401).json({ error: 'Credenciales incorrectas.' });
   }
 
-  const clavesAceptadas = [
-    (DASHBOARD_PASSWORD || '').trim(),
-    'S3guro#2026',
-    's3guro#2026',
-    'admin',
-    'admin123',
-    'centinela',
-    '123456',
-    CREDENCIALES_VALIDAS[usuario],
-    CREDENCIALES_VALIDAS['admin'],
-  ].filter(Boolean);
-
-  const esValida = clavesAceptadas.some(
-    (c) => c === pwd || c?.toLowerCase() === pwd.toLowerCase()
-  ) || !DASHBOARD_PASSWORD;
-
-  if (esValida) {
-    res.cookie('admin_session', 'S3guro#2026', {
-      httpOnly: false,
-      sameSite: 'lax',
-      maxAge: 8 * 60 * 60 * 1000,
-    });
-    return res.json({ status: 'ok', redirect: '/', mensaje: 'Autenticación exitosa' });
-  }
-
-  return res.status(401).json({
-    error: 'Contraseña incorrecta. Puedes usar la clave por defecto: S3guro#2026 o admin.',
+  adminLoginFailures.delete(ipDelCliente(req));
+  res.cookie('admin_session', adminSessionToken(), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    path: '/',
+    maxAge: ADMIN_SESSION_DURATION_MS,
   });
+  return res.json({ status: 'ok', redirect: '/', mensaje: 'Autenticación exitosa' });
 });
 
 app.post('/logout-admin', (req: Request, res: Response) => {
   res.clearCookie('admin_session');
   res.json({ status: 'ok', mensaje: 'Sesión cerrada correctamente' });
+});
+
+// La sesión del panel se valida en servidor; localStorage nunca concede acceso.
+app.get('/api/session', requiereAdmin, (_req: Request, res: Response) => {
+  return res.json({ authenticated: true });
 });
 
 // =================================================================
@@ -568,16 +905,151 @@ app.get('/api/eventos', requiereAdmin, (req: Request, res: Response) => {
   res.json(db.obtenerIntentosRecientes(300));
 });
 
-app.get('/api/metricas', (req: Request, res: Response) => {
+app.get('/api/metricas', requiereAdmin, (req: Request, res: Response) => {
   res.json(db.metricasResumen());
 });
 
-app.get('/api/produccion', (req: Request, res: Response) => {
+app.get('/api/produccion', requiereAdmin, (req: Request, res: Response) => {
   res.json(db.contadorProduccion());
 });
 
-app.get('/api/bloqueadas', (req: Request, res: Response) => {
+app.get('/api/bloqueadas', requiereAdmin, (req: Request, res: Response) => {
   res.json(db.listarIpsBloqueadas());
+});
+
+// Dataset persistido: solo solicitudes observadas, nunca registros del simulador.
+app.get('/api/dataset/capturado', requiereAdmin, async (req: Request, res: Response) => {
+  try {
+    const requestedExperimentId = typeof req.query.experiment_id === 'string' ? req.query.experiment_id : undefined;
+    const events = await fetchObservedEvents(requestedExperimentId);
+    const formato = typeof req.query.formato === 'string' ? req.query.formato : 'json';
+    if (formato === 'csv') {
+      const headers = Object.keys(events[0] ?? {
+        event_id: '', occurred_at: '', source_ip_hash: '', user_key_hash: '',
+        auth_success: '', origin: '', ground_truth_label: '', alerta_reglas: '', alerta_ml: '',
+      });
+      const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+      const csv = [headers.join(','), ...events.map((event) =>
+        headers.map((header) => escapeCsv((event as unknown as Record<string, unknown>)[header])).join(',')
+      )].join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="centinela_eventos_capturados.csv"');
+      return res.send(csv);
+    }
+    return res.json({ total: events.length, source: 'supabase_observed_events', events });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo exportar el conjunto de datos.';
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/experimentos/metricas_capturadas', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    const experimentId = typeof _req.query.experiment_id === 'string' ? _req.query.experiment_id : undefined;
+    return res.json(await calculateObservedMetrics(experimentId));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudieron calcular las métricas.';
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response) => {
+  const data = req.body || {};
+  const protocolName = typeof data.protocol_name === 'string' ? data.protocol_name.trim() : '';
+  const scenario = typeof data.scenario === 'string' ? data.scenario.trim() : '';
+  const trainEndAt = typeof data.train_end_at === 'string' ? data.train_end_at.trim() : '';
+  const validationEndAt = typeof data.validation_end_at === 'string' ? data.validation_end_at.trim() : '';
+  if (!protocolName || !scenario || !trainEndAt || !validationEndAt) {
+    return res.status(400).json({ error: 'Se requieren protocol_name, scenario, train_end_at y validation_end_at (fechas ISO). El periodo posterior a validation_end_at se reserva para prueba.' });
+  }
+  if (!Number.isFinite(Date.parse(trainEndAt)) || !Number.isFinite(Date.parse(validationEndAt)) || Date.parse(trainEndAt) <= Date.now() || Date.parse(validationEndAt) <= Date.parse(trainEndAt)) {
+    return res.status(400).json({ error: 'Usa fechas ISO futuras: train_end_at debe ser posterior a ahora y validation_end_at posterior a train_end_at.' });
+  }
+  try {
+    const experiment = await createExperimentRecord({
+      protocolName,
+      scenario,
+      trainEndAt,
+      validationEndAt,
+      description: typeof data.description === 'string' ? data.description : undefined,
+      detectorConfig: {
+        fast_rule: '5 failures / 60 seconds',
+        slow_rule: '8 failures / 900 seconds',
+        distributed_rule: '4 distinct IPs / 120 seconds',
+        ml_features: 5,
+        feature_schema: 'centinela-auth-features-v2',
+        isolation_forest_random_seed: 42,
+      },
+      metadata: data.metadata && typeof data.metadata === 'object' ? data.metadata : {},
+    });
+    // Each experiment begins with a clean in-memory detection state and no inherited model.
+    db.limpiar();
+    db.limpiarBloqueos();
+    detectorReglas.reset();
+    detectorML.resetForNewExperiment();
+    eventCapturePaused = false;
+    eventCapturePauseReason = null;
+    estadoModelo.fuente = 'sin_entrenar';
+    estadoModelo.detalle = 'Nuevo experimento: baseline pendiente de eventos benignos etiquetados.';
+    estadoModelo.muestras_entrenamiento = 0;
+    estadoModelo.cargando = false;
+    io.emit('entrenamiento_completo', estadoModelo);
+    return res.status(201).json({ status: 'running', experiment });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo crear el experimento.';
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/experimentos/:experimentId/abortar', requiereAdmin, async (req: Request, res: Response) => {
+  const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  if (!reason) return res.status(400).json({ error: 'Se requiere reason para registrar la causa del aborto.' });
+  try {
+    const experiment = await abortExperimentRecord(singleRouteParam(req.params.experimentId), reason);
+    eventCapturePaused = false;
+    eventCapturePauseReason = null;
+    db.limpiar();
+    db.limpiarBloqueos();
+    detectorReglas.reset();
+    detectorML.resetForNewExperiment();
+    estadoModelo.fuente = 'sin_entrenar';
+    estadoModelo.detalle = 'El experimento anterior fue abortado. Cree un nuevo experimento para reanudar la captura.';
+    estadoModelo.muestras_entrenamiento = 0;
+    return res.json({ status: 'aborted', experiment });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo abortar el experimento.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/experimentos/:experimentId/finalizar', requiereAdmin, async (req: Request, res: Response) => {
+  try {
+    const experiment = await finishExperimentRecord(singleRouteParam(req.params.experimentId));
+    return res.json({ status: 'completed', experiment });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo finalizar el experimento.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/eventos/:eventId/etiqueta', requiereAdmin, async (req: Request, res: Response) => {
+  const { label, method, rationale, labeledBy } = req.body || {};
+  if (!['benign', 'attack'].includes(label) || typeof method !== 'string' || typeof rationale !== 'string') {
+    return res.status(400).json({ error: 'Se requiere label benign/attack, method y rationale.' });
+  }
+  try {
+    const result = await labelObservedEvent({
+      eventId: singleRouteParam(req.params.eventId),
+      label,
+      method,
+      rationale,
+      labeledBy: typeof labeledBy === 'string' ? labeledBy : undefined,
+    });
+    return res.json({ status: 'ok', result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo etiquetar el evento.';
+    return res.status(500).json({ error: message });
+  }
 });
 
 // Reporte manejado por la SPA de React
@@ -631,7 +1103,7 @@ app.get('/api/exportar_dataset', requiereAdmin, (req: Request, res: Response) =>
   return res.send(csvContent);
 });
 
-app.get('/api/exportar_metricas', (req: Request, res: Response) => {
+app.get('/api/exportar_metricas', requiereAdmin, (req: Request, res: Response) => {
   const formato = (req.query.formato as string) || 'csv';
   const m = db.metricasResumen();
 
@@ -778,70 +1250,34 @@ app.get('/api/exportar_metricas', (req: Request, res: Response) => {
   return res.send(csv);
 });
 
-app.post('/entrenar/reentrenar_con_trafico', requiereAdmin, (req: Request, res: Response) => {
-  const intentos = db.obtenerTodosIntentos();
-  const intentosBenignos = intentos.filter((i) => i.es_ataque_real === 0);
-
-  if (intentosBenignos.length < 5) {
-    return res.status(400).json({
-      error: `Se requieren al menos 5 eventos legítimos/benignos registrados (actuales: ${intentosBenignos.length}). Simula o envía tráfico legítimo primero.`
-    });
+app.post('/entrenar/reentrenar_con_trafico', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    return res.json(await entrenarModeloDesdeCapturasBenignas());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo entrenar con los eventos capturados.';
+    return res.status(400).json({ error: message });
   }
-
-  // Extraer vectores de características de los eventos benignos registrados
-  const muestras: number[][] = [];
-  for (const b of intentosBenignos) {
-    const hora = new Date(b.timestamp * 1000).getHours();
-    muestras.push([
-      b.exitoso ? 0 : 1,
-      1,
-      45.0 + Math.random() * 60.0,
-      10.0 + Math.random() * 20.0,
-      hora
-    ]);
-  }
-
-  detectorML.entrenarConDatosNormales(muestras, 'trafico_en_vivo');
-  estadoModelo.fuente = 'trafico_en_vivo';
-  estadoModelo.detalle = `Re-entrenado dinámicamente con ${muestras.length} eventos benignos capturados en vivo por Centinela.`;
-  estadoModelo.cargando = false;
-
-  io.emit('entrenamiento_completo', estadoModelo);
-  return res.json(estadoModelo);
 });
 
-app.post('/entrenar/con_trafico', requiereAdmin, (req: Request, res: Response) => {
-  const intentos = db.obtenerTodosIntentos();
-  const intentosBenignos = intentos.filter((i) => i.es_ataque_real === 0);
-
-  if (intentosBenignos.length < 5) {
-    return res.status(400).json({
-      error: `Se requieren al menos 5 eventos legítimos/benignos registrados (actuales: ${intentosBenignos.length}). Simula o envía tráfico legítimo primero.`
-    });
+app.post('/entrenar/con_trafico', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    return res.json(await entrenarModeloDesdeCapturasBenignas());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo entrenar con los eventos capturados.';
+    return res.status(400).json({ error: message });
   }
-
-  const muestras: number[][] = [];
-  for (const b of intentosBenignos) {
-    const hora = new Date(b.timestamp * 1000).getHours();
-    muestras.push([
-      b.exitoso ? 0 : 1,
-      1,
-      45.0 + Math.random() * 60.0,
-      10.0 + Math.random() * 20.0,
-      hora
-    ]);
-  }
-
-  detectorML.entrenarConDatosNormales(muestras, 'trafico_en_vivo');
-  estadoModelo.fuente = 'trafico_en_vivo';
-  estadoModelo.detalle = `Re-entrenado dinámicamente con ${muestras.length} eventos benignos capturados en vivo por Centinela.`;
-  estadoModelo.cargando = false;
-
-  io.emit('entrenamiento_completo', estadoModelo);
-  return res.json(estadoModelo);
 });
 
-app.get('/api/estado_modelo', (req: Request, res: Response) => {
+app.post('/api/experimentos/entrenar_con_eventos_capturados', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    return res.json(await entrenarModeloDesdeCapturasBenignas());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo entrenar con los eventos capturados.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.get('/api/estado_modelo', requiereAdmin, (req: Request, res: Response) => {
   res.json(estadoModelo);
 });
 
@@ -850,7 +1286,7 @@ app.get('/api/estado_modelo', (req: Request, res: Response) => {
 // =================================================================
 
 // Obtener evaluación actual de CICIDS-2017
-app.get('/api/cicids/evaluacion', (req: Request, res: Response) => {
+app.get('/api/cicids/evaluacion', requiereAdmin, (req: Request, res: Response) => {
   res.json({
     evaluacion: evaluacionCicidsActual,
     umbral: umbralActual,
@@ -859,7 +1295,7 @@ app.get('/api/cicids/evaluacion', (req: Request, res: Response) => {
 });
 
 // Cargar dataset CICIDS-2017 (vía CSV texto o archivo multipart)
-app.post('/api/cicids/cargar_csv', upload.single('archivo'), (req: Request, res: Response) => {
+app.post('/api/cicids/cargar_csv', requiereAdmin, upload.single('archivo'), (req: Request, res: Response) => {
   try {
     let csvText = '';
     if (req.file) {
@@ -897,7 +1333,7 @@ app.post('/api/cicids/cargar_csv', upload.single('archivo'), (req: Request, res:
 });
 
 // Restaurar muestra estándar de 2,500 registros CICIDS-2017
-app.post('/api/cicids/restaurar_muestra_2500', (req: Request, res: Response) => {
+app.post('/api/cicids/restaurar_muestra_2500', requiereAdmin, (req: Request, res: Response) => {
   datasetCicidsActual = generarMuestraRealCicids2500();
   evaluacionCicidsActual = evaluarDatasetCicids(datasetCicidsActual, umbralActual);
   res.json({
@@ -910,7 +1346,7 @@ app.post('/api/cicids/restaurar_muestra_2500', (req: Request, res: Response) => 
 });
 
 // Ajustar umbral de decisión tau del ensamble
-app.post('/api/cicids/evaluar_umbral', (req: Request, res: Response) => {
+app.post('/api/cicids/evaluar_umbral', requiereAdmin, (req: Request, res: Response) => {
   const nuevoUmbral = parseFloat(req.body.umbral);
   if (isNaN(nuevoUmbral) || nuevoUmbral < 0.05 || nuevoUmbral > 0.95) {
     return res.status(400).json({ error: 'Umbral debe estar entre 0.05 y 0.95' });
@@ -924,40 +1360,24 @@ app.post('/api/cicids/evaluar_umbral', (req: Request, res: Response) => {
   });
 });
 
-// Entrenar Centinela con flujos benignos del dataset importado
-app.post('/api/cicids/entrenar_con_dataset', requiereAdmin, (req: Request, res: Response) => {
-  const benignos = datasetCicidsActual.filter((r) => !r.isAttack);
-  if (benignos.length < 10) {
-    return res.status(400).json({ error: 'El dataset requiere al menos 10 flujos BENIGN para calibrar el modelo.' });
-  }
-
-  const muestras = benignos.map((b) => b.features);
-  detectorML.entrenarConDatosNormales(muestras, 'cicids2017_importado');
-  estadoModelo.fuente = 'cicids2017_importado';
-  estadoModelo.detalle = `Calibrado con ${muestras.length} flujos benignos extraídos del dataset CICIDS-2017 importado.`;
-  estadoModelo.cargando = false;
-
-  io.emit('entrenamiento_completo', estadoModelo);
-  res.json({ status: 'ok', estadoModelo, flujosEntrenamiento: muestras.length });
+// CICIDS es un benchmark de flujos de red, no una fuente de eventos de autenticación.
+// Se conserva la ruta para compatibilidad, pero no modifica el modelo del estudio empírico.
+app.post('/api/cicids/entrenar_con_dataset', requiereAdmin, (_req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Entrenamiento deshabilitado: el detector de autenticación solo se entrena con eventos benignos observados y etiquetados.' });
 });
 
 // =========================================================================
 // NUEVOS ENDPOINTS CIENTÍFICOS: PROTOCOLO UNB (10 SEMILLAS) Y EXPORTACIÓN
 // =========================================================================
 
-// Experimento 1: Protocolo Oficial UNB CICIDS-2017 (10 semillas, split 30/70 temporal)
-app.get('/api/experimentos/protocolo_unb', (req: Request, res: Response) => {
-  try {
-    const resultado = evaluarProtocoloUnb10Semillas(datasetCicidsActual);
-    res.json(resultado);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: msg });
-  }
+// El protocolo histórico con datos generados se retira de la ruta de evaluación.
+app.get('/api/experimentos/protocolo_unb', (_req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
 });
 
 // Experimento 2: Simulación Rigurosa Multi-Semilla (10 semillas, Media ± Desviación Estándar)
 app.get('/api/experimentos/simulacion_multisemilla', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   const semillas = [42, 101, 2024, 7, 13, 88, 555, 777, 999, 1337];
   
   // Escalado de Botnet simulado sobre 10 semillas independientes
@@ -1060,6 +1480,7 @@ app.get('/api/experimentos/simulacion_multisemilla', (req: Request, res: Respons
 
 // Descargar paquete integral JSON con hashes SHA-256 para el revisor y DOI
 app.get('/api/experimentos/exportar_paquete_revisor', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   const unb = evaluarProtocoloUnb10Semillas(datasetCicidsActual);
   
   const paqueteRevisor = {
@@ -1130,6 +1551,7 @@ Local Outlier Factor & ${(unb.metricas10Semillas[3].precisionMedia * 100).toFixe
 
 // 1. EXPERIMENTO: Variación del Tamaño del Botnet en Ataques Distribuidos
 app.get('/api/experimentos/botnet_distribuido', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   res.json({
     titulo: 'Impacto del Tamaño del Botnet en la Tasa de Detección (Prueba de Tesis Central)',
     descripcion: 'Comparativa de sensibilidad (Recall) entre WAF heurístico por IP vs Ensamble ML al dispersar el ataque en un enjambre de 10 a 1,000 direcciones IP.',
@@ -1201,6 +1623,7 @@ app.get('/api/experimentos/botnet_distribuido', (req: Request, res: Response) =>
 
 // 2. EXPERIMENTO: Estudio de Ablación de Características (Feature Ablation)
 app.get('/api/experimentos/ablacion', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   res.json({
     titulo: 'Estudio de Ablación del Vector de Comportamiento (Feature Ablation Study)',
     descripcion: 'Evaluación del impacto individual de cada característica en el rendimiento de detección (F1-Score), entrenando y evaluando con exclusión sistemática de una variable a la vez.',
@@ -1263,6 +1686,7 @@ app.get('/api/experimentos/ablacion', (req: Request, res: Response) => {
 
 // 3. EXPERIMENTO: Escenario de Atacante con Ritmo Humano (Human-Mimicry)
 app.get('/api/experimentos/trafico_real', (req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
   let humanData: any = null;
   const jsonPath = path.join(process.cwd(), 'results_baseline', 'resultados_metricas.json');
   if (fs.existsSync(jsonPath)) {
@@ -1400,7 +1824,7 @@ ${baselineData?.ablation_study ? baselineData.ablation_study.map((a: any) => `| 
 // 5. SIMULACIONES (Admin)
 // =================================================================
 
-app.post('/simular/ataque', requiereAdmin, async (req: Request, res: Response) => {
+app.post('/simular/ataque', requiereAdmin, bloquearSimulacionDuranteExperimento, async (req: Request, res: Response) => {
   const data = req.body || {};
   const tipo = data.tipo || 'rapido';
   const usuario = data.usuario || USUARIOS_COMUNES[Math.floor(Math.random() * USUARIOS_COMUNES.length)];
@@ -1440,7 +1864,7 @@ app.post('/simular/ataque', requiereAdmin, async (req: Request, res: Response) =
   res.json({ status: 'lanzado', tipo, usuario });
 });
 
-app.post('/simular/legitimo', requiereAdmin, (req: Request, res: Response) => {
+app.post('/simular/legitimo', requiereAdmin, bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const cantidad = parseInt(data.cantidad || '5', 10);
 
@@ -1458,7 +1882,7 @@ app.post('/simular/legitimo', requiereAdmin, (req: Request, res: Response) => {
   res.json({ status: 'lanzado', cantidad });
 });
 
-app.post('/simular/benchmark_masivo', requiereAdmin, (req: Request, res: Response) => {
+app.post('/simular/benchmark_masivo', requiereAdmin, bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   const data = req.body || {};
   const total = Math.min(30000, Math.max(50, parseInt((data.cantidad || req.query.cantidad || '25000') as string, 10)));
   const usuariosValidos = Object.keys(CREDENCIALES_VALIDAS);
@@ -1525,7 +1949,7 @@ app.post('/simular/benchmark_masivo', requiereAdmin, (req: Request, res: Respons
   });
 });
 
-app.post('/reset', requiereAdmin, (req: Request, res: Response) => {
+app.post('/reset', requiereAdmin, bloquearSimulacionDuranteExperimento, (req: Request, res: Response) => {
   db.limpiar();
   db.limpiarBloqueos();
   detectorReglas.reset();
@@ -1538,7 +1962,7 @@ app.post('/reset', requiereAdmin, (req: Request, res: Response) => {
 // 6. BOT ATACANTE REAL VÍA HTTP
 // =================================================================
 
-app.post('/lanzar_bot', requiereAdmin, async (req: Request, res: Response) => {
+app.post('/lanzar_bot', requiereAdmin, bloquearSimulacionDuranteExperimento, async (req: Request, res: Response) => {
   const data = req.body || {};
   const tipo = data.tipo || 'rapido';
   if (!['rapido', 'lento', 'distribuido'].includes(tipo)) {
@@ -1641,133 +2065,90 @@ app.post('/lanzar_bot', requiereAdmin, async (req: Request, res: Response) => {
 // 7. ENTRENAMIENTO ML (Upload y Reset)
 // =================================================================
 
-app.post('/entrenar/reset_sintetico', requiereAdmin, (req: Request, res: Response) => {
-  detectorML.reset();
-  const muestras = generarDatasetCicids2017(50000);
-  detectorML.entrenarConDatosNormales(muestras, 'cicids2017');
-  estadoModelo.fuente = 'cicids2017';
-  estadoModelo.detalle = 'Entrenado con 50,000 flujos benignos de alta resolución basados en CICIDS2017.';
-  estadoModelo.cargando = false;
-  io.emit('entrenamiento_completo', estadoModelo);
-  res.json(estadoModelo);
+app.post('/entrenar/reset_sintetico', requiereAdmin, (_req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Entrenamiento no disponible: el estudio empírico usa exclusivamente eventos benignos capturados y etiquetados.' });
 });
 
-app.post('/entrenar/cargar_cicids_precargado', requiereAdmin, (req: Request, res: Response) => {
-  detectorML.reset();
-  const data = req.body || {};
-  const cantidad = Math.min(50000, Math.max(100, parseInt((data.cantidad || req.query.cantidad || '50000') as string, 10)));
-  const muestras = generarDatasetCicids2017(cantidad);
-  detectorML.entrenarConDatosNormales(muestras, 'cicids2017');
-  estadoModelo.fuente = 'cicids2017';
-  estadoModelo.detalle = `Entrenado con ${cantidad.toLocaleString()} flujos benignos de alta resolución basados en CICIDS2017.`;
-  estadoModelo.cargando = false;
-  io.emit('entrenamiento_completo', estadoModelo);
-  res.json(estadoModelo);
+app.post('/entrenar/cargar_cicids_precargado', requiereAdmin, (_req: Request, res: Response) => {
+  return res.status(410).json({ error: 'Esta ruta pertenece al protocolo anterior y no modifica el modelo de captura experimental.' });
 });
 
-app.post('/entrenar/upload_cicids', requiereAdmin, upload.array('archivos'), async (req: Request, res: Response) => {
-  const files = (req.files as Express.Multer.File[]) || [];
-  if (files.length === 0) {
-    return res.status(400).json({ error: 'No se seleccionó ningún archivo CSV' });
-  }
-
-  estadoModelo.cargando = true;
-  io.emit('entrenamiento_progreso', { mensaje: `Analizando ${files.length} archivo(s) CSV subido(s)...` });
-
-  setTimeout(async () => {
-    try {
-      const muestrasBenignas: number[][] = [];
-
-      for (const file of files) {
-        if (!file.originalname.toLowerCase().endsWith('.csv')) {
-          try { fs.unlinkSync(file.path); } catch {}
-          continue;
-        }
-
-        io.emit('entrenamiento_progreso', { mensaje: `Leyendo ${file.originalname}...` });
-        const contenido = fs.readFileSync(file.path, 'utf-8');
-        const lineas = contenido.split(/\r?\n/).filter((l) => l.trim().length > 0);
-        
-        if (lineas.length <= 1) {
-          try { fs.unlinkSync(file.path); } catch {}
-          continue;
-        }
-
-        // Limpiar encabezados de comillas y espacios (formato CICIDS2017 estándar de ISCX)
-        const encabezado = lineas[0].split(',').map((h) => h.replace(/["\r]/g, '').trim().toLowerCase());
-        let labelIdx = encabezado.findIndex((h) => h.includes('label'));
-        if (labelIdx === -1) {
-          // Si no tiene columna 'label', la última columna suele ser el target
-          labelIdx = encabezado.length - 1;
-        }
-
-        // Buscar columnas útiles si existen en CICIDS2017: Flow Duration, Flow IAT Mean, etc.
-        const idxDuration = encabezado.findIndex((h) => h.includes('duration') || h.includes('flow duration'));
-        const idxIatMean = encabezado.findIndex((h) => h.includes('iat mean'));
-
-        // Procesar hasta 2500 registros benignos por archivo para evitar agotar memoria
-        let encontradosEnArchivo = 0;
-        for (let i = 1; i < lineas.length && encontradosEnArchivo < 2500; i++) {
-          const columnas = lineas[i].split(',').map((c) => c.replace(/["\r]/g, '').trim());
-          const label = (columnas[labelIdx] || '').toLowerCase();
-          const esBenigno = label === '' || label.includes('benign') || label.includes('normal') || label === '0';
-
-          if (esBenigno) {
-            encontradosEnArchivo++;
-            
-            // Si el CSV contiene métricas de tiempo reales de CICIDS2017
-            let intervaloProm = 45.0 + Math.random() * 60.0;
-            if (idxIatMean >= 0) {
-              const val = parseFloat(columnas[idxIatMean]);
-              if (!isNaN(val) && val > 0) intervaloProm = Math.min(120, Math.max(10, val / 1000000)); // microseg a seg
-            }
-
-            const numIntentos = Math.random() < 0.75 ? 0 : 1;
-            const numUsuarios = numIntentos > 0 ? 1 : 0;
-            const intervaloStd = Math.random() * 25;
-            const hora = Math.floor(Math.random() * 24);
-
-            muestrasBenignas.push([numIntentos, numUsuarios, intervaloProm, intervaloStd, hora]);
-          }
-        }
-
-        try {
-          fs.unlinkSync(file.path);
-        } catch {}
-      }
-
-      if (muestrasBenignas.length === 0) {
-        throw new Error('No se detectaron filas benignas (BENIGN) en los CSVs subidos.');
-      }
-
-      io.emit('entrenamiento_progreso', {
-        mensaje: `Entrenando algoritmos (Isolation Forest, OC-SVM, LOF) con ${muestrasBenignas.length} muestras extraídas...`
-      });
-
-      // Entrenar los 3 algoritmos de ML
-      detectorML.entrenarConDatosNormales(muestrasBenignas, 'cicids2017');
-      estadoModelo.fuente = 'cicids2017';
-      estadoModelo.detalle = `Entrenado con ${muestrasBenignas.length} vectores benignos extraídos de tus archivos CSV de CICIDS2017.`;
-      estadoModelo.cargando = false;
-
-      io.emit('entrenamiento_completo', estadoModelo);
-    } catch (err: unknown) {
-      estadoModelo.cargando = false;
-      const msg = err instanceof Error ? err.message : String(err);
-      io.emit('entrenamiento_error', { mensaje: msg });
-    }
-  }, 80);
-
-  res.json({ status: 'entrenamiento_iniciado', archivos_guardados: files.length });
+app.post('/entrenar/upload_cicids', requiereAdmin, (_req: Request, res: Response) => {
+  return res.status(410).json({ error: 'No se entrenará el modelo de autenticación con flujos CICIDS convertidos. Utiliza eventos de autenticación observados.' });
 });
 
-// Socket.IO conexión
+// Socket.IO: cerrar canales cuando vence la cookie que los autorizó.
 io.on('connection', (socket) => {
-  // Conexión exitosa para streaming
+  const rawCookie = socket.request.headers.cookie || '';
+  const sessionCookie = extraerCookie(rawCookie, 'admin_session');
+  const expiresAtSeconds = Number(sessionCookie.split('.')[0]);
+  const remainingMs = expiresAtSeconds * 1000 - Date.now();
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+    socket.disconnect(true);
+    return;
+  }
+  const expiryTimer = setTimeout(() => socket.disconnect(true), remainingMs);
+  socket.on('disconnect', () => clearTimeout(expiryTimer));
 });
+
+async function restaurarVentanasRecientesDeDetectores(): Promise<number> {
+  const history = await fetchRecentObservedEventsForState(900);
+  for (const event of history) {
+    const timestamp = Date.parse(event.occurred_at) / 1000;
+    // Reproducir las últimas ventanas con las mismas claves HMAC usadas en la captura.
+    // No emitir eventos ni volver a persistirlos: solo reconstruir estado de ventana.
+    detectorReglas.evaluar(
+      event.source_ip_hash,
+      event.user_key_hash,
+      event.auth_success,
+      timestamp
+    );
+    detectorML.registrarYEvaluar(
+      event.source_ip_hash,
+      event.user_key_hash,
+      event.auth_success,
+      timestamp
+    );
+  }
+  return history.length;
+}
 
 // Iniciar servidor con middleware de Vite o estáticos en producción
 async function startServer() {
+  if (eventStoreStatus().configured) {
+    try {
+      const activeExperiment = await restoreActiveExperimentRecord();
+      if (activeExperiment) {
+        console.log('Experimento activo restaurado:', activeExperiment);
+        if (getActiveExperimentState()?.trainingFrozen) {
+          await entrenarModeloDesdeCapturasBenignas(true);
+          console.log(`Modelo restaurado con ${estadoModelo.muestras_entrenamiento} ventanas benignas capturadas.`);
+        } else {
+          estadoModelo.fuente = 'sin_entrenar';
+          estadoModelo.detalle = 'Experimento activo sin baseline congelado. Captura y etiqueta el periodo train antes de entrenar.';
+          estadoModelo.muestras_entrenamiento = 0;
+        }
+        const restoredEvents = await restaurarVentanasRecientesDeDetectores();
+        console.log(`Ventanas recientes de detectores restauradas desde Supabase: ${restoredEvents} eventos.`);
+      } else {
+        estadoModelo.fuente = 'sin_entrenar';
+        estadoModelo.detalle = 'No hay experimento activo. Crea uno e inicia la recolección de eventos.';
+        estadoModelo.muestras_entrenamiento = 0;
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Error desconocido al restaurar estado.';
+      console.error('No se pudo restaurar el estado experimental desde Supabase:', detail);
+      eventCapturePaused = true;
+      eventCapturePauseReason = 'No se pudo restaurar el estado del experimento desde Supabase. La captura permanece pausada hasta verificar el almacenamiento.';
+      estadoModelo.fuente = 'sin_entrenar';
+      estadoModelo.detalle = eventCapturePauseReason;
+      estadoModelo.muestras_entrenamiento = 0;
+      console.warn('Captura iniciada en modo pausado por integridad experimental.');
+    }
+  } else {
+    console.warn('Supabase no está configurado: la captura persistente y el entrenamiento empírico no están disponibles.');
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({

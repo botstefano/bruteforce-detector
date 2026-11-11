@@ -19,10 +19,27 @@ services:
         generateValue: true
       - key: DASHBOARD_PASSWORD
         sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: CENTINELA_HASH_SECRET
+        sync: false
+      - key: CENTINELA_INGEST_TOKEN
+        sync: false
+      - key: CENTINELA_DEMO_CREDENTIALS_JSON
+        sync: false
+      - key: CENTINELA_VERSION
+        value: "research-capture-v1"
+      - key: CENTINELA_CONFIG_VERSION
+        value: "1"
+      - key: TRUST_PROXY_HOPS
+        value: 1
       - key: DURACION_BLOQUEO_SEGUNDOS
         value: 300
+      # Set this to comma-separated exact dashboard origins only if the dashboard is hosted on a different origin.
       - key: ALLOWED_ORIGINS
-        value: "*"
+        sync: false
 
     autoDeploy: true
     healthCheckPath: /health
