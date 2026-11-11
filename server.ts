@@ -208,7 +208,7 @@ function procesarIntento(
     latency_total_ms: latencyTotalMs,
   };
 
-  io.emit('nuevo_evento', evento);
+  if (esSimulado) io.emit('nuevo_evento', evento);
   return evento;
 }
 
@@ -220,6 +220,7 @@ async function procesarIntentoCapturado(
 ) {
   const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true);
   await persistObservedEvent(evento as CapturedAuthEvent);
+  io.emit('nuevo_evento', evento);
   return evento;
 }
 
