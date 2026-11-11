@@ -1,0 +1,25 @@
+name: Empirical capture build
+
+on:
+  push:
+    branches:
+      - fix/supabase-event-audit
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies and reconcile lockfile
+        run: npm install
+      - name: Type-check and build
+        run: npm run build
