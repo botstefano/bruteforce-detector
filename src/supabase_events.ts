@@ -15,6 +15,7 @@ export interface CapturedAuthEvent {
   razon_reglas: string | null;
   alerta_ml: boolean;
   score_ml: number;
+  features: number[];
   modelos_ml: {
     isolation_forest: { alerta: boolean };
     one_class_svm: { alerta: boolean };
@@ -49,6 +50,8 @@ export interface CapturedEventRow {
   alerta_ocsvm: boolean;
   alerta_lof: boolean;
   score_ml: number;
+  features: number[] | null;
+  feature_schema_version: string;
   latency_rules_ms: number;
   latency_ml_ms: number;
   latency_total_ms: number;
@@ -150,6 +153,8 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     alerta_ocsvm: event.modelos_ml.one_class_svm.alerta,
     alerta_lof: event.modelos_ml.lof.alerta,
     score_ml: event.score_ml,
+    features: event.features,
+    feature_schema_version: 'centinela-auth-features-v1',
     latency_rules_ms: event.latency_rules_ms,
     latency_ml_ms: event.latency_ml_ms,
     latency_total_ms: event.latency_total_ms,
@@ -199,47 +204,21 @@ export async function fetchObservedEvents(experimentId?: string | null): Promise
   return rows;
 }
 
-export async function fetchBenignTrainingSamples(windowSeconds = 120): Promise<number[][]> {
+export async function fetchBenignTrainingSamples(): Promise<number[][]> {
   const events = (await fetchObservedEvents())
-    .filter((event) => event.dataset_split === 'train' && event.ground_truth_label === 'benign')
+    .filter((event) =>
+      event.dataset_split === 'train' &&
+      event.ground_truth_label === 'benign' &&
+      event.feature_schema_version === 'centinela-auth-features-v1' &&
+      Array.isArray(event.features) &&
+      event.features.length === 5 &&
+      event.features.every((value) => Number.isFinite(value))
+    )
     .sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at));
 
-  const historyByIp = new Map<string, Array<{ timestamp: number; user: string }>>();
-  const samples: number[][] = [];
-
-  for (const event of events) {
-    const timestamp = Date.parse(event.occurred_at) / 1000;
-    const queue = (historyByIp.get(event.source_ip_hash) ?? [])
-      .filter((item) => item.timestamp >= timestamp - windowSeconds);
-
-    // El detector online incorpora únicamente los intentos fallidos antes de extraer features.
-    if (!event.auth_success) {
-      queue.push({ timestamp, user: event.user_key_hash });
-    }
-    historyByIp.set(event.source_ip_hash, queue);
-
-    const timestamps = queue.map((item) => item.timestamp).sort((a, b) => a - b);
-    const distinctUsers = new Set(queue.map((item) => item.user)).size;
-    let intervalMean = windowSeconds;
-    let intervalStd = 0;
-
-    if (timestamps.length >= 2) {
-      const intervals = timestamps.slice(1).map((value, index) => value - timestamps[index]);
-      intervalMean = intervals.reduce((sum, value) => sum + value, 0) / intervals.length;
-      const variance = intervals.reduce((sum, value) => sum + (value - intervalMean) ** 2, 0) / intervals.length;
-      intervalStd = Math.sqrt(variance);
-    }
-
-    samples.push([
-      timestamps.length,
-      distinctUsers,
-      Math.round(intervalMean * 100) / 100,
-      Math.round(intervalStd * 100) / 100,
-      new Date(timestamp * 1000).getHours(),
-    ]);
-  }
-
-  return samples;
+  // Usar el vector exacto emitido por DetectorML al procesar cada evento.
+  // No reconstruir ni completar características con valores estimados.
+  return events.map((event) => [...(event.features as number[])]);
 }
 
 export async function restoreActiveExperimentRecord() {
