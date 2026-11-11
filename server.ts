@@ -102,11 +102,13 @@ function cargarCredencialesDemo(): Record<string, string> {
   const raw = process.env.CENTINELA_DEMO_CREDENTIALS_JSON || '{}';
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.entries(parsed).filter(([username, password]) =>
-        username.trim().length > 0 && typeof password === 'string' && password.length >= 8
-      )
-    );
+    const credentials: Record<string, string> = {};
+    for (const [username, password] of Object.entries(parsed)) {
+      if (username.trim().length > 0 && typeof password === 'string' && password.length >= 8) {
+        credentials[username] = password;
+      }
+    }
+    return credentials;
   } catch {
     console.error('CENTINELA_DEMO_CREDENTIALS_JSON debe contener un objeto JSON de usuarios y contraseñas.');
     return {};
@@ -214,6 +216,10 @@ function validarSesionAdmin(candidate: string): boolean {
     .update(`centinela-admin:${expiresAtRaw}`)
     .digest('hex');
   return safeStringEqual(signature, expected);
+}
+
+function singleRouteParam(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? (value[0] || '') : (value || '');
 }
 
 function extraerCookie(rawCookie: string, nombre: string): string {
@@ -843,7 +849,7 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
 
 app.post('/api/experimentos/:experimentId/finalizar', requiereAdmin, async (req: Request, res: Response) => {
   try {
-    const experiment = await finishExperimentRecord(req.params.experimentId);
+    const experiment = await finishExperimentRecord(singleRouteParam(req.params.experimentId));
     return res.json({ status: 'completed', experiment });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo finalizar el experimento.';
@@ -858,7 +864,7 @@ app.post('/api/eventos/:eventId/etiqueta', requiereAdmin, async (req: Request, r
   }
   try {
     const result = await labelObservedEvent({
-      eventId: req.params.eventId,
+      eventId: singleRouteParam(req.params.eventId),
       label,
       method,
       rationale,
