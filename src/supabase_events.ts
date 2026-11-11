@@ -123,6 +123,22 @@ export function eventStoreStatus() {
   };
 }
 
+export async function checkSupabaseConnection(): Promise<boolean> {
+  if (!client || !hashSecret) return false;
+
+  try {
+    // A successful SELECT verifies DNS/network access, the API key, Data API exposure,
+    // table existence, and the backend role's SELECT grant.
+    const { error } = await client
+      .from('centinela_experiments')
+      .select('id')
+      .limit(1);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
 function hashIdentifier(value: string): string {
   if (!hashSecret) {
     throw new Error('CENTINELA_HASH_SECRET no está configurado.');
