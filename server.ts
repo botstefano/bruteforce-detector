@@ -22,6 +22,7 @@ import {
   finishExperimentRecord,
   eventStoreStatus,
   fetchObservedEvents,
+  restoreActiveExperimentRecord,
   labelObservedEvent,
   persistObservedEvent,
   fetchBenignTrainingSamples,
@@ -1800,6 +1801,8 @@ io.on('connection', (socket) => {
 async function startServer() {
   if (eventStoreStatus().configured) {
     try {
+      const activeExperiment = await restoreActiveExperimentRecord();
+      if (activeExperiment) console.log('Experimento activo restaurado:', activeExperiment);
       await entrenarModeloDesdeCapturasBenignas();
       console.log(`Modelo restaurado con ${estadoModelo.muestras_entrenamiento} ventanas benignas capturadas.`);
     } catch (error) {
