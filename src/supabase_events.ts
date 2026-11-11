@@ -229,8 +229,6 @@ function calculateMetrics(
   prediction: (event: CapturedEventRow) => boolean
 ) {
   let tp = 0, fp = 0, fn = 0, tn = 0;
-  const latencies: number[] = [];
-
   for (const event of events) {
     const predicted = prediction(event);
     const actual = event.ground_truth_label === 'attack';
@@ -239,9 +237,6 @@ function calculateMetrics(
     else if (actual && !predicted) fn++;
     else tn++;
 
-    if (event.latency_total_ms !== null && Number.isFinite(event.latency_total_ms)) {
-      latencies.push(event.latency_total_ms);
-    }
   }
 
   const precision = tp + fp ? tp / (tp + fp) : 0;
@@ -257,10 +252,6 @@ function calculateMetrics(
     false_positive_rate: fpr,
     specificity,
     accuracy,
-    mean_latency_ms: latencies.length
-      ? latencies.reduce((sum, value) => sum + value, 0) / latencies.length
-      : null,
-    latency_sample_size: latencies.length,
   };
 }
 
@@ -277,6 +268,15 @@ export async function calculateObservedMetrics() {
     one_class_svm: calculateMetrics(labeled, (event) => event.alerta_ocsvm),
     lof: calculateMetrics(labeled, (event) => event.alerta_lof),
   };
+  const mean = (values: number[]) => values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : null;
+  const latency = {
+    rules_mean_ms: mean(all.map((event) => event.latency_rules_ms).filter(Number.isFinite)),
+    ml_mean_ms: mean(all.map((event) => event.latency_ml_ms).filter(Number.isFinite)),
+    total_mean_ms: mean(all.map((event) => event.latency_total_ms).filter(Number.isFinite)),
+    sample_size: all.length,
+  };
 
   return {
     source: 'centinela_supabase_observed_events',
@@ -286,6 +286,7 @@ export async function calculateObservedMetrics() {
     benign_events: benign,
     attack_events: attacks,
     metrics: methods,
+    latency,
     note: labeled.length === 0
       ? 'No hay eventos etiquetados; no se calculan métricas de clasificación.'
       : 'Las métricas incluyen exclusivamente eventos capturados y etiquetados como benignos o ataques.',
