@@ -232,12 +232,13 @@ export async function fetchBenignTrainingSamples(windowSeconds = 120): Promise<n
 
 export async function restoreActiveExperimentRecord() {
   if (!client || !hashSecret) return null;
-  if (activeExperimentId) return { id: activeExperimentId, restored_from: 'environment' };
 
-  const { data, error } = await client
+  let query = client
     .from('centinela_experiments')
     .select('id, protocol_name, scenario, status, started_at, metadata')
-    .eq('status', 'running')
+    .eq('status', 'running');
+  if (activeExperimentId) query = query.eq('id', activeExperimentId);
+  const { data, error } = await query
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle();
