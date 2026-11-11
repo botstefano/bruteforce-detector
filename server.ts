@@ -760,13 +760,20 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
   const data = req.body || {};
   const protocolName = typeof data.protocol_name === 'string' ? data.protocol_name.trim() : '';
   const scenario = typeof data.scenario === 'string' ? data.scenario.trim() : '';
-  if (!protocolName || !scenario) {
-    return res.status(400).json({ error: 'Se requieren protocol_name y scenario.' });
+  const trainEndAt = typeof data.train_end_at === 'string' ? data.train_end_at.trim() : '';
+  const validationEndAt = typeof data.validation_end_at === 'string' ? data.validation_end_at.trim() : '';
+  if (!protocolName || !scenario || !trainEndAt || !validationEndAt) {
+    return res.status(400).json({ error: 'Se requieren protocol_name, scenario, train_end_at y validation_end_at (fechas ISO). El periodo posterior a validation_end_at se reserva para prueba.' });
+  }
+  if (!Number.isFinite(Date.parse(trainEndAt)) || !Number.isFinite(Date.parse(validationEndAt)) || Date.parse(validationEndAt) <= Date.parse(trainEndAt)) {
+    return res.status(400).json({ error: 'Las fechas ISO deben ser válidas y validation_end_at posterior a train_end_at.' });
   }
   try {
     const experiment = await createExperimentRecord({
       protocolName,
       scenario,
+      trainEndAt,
+      validationEndAt,
       description: typeof data.description === 'string' ? data.description : undefined,
       detectorConfig: {
         fast_rule: '5 failures / 60 seconds',
