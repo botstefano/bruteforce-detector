@@ -26,6 +26,7 @@ import {
   labelObservedEvent,
   persistObservedEvent,
   fetchBenignTrainingSamples,
+  getActiveExperimentId,
   type CapturedAuthEvent,
 } from './src/supabase_events.js';
 
@@ -93,6 +94,9 @@ const estadoModelo = {
 };
 
 async function entrenarModeloDesdeCapturasBenignas() {
+  if (!getActiveExperimentId()) {
+    throw new Error('Crea un experimento activo antes de entrenar con los eventos capturados.');
+  }
   const muestras = await fetchBenignTrainingSamples(120);
   if (muestras.length < 50) {
     throw new Error(`Se necesitan al menos 50 eventos benignos etiquetados; disponibles: ${muestras.length}.`);
@@ -1802,9 +1806,15 @@ async function startServer() {
   if (eventStoreStatus().configured) {
     try {
       const activeExperiment = await restoreActiveExperimentRecord();
-      if (activeExperiment) console.log('Experimento activo restaurado:', activeExperiment);
-      await entrenarModeloDesdeCapturasBenignas();
-      console.log(`Modelo restaurado con ${estadoModelo.muestras_entrenamiento} ventanas benignas capturadas.`);
+      if (activeExperiment) {
+        console.log('Experimento activo restaurado:', activeExperiment);
+        await entrenarModeloDesdeCapturasBenignas();
+        console.log(`Modelo restaurado con ${estadoModelo.muestras_entrenamiento} ventanas benignas capturadas.`);
+      } else {
+        estadoModelo.fuente = 'sin_entrenar';
+        estadoModelo.detalle = 'No hay experimento activo. Crea uno e inicia la recolección de eventos benignos.';
+        estadoModelo.muestras_entrenamiento = 0;
+      }
     } catch (error) {
       estadoModelo.fuente = 'sin_entrenar';
       estadoModelo.detalle = error instanceof Error ? error.message : 'No se pudo restaurar el entrenamiento desde Supabase.';
