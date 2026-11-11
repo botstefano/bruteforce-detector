@@ -111,6 +111,19 @@ GET /api/experimentos/metricas_capturadas?experiment_id=EXPERIMENT_UUID
 
 La API de métricas del servidor calcula los resultados únicamente con eventos de prueba etiquetados y solo si el baseline está congelado.
 
+Si una escritura en Supabase falla después de que Centinela haya procesado una solicitud, el servicio detiene la captura para evitar ventanas con eventos perdidos. Revisar `/health` y los logs del servidor. Si la integridad del experimento no puede demostrarse, abortarlo registrando una razón:
+
+```http
+POST /api/experimentos/EXPERIMENT_UUID/abortar
+Content-Type: application/json
+
+{
+  "reason": "Interrupción de persistencia durante la campaña; se descarta la ejecución incompleta."
+}
+```
+
+Después de resolver el almacenamiento, crear un experimento nuevo. No sumar eventos de una ejecución abortada a las métricas de una ejecución completada.
+
 ## 7. Ejecutar la evaluación reproducible de scikit-learn
 
 Guardar el CSV exportado como `centinela_eventos_capturados.csv` e instalar las dependencias:
