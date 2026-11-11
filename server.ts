@@ -19,6 +19,7 @@ import { isIP } from 'node:net';
 import {
   abortExperimentRecord,
   calculateObservedMetrics,
+  checkSupabaseConnection,
   createExperimentRecord,
   finishExperimentRecord,
   eventStoreStatus,
@@ -438,14 +439,28 @@ function requiereAdmin(req: Request, res: Response, next: NextFunction) {
 // 1. ENDPOINTS GENÉRICOS DE PROTECCIÓN (usados por cualquier login)
 // =================================================================
 
-app.get('/health', (req: Request, res: Response) => {
+app.get('/health', async (_req: Request, res: Response) => {
   const eventStore = eventStoreStatus();
+  const supabaseOk = await checkSupabaseConnection();
+  const captureReady =
+    eventStore.configured &&
+    supabaseOk &&
+    Boolean(CENTINELA_INGEST_TOKEN) &&
+    Boolean(getActiveExperimentId()) &&
+    !eventCapturePaused;
+
   res.json({
-    status: eventCapturePaused ? 'degraded' : 'ok',
+    status: eventCapturePaused || !eventStore.configured || !supabaseOk ? 'degraded' : 'ok',
     service: 'centinela-v2-detector',
     timestamp: Date.now() / 1000,
-    db_ok: db.checkConnection(),
+    // db_ok now represents a real read probe against Supabase, not the in-memory cache.
+    db_ok: supabaseOk,
+    supabase_ok: supabaseOk,
+    local_store_ok: db.checkConnection(),
     event_store: eventStore,
+    ingest_token_configured: Boolean(CENTINELA_INGEST_TOKEN),
+    active_experiment: Boolean(getActiveExperimentId()),
+    capture_ready: captureReady,
     capture_paused: eventCapturePaused,
     capture_pause_reason: eventCapturePauseReason,
   });
