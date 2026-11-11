@@ -29,12 +29,13 @@ The server-to-server capture token is independent of the dashboard password. Nev
 | --- | --- |
 | `POST /api/experimentos` | Create an experiment and configure temporal dataset boundaries. |
 | `POST /api/experimentos/:experimentId/finalizar` | Finish the active experiment. |
+| `POST /api/experimentos/:experimentId/abortar` | Mark an incomplete experiment as aborted, with a required reason. |
 | `POST /api/eventos/:eventId/etiqueta` | Add an independently justified ground-truth label and audit history. |
 | `POST /api/experimentos/entrenar_con_eventos_capturados` | Train from labeled benign windows in the training split (minimum 50). |
 | `GET /api/dataset/capturado` | Export captured, non-simulator events as JSON; add `?formato=csv` for CSV. |
 | `GET /api/experimentos/metricas_capturadas` | Calculate classification metrics exclusively on labeled test-split events. |
 | `GET /api/session` | Validate the admin session for the dashboard and Socket.IO. |
-| `GET /health` | Inspect whether the persistent event store is configured. |
+| `GET /health` | Inspect whether the persistent event store is configured and whether capture has been paused after a storage failure. |
 
 Dataset, labeling, experiment, evaluation, and administrative event endpoints require admin authentication. Use the dashboard's HttpOnly session cookie or a trusted server-side `Authorization: Bearer $DASHBOARD_PASSWORD` header.
 
@@ -168,3 +169,6 @@ The evaluator fits actual scikit-learn Isolation Forest, One-Class SVM (RBF), an
 The legacy TypeScript components with labels `one_class_svm` and `lof` are approximate distance-based implementations, not canonical One-Class SVM and LOF. Do not cite their Node outputs as standard implementations of those algorithms. Use the separate scikit-learn results for canonical algorithm comparisons, and describe Node outputs as the behavior of the deployed application.
 
 For valid research claims, describe controlled attack campaigns as experimental testbed traffic, not as unsolicited attacks from public production networks. Keep the campaign manifest, authorization, time boundaries, labels, exclusions, software commit, and configuration with the exported artifacts.
+
+
+If a Supabase write fails after the detector has processed a request, Centinela pauses further capture to avoid generating feature windows with a missing event. Check server logs and `/health`. If the gap cannot be reconciled, abort the incomplete experiment with a written reason, then create a new experiment after repairing storage. Do not report the incomplete run as a completed evaluation.
