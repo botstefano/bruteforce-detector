@@ -1195,16 +1195,9 @@ app.post('/api/cicids/entrenar_con_dataset', requiereAdmin, (_req: Request, res:
 // NUEVOS ENDPOINTS CIENTÍFICOS: PROTOCOLO UNB (10 SEMILLAS) Y EXPORTACIÓN
 // =========================================================================
 
-// Experimento 1: Protocolo Oficial UNB CICIDS-2017 (10 semillas, split 30/70 temporal)
-app.get('/api/experimentos/protocolo_unb', (req: Request, res: Response) => {
+// El protocolo histórico con datos generados se retira de la ruta de evaluación.
+app.get('/api/experimentos/protocolo_unb', (_req: Request, res: Response) => {
   return res.status(410).json({ error: 'Protocolo histórico retirado de la evaluación empírica. Utiliza los eventos capturados y etiquetados en Supabase.' });
-  try {
-    const resultado = evaluarProtocoloUnb10Semillas(datasetCicidsActual);
-    res.json(resultado);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    res.status(500).json({ error: msg });
-  }
 });
 
 // Experimento 2: Simulación Rigurosa Multi-Semilla (10 semillas, Media ± Desviación Estándar)
