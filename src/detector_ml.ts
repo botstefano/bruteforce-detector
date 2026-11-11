@@ -46,6 +46,17 @@ interface TreeNode {
   right?: TreeNode;
 }
 
+function createSeededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function cFactor(n: number): number {
   if (n <= 1) return 1;
   if (n === 2) return 1;
@@ -56,18 +67,18 @@ function cFactor(n: number): number {
 class IsolationTree {
   public root: TreeNode;
 
-  constructor(data: number[][], currentHeight: number, maxHeight: number) {
-    this.root = this.buildTree(data, currentHeight, maxHeight);
+  constructor(data: number[][], currentHeight: number, maxHeight: number, rng: () => number) {
+    this.root = this.buildTree(data, currentHeight, maxHeight, rng);
   }
 
-  private buildTree(data: number[][], currentHeight: number, maxHeight: number): TreeNode {
+  private buildTree(data: number[][], currentHeight: number, maxHeight: number, rng: () => number): TreeNode {
     const n = data.length;
     if (currentHeight >= maxHeight || n <= 1) {
       return { isLeaf: true, size: n };
     }
 
     const numFeatures = data[0].length;
-    const featureIdx = Math.floor(Math.random() * numFeatures);
+    const featureIdx = Math.floor(rng() * numFeatures);
 
     let min = Infinity;
     let max = -Infinity;
@@ -81,7 +92,7 @@ class IsolationTree {
       return { isLeaf: true, size: n };
     }
 
-    const splitValue = min + Math.random() * (max - min);
+    const splitValue = min + rng() * (max - min);
     const leftData: number[][] = [];
     const rightData: number[][] = [];
     for (let i = 0; i < n; i++) {
@@ -96,8 +107,8 @@ class IsolationTree {
       isLeaf: false,
       splitFeature: featureIdx,
       splitValue,
-      left: this.buildTree(leftData, currentHeight + 1, maxHeight),
-      right: this.buildTree(rightData, currentHeight + 1, maxHeight),
+      left: this.buildTree(leftData, currentHeight + 1, maxHeight, rng),
+      right: this.buildTree(rightData, currentHeight + 1, maxHeight, rng),
     };
   }
 
@@ -125,10 +136,12 @@ class IsolationForestModel {
 
   private nEstimators: number;
   private contamination: number;
+  private randomSeed: number;
 
-  constructor(nEstimators = 100, contamination = 0.15) {
+  constructor(nEstimators = 100, contamination = 0.15, randomSeed = 42) {
     this.nEstimators = nEstimators;
     this.contamination = contamination;
+    this.randomSeed = randomSeed;
   }
 
   public fit(X: number[][]): void {
@@ -138,13 +151,14 @@ class IsolationForestModel {
     const maxHeight = Math.ceil(Math.log2(Math.max(n, 2)));
 
     this.trees = [];
+    const rng = createSeededRandom(this.randomSeed);
     for (let i = 0; i < this.nEstimators; i++) {
       const subSample: number[][] = [];
       for (let j = 0; j < n; j++) {
-        const idx = Math.floor(Math.random() * X.length);
+        const idx = Math.floor(rng() * X.length);
         subSample.push(X[idx]);
       }
-      this.trees.push(new IsolationTree(subSample, 0, maxHeight));
+      this.trees.push(new IsolationTree(subSample, 0, maxHeight, rng));
     }
 
     const scores = X.map((x) => this.rawAnomalyScore(x, n));
@@ -308,6 +322,7 @@ class LocalOutlierFactorModel {
 export class DetectorML {
   private ventanaFeatures: number;
   private contamination: number;
+  private randomSeed: number;
   private iforest: IsolationForestModel;
   private ocsvm: OneClassSVMModel;
   private lof: LocalOutlierFactorModel;
@@ -315,10 +330,11 @@ export class DetectorML {
   public fuenteActual = 'sin_entrenar';
   private intentosPorIp: Map<string, IntentoIpML[]> = new Map();
 
-  constructor(ventanaFeatures = 120, contamination = 0.15) {
+  constructor(ventanaFeatures = 120, contamination = 0.15, randomSeed = 42) {
     this.ventanaFeatures = ventanaFeatures;
     this.contamination = contamination;
-    this.iforest = new IsolationForestModel(100, contamination);
+    this.randomSeed = randomSeed;
+    this.iforest = new IsolationForestModel(100, contamination, randomSeed);
     this.ocsvm = new OneClassSVMModel(contamination);
     this.lof = new LocalOutlierFactorModel(12);
   }
@@ -430,7 +446,7 @@ export class DetectorML {
 
   public resetForNewExperiment(): void {
     this.intentosPorIp.clear();
-    this.iforest = new IsolationForestModel(100, this.contamination);
+    this.iforest = new IsolationForestModel(100, this.contamination, this.randomSeed);
     this.ocsvm = new OneClassSVMModel(this.contamination);
     this.lof = new LocalOutlierFactorModel(12);
     this.entrenado = false;
