@@ -439,6 +439,8 @@ function calculateMetrics(
 
 export async function calculateObservedMetrics(experimentId?: string | null) {
   const all = await fetchObservedEvents(experimentId);
+  const selectedExperimentId = experimentId === undefined ? activeExperimentId : experimentId;
+  const baselineFrozen = Boolean(selectedExperimentId && selectedExperimentId === activeExperimentId && activeTrainingFrozen);
   const testEvents = all.filter((event) => event.dataset_split === 'test');
   const labeled = testEvents.filter((event) => event.ground_truth_label !== 'unknown');
   const benign = labeled.filter((event) => event.ground_truth_label === 'benign').length;
@@ -473,10 +475,13 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
     test_unknown_events: testEvents.filter((event) => event.ground_truth_label === 'unknown').length,
     benign_events: benign,
     attack_events: attacks,
-    metrics: labeled.length > 0 ? methods : null,
+    metrics: baselineFrozen && labeled.length > 0 ? methods : null,
+    baseline_frozen: baselineFrozen,
     latency,
-    note: labeled.length === 0
-      ? 'No hay eventos de prueba etiquetados; no se calculan métricas de clasificación.'
-      : 'Las métricas de clasificación se calculan exclusivamente sobre eventos capturados, etiquetados y reservados para el periodo de prueba.'
+    note: !baselineFrozen
+      ? 'El baseline de entrenamiento aún no está congelado para este experimento; no se publican métricas de clasificación.'
+      : labeled.length === 0
+        ? 'No hay eventos de prueba etiquetados; no se calculan métricas de clasificación.'
+        : 'Las métricas se calculan exclusivamente sobre eventos capturados, etiquetados y reservados para el periodo de prueba.'
   };
 }
