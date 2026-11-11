@@ -352,7 +352,7 @@ export class DetectorML {
       intervaloStd = Math.sqrt(variance);
     }
 
-    const hora = new Date(ahora * 1000).getHours();
+    const hora = new Date(ahora * 1000).getUTCHours();
 
     return [
       numIntentos,
