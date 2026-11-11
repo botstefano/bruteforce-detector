@@ -335,6 +335,7 @@ async function procesarIntentoCapturado(
   exitoso: boolean,
   origen: string
 ) {
+  if (isIP(ip) === 0) throw new Error('No se pudo determinar una IP de origen válida y confiable.');
   const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true);
   await persistObservedEvent(evento as CapturedAuthEvent);
   io.emit('nuevo_evento', evento);
@@ -1095,7 +1096,7 @@ app.post('/api/experimentos/entrenar_con_eventos_capturados', requiereAdmin, asy
   }
 });
 
-app.get('/api/estado_modelo', (req: Request, res: Response) => {
+app.get('/api/estado_modelo', requiereAdmin, (req: Request, res: Response) => {
   res.json(estadoModelo);
 });
 
