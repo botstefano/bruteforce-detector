@@ -23,3 +23,17 @@ jobs:
         run: npm install
       - name: Type-check and build
         run: npm run build
+
+  empirical-evaluation-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install empirical-analysis dependencies
+        run: python -m pip install -r requirements-empirical.txt
+      - name: Validate empirical evaluation script
+        run: python -m py_compile empirical_auth_evaluation.py
