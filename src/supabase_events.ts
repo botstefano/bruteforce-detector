@@ -108,6 +108,13 @@ export function getActiveExperimentState() {
   };
 }
 
+export function getAnalyticsIdentifiers(ip: string, usuario: string) {
+  return {
+    ipKey: hashIdentifier(ip),
+    userKey: hashIdentifier(usuario.trim().toLowerCase()),
+  };
+}
+
 export function eventStoreStatus() {
   return {
     configured: Boolean(client && hashSecret),
@@ -140,8 +147,8 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
   const row = {
     event_id: event.event_id,
     occurred_at: new Date(event.timestamp * 1000).toISOString(),
-    source_ip_hash: hashIdentifier(event.ip),
-    user_key_hash: hashIdentifier(event.usuario.trim().toLowerCase()),
+    source_ip_hash: getAnalyticsIdentifiers(event.ip, event.usuario).ipKey,
+    user_key_hash: getAnalyticsIdentifiers(event.ip, event.usuario).userKey,
     auth_success: event.exitoso,
     origin: event.origen,
     is_simulated: false,
@@ -214,6 +221,33 @@ export async function fetchObservedEvents(experimentId?: string | null): Promise
     throw new Error(`La exportación alcanzó el límite de seguridad de ${maxRows} eventos; exporta por periodos.`);
   }
   return rows;
+}
+
+export async function fetchRecentObservedEventsForState(windowSeconds = 900): Promise<Array<{
+  occurred_at: string;
+  source_ip_hash: string;
+  user_key_hash: string;
+  auth_success: boolean;
+}>> {
+  if (!client || !activeExperimentId) {
+    throw new Error('No hay un experimento activo para restaurar las ventanas de detección.');
+  }
+  const from = new Date(Date.now() - windowSeconds * 1000).toISOString();
+  const { data, error } = await client
+    .from('centinela_auth_events')
+    .select('occurred_at, source_ip_hash, user_key_hash, auth_success')
+    .eq('experiment_id', activeExperimentId)
+    .eq('is_simulated', false)
+    .gte('occurred_at', from)
+    .order('occurred_at', { ascending: true });
+
+  if (error) throw new Error(`No se pudo restaurar el historial reciente de detectores: ${error.message}`);
+  return (data ?? []) as Array<{
+    occurred_at: string;
+    source_ip_hash: string;
+    user_key_hash: string;
+    auth_success: boolean;
+  }>;
 }
 
 export async function fetchBenignTrainingSamples(windowSeconds = 120): Promise<number[][]> {
