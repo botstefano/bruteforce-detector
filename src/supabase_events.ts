@@ -64,7 +64,9 @@ const supabaseKey =
   '';
 const hashSecret = process.env.CENTINELA_HASH_SECRET?.trim() ?? '';
 let activeExperimentId: string | null = null;
+let activeExperimentMetadata: Record<string, unknown> = {};
 let activeSplitBoundaries: { trainEndMs: number; validationEndMs: number } | null = null;
+let activeTrainingFrozen = false;
 
 function splitForTimestamp(timestampSeconds: number): 'unassigned' | 'train' | 'validation' | 'test' {
   if (!activeSplitBoundaries) return 'unassigned';
@@ -87,6 +89,16 @@ const client: SupabaseClient | null =
 
 export function getActiveExperimentId(): string | null {
   return activeExperimentId;
+}
+
+export function getActiveExperimentState() {
+  if (!activeExperimentId || !activeSplitBoundaries) return null;
+  return {
+    id: activeExperimentId,
+    trainEndMs: activeSplitBoundaries.trainEndMs,
+    validationEndMs: activeSplitBoundaries.validationEndMs,
+    trainingFrozen: activeTrainingFrozen,
+  };
 }
 
 export function eventStoreStatus() {
@@ -247,6 +259,8 @@ export async function restoreActiveExperimentRecord() {
   if (!data) return null;
   activeExperimentId = data.id as string;
   const metadata = (data.metadata ?? {}) as Record<string, unknown>;
+  activeExperimentMetadata = metadata;
+  activeTrainingFrozen = metadata.training_frozen === true;
   const trainEndMs = typeof metadata.train_end_at === 'string' ? Date.parse(metadata.train_end_at) : NaN;
   const validationEndMs = typeof metadata.validation_end_at === 'string' ? Date.parse(metadata.validation_end_at) : NaN;
   activeSplitBoundaries = Number.isFinite(trainEndMs) && Number.isFinite(validationEndMs) && validationEndMs > trainEndMs
@@ -277,6 +291,7 @@ export async function createExperimentRecord(input: {
     train_end_at: trainEndAt,
     validation_end_at: validationEndAt,
     split_policy: 'temporal_by_event_timestamp_v1',
+    training_frozen: false,
   };
   const { data, error } = await client
     .from('centinela_experiments')
@@ -294,7 +309,9 @@ export async function createExperimentRecord(input: {
     .single();
   if (error) throw new Error(`No se pudo crear el experimento: ${error.message}`);
   activeExperimentId = data.id as string;
+  activeExperimentMetadata = experimentMetadata;
   activeSplitBoundaries = { trainEndMs, validationEndMs };
+  activeTrainingFrozen = false;
   return data;
 }
 
@@ -311,8 +328,38 @@ export async function finishExperimentRecord(experimentId: string) {
   if (!data) throw new Error('No existe un experimento activo con ese identificador.');
   if (activeExperimentId === experimentId) {
     activeExperimentId = null;
+    activeExperimentMetadata = {};
     activeSplitBoundaries = null;
+    activeTrainingFrozen = false;
   }
+  return data;
+}
+
+export async function freezeActiveExperimentTraining(sampleCount: number) {
+  if (!client || !activeExperimentId || !activeSplitBoundaries) {
+    throw new Error('No hay un experimento activo con cortes temporales válidos.');
+  }
+  if (activeTrainingFrozen) throw new Error('El modelo ya fue congelado para este experimento. Crea otro experimento para reentrenar.');
+  if (!Number.isInteger(sampleCount) || sampleCount < 1) throw new Error('El número de muestras de entrenamiento no es válido.');
+
+  const completedAt = new Date().toISOString();
+  const metadata = {
+    ...activeExperimentMetadata,
+    training_frozen: true,
+    training_sample_count: sampleCount,
+    training_completed_at: completedAt,
+  };
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ metadata })
+    .eq('id', activeExperimentId)
+    .eq('status', 'running')
+    .select('id, metadata')
+    .single();
+  if (error) throw new Error(`No se pudo congelar el entrenamiento: ${error.message}`);
+
+  activeExperimentMetadata = metadata;
+  activeTrainingFrozen = true;
   return data;
 }
 
