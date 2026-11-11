@@ -730,10 +730,24 @@ app.post('/login', async (req: Request, res: Response) => {
 
   const [bloqueada, restante] = db.ipEstaBloqueada(ip);
   if (bloqueada) {
-    return res.status(403).json({
-      status: 'rechazado',
-      mensaje: `IP bloqueada, intenta en ${restante}s`,
-    });
+    try {
+      const eventoBloqueado = await procesarIntentoCapturado(
+        ip,
+        usuario,
+        false,
+        'login_prueba_interno',
+        { blocked_before_authentication: true, remaining_block_seconds: restante }
+      );
+      return res.status(403).json({
+        status: 'rechazado',
+        mensaje: `IP bloqueada, intenta en ${restante}s`,
+        event_id: eventoBloqueado.event_id,
+        persisted: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'No se pudo guardar el evento.';
+      return res.status(503).json({ error: message, persisted: false });
+    }
   }
 
   let evento: ReturnType<typeof procesarIntento>;
