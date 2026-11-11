@@ -130,3 +130,33 @@ npm install
 npm run dev
 npm run build
 ```
+
+
+## Offline empirical evaluation from Supabase exports
+
+The Node application records the five-dimensional feature vector actually seen by its live detector. For a standards-based comparison, use the separate Python evaluator:
+
+```bash
+python -m pip install -r requirements-empirical.txt
+python empirical_auth_evaluation.py \
+  --input centinela_eventos_capturados.csv \
+  --output-dir empirical_results \
+  --seed 42 \
+  --bootstrap 1000
+```
+
+The CSV must be exported from the authenticated endpoint:
+
+```http
+GET /api/dataset/capturado?formato=csv
+```
+
+The evaluator refuses rows marked as simulated, unassigned temporal splits, and feature schemas other than `centinela-auth-features-v2`. It requires at least 50 labeled-benign training events plus labeled benign and attack observations in both validation and test.
+
+Training vectors are reconstructed from confirmed benign training events only, to avoid contaminating the normal baseline with earlier malicious events that may have been recognized and labeled later. Validation and test use the exact feature vectors stored when the live Node detector processed each event.
+
+The evaluator fits actual scikit-learn Isolation Forest, One-Class SVM (RBF), and Local Outlier Factor (novelty mode). It calibrates each threshold on validation and reports final metrics only on the untouched test split. It also reports the decisions and measured inference latencies emitted by the running Node service separately from offline scikit-learn model results. Results include input/script hashes, environment versions, prediction CSV, and a manifest. Cluster bootstrap uses `campaign_id` when supplied by the trusted authentication backend and falls back to the pseudonymized source IP.
+
+The legacy TypeScript components with labels `one_class_svm` and `lof` are approximate distance-based implementations, not canonical One-Class SVM and LOF. Do not cite their Node outputs as standard implementations of those algorithms. Use the separate scikit-learn results for canonical algorithm comparisons, and describe Node outputs as the behavior of the deployed application.
+
+For valid research claims, describe controlled attack campaigns as experimental testbed traffic, not as unsolicited attacks from public production networks. Keep the campaign manifest, authorization, time boundaries, labels, exclusions, software commit, and configuration with the exported artifacts.
