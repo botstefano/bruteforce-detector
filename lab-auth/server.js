@@ -9,7 +9,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(__dirname, "public");
 const PORT = Number.parseInt(process.env.PORT || "10000", 10);
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
-const CENTINELA_API_URL = (process.env.CENTINELA_API_URL || "").trim().replace(/\\/+$/, "");
+const CENTINELA_API_URL = (() => {
+  let value = (process.env.CENTINELA_API_URL || "").trim();
+  while (value.endsWith("/")) value = value.slice(0, -1);
+  return value;
+})();
 const CENTINELA_INGEST_TOKEN = (process.env.CENTINELA_INGEST_TOKEN || "").trim();
 const CAMPAIGN_ID = "laboratorio-web-auth-v2";
 const EXPECTED_USERS = ["ronan", "andy", "stefano"];
