@@ -42,6 +42,7 @@ import { RealCaptchaCanvas } from './RealCaptchaCanvas';
 import { CicidsDatasetView } from './CicidsDatasetView';
 import { ReporteAcademicoView } from './ReporteAcademicoView';
 import { EmpiricalStudyPanel } from './EmpiricalStudyPanel';
+import { CentinelaWorkspace } from './CentinelaWorkspace';
 import { CicidsEvaluationSummary } from './cicids_parser';
 
 interface Intento {
@@ -115,7 +116,7 @@ interface EstadoModelo {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'dataset_cicids' | 'empirical' | 'report' | 'demos' | 'training'>('empirical');
+  const [activeTab, setActiveTab] = useState<'home' | 'monitor' | 'analytics' | 'cycle_ml' | 'docs' | 'dashboard' | 'simulator' | 'dataset_cicids' | 'empirical' | 'report' | 'demos' | 'training'>('home');
   const [eventos, setEventos] = useState<Intento[]>([]);
   const [metricas, setMetricas] = useState<MetricasResumen | null>(null);
   const [ipsBloqueadas, setIpsBloqueadas] = useState<Record<string, number>>({});
@@ -704,16 +705,40 @@ export default function App() {
                 <h1 className="text-xl font-black tracking-wider bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
                   CENTINELA
                 </h1>
-                <p className="text-xs text-slate-400 font-medium">Estudio empírico de autenticación — eventos reales observados</p>
+                <p className="text-xs text-slate-400 font-medium">Plataforma de detección y monitoreo de autenticación</p>
               </div>
             </div>
 
-            {/* Navegación reducida al protocolo empírico activo */}
-            <div className="flex flex-col sm:flex-row items-center gap-3">
-              <div className="flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-300">
-                <Database className="w-4 h-4" />
-                <span>Captura empírica</span>
-              </div>
+            {/* Navegación principal de la plataforma */}
+            <div className="flex flex-col xl:flex-row items-center gap-3">
+              <nav aria-label="Navegación principal" className="flex flex-wrap items-center justify-center gap-1">
+                {([
+                  { id: 'home', label: 'Inicio', icon: Shield },
+                  { id: 'monitor', label: 'Monitor', icon: Radio },
+                  { id: 'analytics', label: 'Analítica', icon: BarChart2 },
+                  { id: 'cycle_ml', label: 'Ciclo de ML', icon: Cpu },
+                  { id: 'docs', label: 'Documentación', icon: FileText },
+                ] as const).map((item) => {
+                  const Icon = item.icon;
+                  const selected = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setActiveTab(item.id)}
+                      aria-current={selected ? 'page' : undefined}
+                      className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                        selected
+                          ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                          : 'border-transparent text-slate-400 hover:border-slate-700 hover:bg-slate-800 hover:text-white'
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </nav>
               <button
                 onClick={() => {
                   setPanelAutenticado(false);
@@ -733,6 +758,12 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
+        {activeTab === 'home' && <CentinelaWorkspace section="home" />}
+        {activeTab === 'monitor' && <CentinelaWorkspace section="monitor" />}
+        {activeTab === 'analytics' && <CentinelaWorkspace section="analytics" />}
+        {activeTab === 'cycle_ml' && <CentinelaWorkspace section="cycle" />}
+        {activeTab === 'docs' && <CentinelaWorkspace section="docs" />}
+
         {activeTab === 'dashboard' && (
           <div className="space-y-6 animate-fadeIn">
             {/* Top Metric Cards */}
