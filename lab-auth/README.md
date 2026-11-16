@@ -15,7 +15,7 @@ Las contraseñas son únicas y se mantienen como secretos de entorno en Render. 
 1. El participante introduce su usuario y contraseña.
 2. Resuelve una comprobación CAPTCHA aritmética, generada y validada en el servidor, con vencimiento y uso único.
 3. El laboratorio valida la contraseña de forma local.
-4. El laboratorio transmite a Centinela solamente el usuario, el resultado final de autenticación, la IP verificada y `campaign_id=laboratorio-web-auth-v2`.
+4. El laboratorio transmite a Centinela solamente el usuario, el resultado final de autenticación, la IP verificada y el identificador de campaña indicado por `LAB_CAMPAIGN_ID`.
 5. Centinela almacena el evento con etiqueta inicial `unknown`; la auditoría y el etiquetado se realizan allí.
 
 Los CAPTCHA incorrectos o caducados y los envíos que activan el campo trampa se rechazan antes de la autenticación y no se contabilizan como fallos de contraseña en el conjunto empírico. Así se evita contaminar los datos de autenticación con errores de la propia comprobación anti-bot.
@@ -36,6 +36,7 @@ El CAPTCHA aritmético es una defensa ligera para un testbed experimental, no eq
 - `NODE_ENV=production`
 - `CENTINELA_API_URL=https://bruteforce-detector-2uv4.onrender.com`
 - `CENTINELA_INGEST_TOKEN`: el mismo secreto de ingesta configurado en el servicio detector.
+- `LAB_CAMPAIGN_ID`: identificador de la campaña activa. Usa un valor distinto para validación y prueba; los eventos nuevos lo conservarán como `campaign_id`. Por compatibilidad, el valor predeterminado es `laboratorio-web-auth-v2`.
 - `LAB_CREDENTIALS_V2_JSON`: objeto JSON con exactamente `ronan`, `andy` y `stefano`, cada uno con contraseña distinta de 16 a 256 caracteres.
 
 No se necesita una variable de semillas TOTP para esta versión.
@@ -46,14 +47,14 @@ Servicio Render `centinela-auth-lab`, rama `feature/lab-auth-render-service`, co
 
 ## Verificación
 
-1. Abrir `/health` y comprobar `status=ok`, `credentials_configured=true`, `captcha_configured=true`, `centinela_configured=true`, `campaign_id=laboratorio-web-auth-v2` y `account_lockout_enabled=false`.
+1. Abrir `/health` y comprobar `status=ok`, `credentials_configured=true`, `captcha_configured=true`, `centinela_configured=true`, el `campaign_id` correspondiente a la fase activa y `account_lockout_enabled=false`.
 2. Probar un login válido y confirmar su identificador de evento.
 3. Probar una contraseña incorrecta con CAPTCHA correcto y confirmar un evento fallido en Captura empírica.
 4. Probar un CAPTCHA incorrecto y confirmar que no se crea un evento de autenticación.
-5. En Centinela verificar `origin=integracion_autenticacion`, `campaign_id=laboratorio-web-auth-v2`, `is_simulated=false` y la partición temporal del experimento activo.
+5. En Centinela verificar `origin=integracion_autenticacion`, el `campaign_id` esperado, `is_simulated=false` y la partición temporal del experimento activo.
 6. Etiquetar únicamente con evidencia independiente de sesiones/campañas autorizadas, nunca a partir de alertas del detector.
 
-Si Centinela no confirma la persistencia, el laboratorio muestra un error y no afirma que el evento se haya guardado. Comprueba Captura empírica antes de repetir el intento.
+Si Centinela no confirma la persistencia, el laboratorio muestra un error y no afirma que el evento se haya guardado. Comprueba Captura empírica antes de repetirlo.
 
 ## Desarrollo local
 
