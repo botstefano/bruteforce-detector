@@ -405,7 +405,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, createCaptcha(ip));
   }
 
-  const captchaImageMatch = pathname.match(/^\\/challenge\\/([a-f0-9]{48})\\.svg$/);
+  const captchaImageMatch = pathname.match(/^\/challenge\/([a-f0-9]{48})\.svg$/);
   if (req.method === "GET" && captchaImageMatch) {
     let ip;
     try {
