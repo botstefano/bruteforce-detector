@@ -115,7 +115,7 @@ interface EstadoModelo {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'dataset_cicids' | 'empirical' | 'report' | 'demos' | 'training'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'dataset_cicids' | 'empirical' | 'report' | 'demos' | 'training'>('empirical');
   const [eventos, setEventos] = useState<Intento[]>([]);
   const [metricas, setMetricas] = useState<MetricasResumen | null>(null);
   const [ipsBloqueadas, setIpsBloqueadas] = useState<Record<string, number>>({});
@@ -704,109 +704,16 @@ export default function App() {
                 <h1 className="text-xl font-black tracking-wider bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
                   CENTINELA
                 </h1>
-                <p className="text-xs text-slate-400 font-medium">Adaptive Brute Force Detector & WAF / ML Mitigation</p>
+                <p className="text-xs text-slate-400 font-medium">Estudio empírico de autenticación — eventos reales observados</p>
               </div>
             </div>
 
-            {/* Navigation Tabs */}
-            <nav className="flex items-center bg-slate-950/80 p-1.5 rounded-2xl border border-slate-800 space-x-1">
-              <button
-                onClick={() => setActiveTab('dashboard')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === 'dashboard'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Activity className="w-4 h-4" />
-                <span>Dashboard</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('simulator')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  activeTab === 'simulator'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Play className="w-4 h-4" />
-                <span>Simulador & Bot</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('dataset_cicids')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  activeTab === 'dataset_cicids'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Database className="w-4 h-4 text-emerald-400" />
-                <span>Dataset CICIDS-2017</span>
-                {cicidsData && (
-                  <span className="bg-emerald-500/20 text-emerald-300 text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-                    {cicidsData.totalRegistros}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={() => setActiveTab('empirical')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  activeTab === 'empirical'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Database className="w-4 h-4 text-cyan-400" />
-                <span>Captura Empírica</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('report')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  activeTab === 'report'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <BarChart2 className="w-4 h-4" />
-                <span>Reporte Científico</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('demos')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === 'demos'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Lock className="w-4 h-4" />
-                <span>Logins Demo</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('training')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === 'training'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Cpu className="w-4 h-4" />
-                <span>ML & Entrenamiento</span>
-              </button>
-            </nav>
-
-            {/* Status / Quick Reset / Logout */}
-            <div className="flex items-center space-x-3">
-              <div className="hidden lg:flex items-center space-x-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-full text-xs font-semibold">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>WAF & ML Activos</span>
+            {/* Navegación reducida al protocolo empírico activo */}
+            <div className="flex flex-col sm:flex-row items-center gap-3">
+              <div className="flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-sm font-semibold text-cyan-300">
+                <Database className="w-4 h-4" />
+                <span>Captura empírica</span>
               </div>
-              <button
-                onClick={reiniciarSistema}
-                title="Reiniciar sistema"
-                className="p-2.5 bg-slate-800 hover:bg-red-600/20 hover:border-red-500/50 text-slate-300 hover:text-red-400 border border-slate-700 rounded-xl transition-all cursor-pointer"
-              >
-                <RotateCcw className="w-4 h-4" />
-              </button>
               <button
                 onClick={() => {
                   setPanelAutenticado(false);
