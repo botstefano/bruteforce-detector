@@ -1,16 +1,15 @@
 const form = document.querySelector("#login-form");
 const usernameInput = document.querySelector("#username");
 const passwordInput = document.querySelector("#password");
-const mfaCodeInput = document.querySelector("#mfa-code");
-const mfaCodeGroup = document.querySelector("#mfa-code-group");
-const mfaSetup = document.querySelector("#mfa-setup");
-const setupSecret = document.querySelector("#setup-secret");
+const captchaQuestion = document.querySelector("#captcha-question");
+const captchaAnswer = document.querySelector("#captcha-answer");
+const refreshCaptchaButton = document.querySelector("#refresh-captcha");
+const honeypotInput = document.querySelector("#website");
 const submitButton = document.querySelector("#submit-button");
-const cancelMfaButton = document.querySelector("#cancel-mfa");
 const resultBox = document.querySelector("#result");
 
-let pendingUsername = null;
-let pendingPassword = null;
+let currentChallengeId = null;
+let challengeLoading = false;
 
 function showResult(kind, message, eventId) {
   resultBox.hidden = false;
@@ -18,14 +17,8 @@ function showResult(kind, message, eventId) {
   resultBox.replaceChildren();
 
   const title = document.createElement("strong");
-  const titles = {
-    success: "Autenticación correcta",
-    failure: "Autenticación fallida",
-    locked: "Cuenta bloqueada temporalmente",
-    info: "Verificación en dos pasos",
-    error: "No se pudo confirmar el registro"
-  };
-  title.textContent = titles[kind] || "Resultado";
+  title.textContent = kind === "success" ? "Autenticación correcta" :
+    kind === "failure" ? "Autenticación fallida" : "Aviso de seguridad";
   const detail = document.createElement("span");
   detail.textContent = message;
   resultBox.append(title, detail);
@@ -37,94 +30,100 @@ function showResult(kind, message, eventId) {
   }
 }
 
-function resetMfaStep() {
-  pendingUsername = null;
-  pendingPassword = null;
-  usernameInput.disabled = false;
-  passwordInput.disabled = false;
-  passwordInput.value = "";
-  mfaCodeInput.value = "";
-  mfaCodeGroup.hidden = true;
-  mfaSetup.hidden = true;
-  cancelMfaButton.hidden = true;
-  submitButton.querySelector("span").textContent = "Iniciar sesión";
+async function loadCaptcha() {
+  challengeLoading = true;
+  currentChallengeId = null;
+  captchaQuestion.textContent = "Cargando comprobación…";
+  captchaAnswer.value = "";
+  refreshCaptchaButton.disabled = true;
+  submitButton.disabled = true;
+
+  try {
+    const response = await fetch("/challenge", {
+      method: "GET",
+      headers: { "Accept": "application/json" },
+      cache: "no-store",
+      credentials: "same-origin"
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || typeof payload.challenge_id !== "string" || typeof payload.prompt !== "string") {
+      throw new Error(payload.error || "No se pudo generar la comprobación.");
+    }
+    currentChallengeId = payload.challenge_id;
+    captchaQuestion.textContent = payload.prompt;
+  } catch (error) {
+    captchaQuestion.textContent = "No se pudo cargar la comprobación. Vuelve a intentarlo.";
+    showResult("error", error.message || "No se pudo generar el CAPTCHA.");
+  } finally {
+    challengeLoading = false;
+    refreshCaptchaButton.disabled = false;
+    submitButton.disabled = !currentChallengeId;
+  }
 }
 
-cancelMfaButton.addEventListener("click", () => {
-  resetMfaStep();
-  resultBox.hidden = true;
-  usernameInput.focus();
-});
+refreshCaptchaButton.addEventListener("click", loadCaptcha);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   resultBox.hidden = true;
 
-  const username = pendingUsername || usernameInput.value.trim();
-  const password = pendingPassword || passwordInput.value;
-  const totpCode = pendingPassword ? mfaCodeInput.value.trim() : "";
+  const username = usernameInput.value.trim();
+  const password = passwordInput.value;
+  const answer = captchaAnswer.value.trim();
+  const website = honeypotInput.value;
 
   if (!username || !password) {
-    showResult("error", "Completa el identificador y la contraseña.");
+    showResult("error", "Completa el usuario y la contraseña.");
     return;
   }
-  if (pendingPassword && !/^[0-9]{6}$/.test(totpCode)) {
-    showResult("error", "Introduce el código de seis dígitos de tu aplicación autenticadora.");
+  if (!currentChallengeId || challengeLoading) {
+    showResult("error", "Espera a que se cargue la comprobación de seguridad.");
+    return;
+  }
+  if (!/^\d{1,2}$/.test(answer)) {
+    showResult("error", "Resuelve la comprobación de seguridad.");
     return;
   }
 
   submitButton.disabled = true;
-  submitButton.querySelector("span").textContent = pendingPassword ? "Verificando…" : "Procesando…";
+  refreshCaptchaButton.disabled = true;
+  submitButton.querySelector("span").textContent = "Procesando…";
+  const challengeId = currentChallengeId;
+  currentChallengeId = null;
 
   try {
     const response = await fetch("/login", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ username, password, totp_code: totpCode }),
+      body: JSON.stringify({
+        username,
+        password,
+        challenge_id: challengeId,
+        challenge_answer: answer,
+        website
+      }),
       cache: "no-store",
       credentials: "same-origin"
     });
 
     const payload = await response.json().catch(() => ({}));
-
-    if (response.status === 202 && payload.mfa_required) {
-      pendingUsername = username;
-      pendingPassword = password;
-      usernameInput.disabled = true;
-      passwordInput.value = "";
-      passwordInput.disabled = true;
-      setupSecret.textContent = payload.setup_secret || "";
-      mfaSetup.hidden = false;
-      mfaCodeGroup.hidden = false;
-      cancelMfaButton.hidden = false;
-      mfaCodeInput.value = "";
-      mfaCodeInput.focus();
-      showResult("info", payload.message || "Configura tu aplicación autenticadora y escribe el código actual.");
-      return;
-    }
+    passwordInput.value = "";
+    captchaAnswer.value = "";
 
     if (response.ok && payload.authenticated && payload.event_recorded) {
-      resetMfaStep();
       showResult("success", payload.message, payload.event_id);
     } else if (response.status === 401 && payload.event_recorded) {
-      if (pendingPassword) {
-        mfaCodeInput.value = "";
-        mfaCodeInput.focus();
-      } else {
-        resetMfaStep();
-      }
       showResult("failure", payload.message, payload.event_id);
-    } else if (response.status === 423 && payload.event_recorded) {
-      resetMfaStep();
-      showResult("locked", payload.message + " Tiempo restante: " + payload.retry_after_seconds + " segundos.", payload.event_id);
     } else {
       showResult("error", payload.error || "No se pudo confirmar el resultado. Revisa Centinela antes de repetir el intento.");
     }
   } catch {
-    showResult("error", "No se pudo conectar con el laboratorio. Comprueba la conexión e inténtalo más tarde.");
+    passwordInput.value = "";
+    showResult("error", "No se pudo conectar con el laboratorio. Comprueba Centinela antes de repetir el intento.");
   } finally {
-    submitButton.disabled = false;
-    if (!pendingPassword) submitButton.querySelector("span").textContent = "Iniciar sesión";
-    else submitButton.querySelector("span").textContent = "Verificar código";
+    submitButton.querySelector("span").textContent = "Iniciar sesión";
+    await loadCaptcha();
   }
 });
+
+loadCaptcha();
