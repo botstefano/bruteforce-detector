@@ -377,7 +377,7 @@ async function waitForCentinelaReady() {
       clearTimeout(timeout);
     }
 
-    if (attempt < 8) {
+    if (attempt < 24) {
       await new Promise(resolve => setTimeout(resolve, 5_000));
     }
   }
