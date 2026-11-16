@@ -331,7 +331,7 @@ async function readJsonBody(req) {
 
 async function sendEventToCentinela(username, authenticated, ip) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8_000);
+  const timeout = setTimeout(() => controller.abort(), 90_000);
 
   try {
     const response = await fetch(CENTINELA_API_URL + "/registrar_intento", {
@@ -352,7 +352,10 @@ async function sendEventToCentinela(username, authenticated, ip) {
 
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.persisted !== true || typeof payload.event_id !== "string") {
-      const error = new Error("Centinela no confirmó el registro del evento.");
+      const detail = typeof payload.error === "string"
+        ? payload.error.slice(0, 500)
+        : "respuesta sin persisted=true y event_id";
+      const error = new Error(`Centinela respondió HTTP ${response.status}: ${detail}`);
       error.statusCode = 503;
       throw error;
     }
