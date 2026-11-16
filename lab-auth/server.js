@@ -137,6 +137,93 @@ function consumeRateLimit(ip) {
   return { allowed: true, remaining: MAX_ATTEMPTS_PER_IP - current.count };
 }
 
+const CAPTCHA_GLYPHS = {
+  "0": ["01110","10001","10011","10101","11001","10001","01110"],
+  "1": ["00100","01100","00100","00100","00100","00100","01110"],
+  "2": ["01110","10001","00001","00010","00100","01000","11111"],
+  "3": ["11110","00001","00001","01110","00001","00001","11110"],
+  "4": ["00010","00110","01010","10010","11111","00010","00010"],
+  "5": ["11111","10000","10000","11110","00001","00001","11110"],
+  "6": ["01110","10000","10000","11110","10001","10001","01110"],
+  "7": ["11111","00001","00010","00100","01000","01000","01000"],
+  "8": ["01110","10001","10001","01110","10001","10001","01110"],
+  "9": ["01110","10001","10001","01111","00001","00001","01110"],
+  "×": ["00000","10001","01010","00100","01010","10001","00000"],
+  "+": ["00000","00100","00100","11111","00100","00100","00000"],
+  "-": ["00000","00000","00000","11111","00000","00000","00000"],
+  "=": ["00000","11111","00000","11111","00000","00000","00000"],
+  "?": ["01110","10001","00001","00010","00100","00000","00100"],
+  "(": ["00010","00100","01000","01000","01000","00100","00010"],
+  ")": ["01000","00100","00010","00010","00010","00100","01000"],
+  " ": ["00000","00000","00000","00000","00000","00000","00000"]
+};
+
+function createCaptchaSvg(expression) {
+  const width = 420;
+  const height = 96;
+  const cell = 4;
+  const advance = 26;
+  const spaceAdvance = 10;
+  const totalWidth = [...expression].reduce((sum, char) => sum + (char === " " ? spaceAdvance : advance), 0);
+  let cursorX = (width - totalWidth) / 2;
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d7e1e5"/><stop offset="1" stop-color="#aebfc8"/></linearGradient></defs>',
+    '<rect width="100%" height="100%" rx="10" fill="url(#bg)"/>'
+  ];
+
+  // Textura de fondo y trazos curvos para dificultar la lectura automática.
+  for (let i = 0; i < 34; i++) {
+    const x = randomInt(2, width - 2);
+    const y = randomInt(2, height - 2);
+    const r = randomInt(1, 3);
+    parts.push(`<circle cx="${x}" cy="${y}" r="${r}" fill="#526b79" opacity="0.26"/>`);
+  }
+  for (let i = 0; i < 7; i++) {
+    const y1 = randomInt(4, height - 4);
+    const y2 = randomInt(4, height - 4);
+    const bend = randomInt(55, width - 55);
+    parts.push(`<path d="M-5 ${y1} Q${bend} ${randomInt(-20, height + 20)} ${width + 5} ${y2}" fill="none" stroke="#6b8490" stroke-width="${randomInt(1, 3)}" opacity="0.38"/>`);
+  }
+
+  for (const char of expression) {
+    if (char === " ") {
+      cursorX += spaceAdvance;
+      continue;
+    }
+    const glyph = CAPTCHA_GLYPHS[char];
+    if (!glyph) throw new Error("Carácter no admitido en el CAPTCHA.");
+    let pathData = "";
+    glyph.forEach((line, row) => {
+      [...line].forEach((pixel, col) => {
+        if (pixel === "1") {
+          const jitterX = randomInt(0, 7) / 10;
+          const jitterY = randomInt(0, 7) / 10;
+          pathData += `M${(col * cell + jitterX).toFixed(1)} ${(row * cell + jitterY).toFixed(1)}h3.2v3.2h-3.2z`;
+        }
+      });
+    });
+    const y = randomInt(29, 42);
+    const rotation = randomInt(-12, 13);
+    const scaleX = (randomInt(92, 112) / 100).toFixed(2);
+    const scaleY = (randomInt(94, 113) / 100).toFixed(2);
+    const fill = ["#172d3d", "#203b4b", "#294555"][randomInt(0, 3)];
+    parts.push(`<path d="${pathData}" fill="${fill}" transform="translate(${cursorX} ${y}) rotate(${rotation} 10 14) scale(${scaleX} ${scaleY})"/>`);
+    cursorX += advance;
+  }
+
+  // Rayas finas sobre algunos trazos: visibles, pero sin tapar por completo los símbolos.
+  for (let i = 0; i < 4; i++) {
+    const x1 = randomInt(20, width - 20);
+    const x2 = randomInt(20, width - 20);
+    const y1 = randomInt(20, height - 20);
+    const y2 = randomInt(20, height - 20);
+    parts.push(`<path d="M${x1} ${y1} Q${randomInt(70, 350)} ${randomInt(0, 96)} ${x2} ${y2}" fill="none" stroke="#617d88" stroke-width="1.2" opacity="0.34"/>`);
+  }
+  parts.push("</svg>");
+  return parts.join("");
+}
+
 function createCaptcha(ip) {
   const now = Date.now();
   for (const [id, item] of pendingCaptchas) {
@@ -147,24 +234,23 @@ function createCaptcha(ip) {
     if (firstKey) pendingCaptchas.delete(firstKey);
   }
 
-  // Reto de dos pasos: multiplicación seguida de suma o resta.
-  // Los operandos mantienen un cálculo mental breve para participantes.
   const left = randomInt(4, 10);
   const right = randomInt(4, 10);
   const adjustment = randomInt(2, 10);
   const useAddition = randomInt(0, 2) === 0;
-  const prompt = useAddition
-    ? `Resuelve esta comprobación: (${left} × ${right}) + ${adjustment} = ?`
-    : `Resuelve esta comprobación: (${left} × ${right}) - ${adjustment} = ?`;
+  const expression = useAddition
+    ? `(${left} × ${right}) + ${adjustment} = ?`
+    : `(${left} × ${right}) - ${adjustment} = ?`;
   const answer = String(left * right + (useAddition ? adjustment : -adjustment));
   const challengeId = randomBytes(24).toString("hex");
 
   pendingCaptchas.set(challengeId, {
     answer,
+    image: createCaptchaSvg(expression),
     ip,
     expiresAt: now + CAPTCHA_TTL_MS
   });
-  return { challenge_id: challengeId, prompt };
+  return { challenge_id: challengeId, image_url: `/challenge/${challengeId}.svg` };
 }
 
 function verifyCaptcha(challengeId, answer, ip) {
@@ -317,6 +403,27 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 503, { error: "No se pudo verificar el origen de la conexión." });
     }
     return sendJson(res, 200, createCaptcha(ip));
+  }
+
+  const captchaImageMatch = pathname.match(/^\\/challenge\\/([a-f0-9]{48})\\.svg$/);
+  if (req.method === "GET" && captchaImageMatch) {
+    let ip;
+    try {
+      ip = clientIpFromRender(req);
+    } catch {
+      return sendJson(res, 503, { error: "No se pudo verificar el origen de la conexión." });
+    }
+    const challenge = pendingCaptchas.get(captchaImageMatch[1]);
+    if (!challenge || challenge.expiresAt <= Date.now() || challenge.ip !== ip) {
+      return sendJson(res, 404, { error: "La comprobación ya no está disponible." });
+    }
+    const image = Buffer.from(challenge.image, "utf8");
+    res.writeHead(200, {
+      "Content-Type": "image/svg+xml; charset=utf-8",
+      "Content-Length": image.length,
+      "Cache-Control": "no-store, max-age=0"
+    });
+    return res.end(image);
   }
 
   if (req.method === "GET" && pathname === "/") {
