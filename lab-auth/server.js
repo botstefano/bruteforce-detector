@@ -15,7 +15,13 @@ const CENTINELA_API_URL = (() => {
   return value;
 })();
 const CENTINELA_INGEST_TOKEN = (process.env.CENTINELA_INGEST_TOKEN || "").trim();
-const CAMPAIGN_ID = "laboratorio-web-auth-v2";
+const CAMPAIGN_ID = (() => {
+  const value = (process.env.LAB_CAMPAIGN_ID || "laboratorio-web-auth-v2").trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{2,119}$/.test(value)) {
+    throw new Error("LAB_CAMPAIGN_ID debe tener entre 3 y 120 caracteres alfanuméricos o . _ : -.");
+  }
+  return value;
+})();
 const EXPECTED_USERS = ["ronan", "andy", "stefano"];
 const MAX_BODY_BYTES = 4096;
 const RATE_WINDOW_MS = 60_000;
