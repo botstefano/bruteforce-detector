@@ -147,15 +147,16 @@ function createCaptcha(ip) {
     if (firstKey) pendingCaptchas.delete(firstKey);
   }
 
-  const left = randomInt(2, 10);
-  const right = randomInt(2, 10);
+  // Reto de dos pasos: multiplicación seguida de suma o resta.
+  // Los operandos mantienen un cálculo mental breve para participantes.
+  const left = randomInt(4, 10);
+  const right = randomInt(4, 10);
+  const adjustment = randomInt(2, 10);
   const useAddition = randomInt(0, 2) === 0;
   const prompt = useAddition
-    ? `Resuelve esta comprobación: ${left} + ${right} = ?`
-    : `Resuelve esta comprobación: ${Math.max(left, right)} - ${Math.min(left, right)} = ?`;
-  const answer = useAddition
-    ? String(left + right)
-    : String(Math.abs(left - right));
+    ? `Resuelve esta comprobación: (${left} × ${right}) + ${adjustment} = ?`
+    : `Resuelve esta comprobación: (${left} × ${right}) - ${adjustment} = ?`;
+  const answer = String(left * right + (useAddition ? adjustment : -adjustment));
   const challengeId = randomBytes(24).toString("hex");
 
   pendingCaptchas.set(challengeId, {
