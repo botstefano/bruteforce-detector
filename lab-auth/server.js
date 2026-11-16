@@ -580,9 +580,14 @@ const server = http.createServer(async (req, res) => {
         message: "Usuario o contraseña incorrectos. Centinela recibió el evento."
       });
     } catch (error) {
-      console.error("No se pudo entregar el evento a Centinela:", error.message);
+      const detail = error instanceof Error ? error.message : "Error de integración desconocido.";
+      console.error("No se pudo entregar el evento a Centinela:", detail);
+      const userMessage =
+        detail.startsWith("El detector experimental") || detail.startsWith("Centinela responde")
+          ? detail
+          : "Centinela no confirmó el almacenamiento del evento. No se ha registrado el intento; comprueba la captura antes de repetirlo.";
       return sendJson(res, 503, {
-        error: "El intento no pudo confirmarse en Centinela. No vuelvas a enviarlo hasta comprobar la captura.",
+        error: userMessage,
         event_recorded: false
       });
     }
