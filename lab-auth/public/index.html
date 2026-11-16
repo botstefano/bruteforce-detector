@@ -47,7 +47,7 @@
 
         <form id="login-form" novalidate>
           <label for="username">Usuario</label>
-          <input id="username" name="username" type="text" maxlength="64" autocomplete="username" placeholder="Ej. ronan" required>
+          <input id="username" name="username" type="text" maxlength="64" autocomplete="username" placeholder="Introduce tu usuario" required>
           <label for="password">Contraseña</label>
           <input id="password" name="password" type="password" maxlength="256" autocomplete="current-password" placeholder="Introduce tu contraseña" required>
 
@@ -58,6 +58,9 @@
                 <strong>Comprobación de seguridad</strong>
                 <small>Confirma que eres una persona</small>
               </div>
+            </div>
+            <div class="captcha-image-wrap">
+              <img id="captcha-image" class="captcha-image" alt="Reto visual de comprobación" width="420" height="96" hidden>
             </div>
             <p id="captcha-question" class="captcha-question">Cargando comprobación…</p>
             <label for="captcha-answer">Tu respuesta</label>
