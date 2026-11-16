@@ -2,6 +2,7 @@ const form = document.querySelector("#login-form");
 const usernameInput = document.querySelector("#username");
 const passwordInput = document.querySelector("#password");
 const captchaQuestion = document.querySelector("#captcha-question");
+const captchaImage = document.querySelector("#captcha-image");
 const captchaAnswer = document.querySelector("#captcha-answer");
 const refreshCaptchaButton = document.querySelector("#refresh-captcha");
 const honeypotInput = document.querySelector("#website");
@@ -33,7 +34,9 @@ function showResult(kind, message, eventId) {
 async function loadCaptcha() {
   challengeLoading = true;
   currentChallengeId = null;
-  captchaQuestion.textContent = "Cargando comprobación…";
+  captchaImage.hidden = true;
+  captchaImage.removeAttribute("src");
+  captchaQuestion.textContent = "Cargando comprobación visual…";
   captchaAnswer.value = "";
   refreshCaptchaButton.disabled = true;
   submitButton.disabled = true;
@@ -46,12 +49,21 @@ async function loadCaptcha() {
       credentials: "same-origin"
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok || typeof payload.challenge_id !== "string" || typeof payload.prompt !== "string") {
+    if (!response.ok || typeof payload.challenge_id !== "string" || typeof payload.image_url !== "string") {
       throw new Error(payload.error || "No se pudo generar la comprobación.");
     }
+
+    await new Promise((resolve, reject) => {
+      captchaImage.onload = resolve;
+      captchaImage.onerror = () => reject(new Error("No se pudo cargar la imagen de comprobación."));
+      captchaImage.src = payload.image_url;
+    });
     currentChallengeId = payload.challenge_id;
-    captchaQuestion.textContent = payload.prompt;
+    captchaImage.hidden = false;
+    captchaQuestion.textContent = "Lee con atención la operación de la imagen y calcula el resultado.";
   } catch (error) {
+    currentChallengeId = null;
+    captchaImage.hidden = true;
     captchaQuestion.textContent = "No se pudo cargar la comprobación. Vuelve a intentarlo.";
     showResult("error", error.message || "No se pudo generar el CAPTCHA.");
   } finally {
