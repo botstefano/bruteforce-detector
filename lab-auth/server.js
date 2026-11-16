@@ -329,7 +329,70 @@ async function readJsonBody(req) {
   }
 }
 
+async function waitForCentinelaReady() {
+  let lastProblem = "sin respuesta del servicio";
+
+  // Los servicios gratuitos de Render pueden necesitar cerca de un minuto
+  // para despertar después de un periodo sin tráfico.
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8_000);
+
+    try {
+      const response = await fetch(CENTINELA_API_URL + "/health", {
+        method: "GET",
+        headers: { "Accept": "application/json" },
+        cache: "no-store",
+        signal: controller.signal
+      });
+      const health = await response.json().catch(() => ({}));
+
+      if (response.ok) {
+        const ready =
+          health.capture_ready === true &&
+          health.backend_integration_ready === true &&
+          health.active_experiment === true &&
+          health.capture_paused !== true;
+
+        if (ready) return health;
+
+        const reason = typeof health.capture_pause_reason === "string" && health.capture_pause_reason
+          ? health.capture_pause_reason
+          : "la captura empírica o la integración no está lista";
+        throw new Error("Centinela responde, pero no está listo para capturar eventos: " + reason);
+      }
+
+      lastProblem = "HTTP " + response.status;
+      if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+        throw new Error("El endpoint de salud de Centinela respondió HTTP " + response.status + ".");
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("Centinela responde")) throw error;
+      if (error instanceof Error && error.message.startsWith("El endpoint de salud")) throw error;
+      lastProblem = error instanceof Error
+        ? error.name === "AbortError" ? "tiempo de espera agotado" : error.message.slice(0, 180)
+        : "error de conexión";
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (attempt < 8) {
+      await new Promise(resolve => setTimeout(resolve, 5_000));
+    }
+  }
+
+  const error = new Error(
+    "El detector experimental no terminó de despertar después de varios intentos (" +
+    lastProblem +
+    "). El intento de autenticación no se envió a Centinela; espera un momento y vuelve a intentarlo."
+  );
+  error.statusCode = 503;
+  throw error;
+}
+
 async function sendEventToCentinela(username, authenticated, ip) {
+  await waitForCentinelaReady();
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90_000);
 
@@ -364,7 +427,6 @@ async function sendEventToCentinela(username, authenticated, ip) {
     clearTimeout(timeout);
   }
 }
-
 async function serveStatic(res, filename, contentType) {
   try {
     const content = await fs.readFile(path.join(publicDir, filename));
