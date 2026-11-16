@@ -1,57 +1,63 @@
 # Centinela Auth Lab
 
-Servicio web independiente para realizar inicios de sesión del laboratorio y enviar los resultados a Centinela v2. Este servicio no tiene base de datos propia, panel de etiquetado ni motor de detección.
+Servicio web independiente para realizar inicios de sesión de laboratorio y enviar los resultados a Centinela v2. No mantiene una base de datos propia, panel de etiquetado ni motor de detección.
 
-## Flujo de autenticación
+## Cuentas de participantes
 
-1. El participante se identifica con una cuenta seudónima: `participante-01`, `participante-02` o `participante-03`.
-2. El laboratorio valida su contraseña localmente.
-3. El participante configura y presenta un código TOTP de seis dígitos generado por su aplicación autenticadora.
-4. Solo después del resultado completo, el laboratorio envía a Centinela el identificador, el resultado, la IP verificada y la campaña `laboratorio-web-auth-v2`.
-5. Centinela almacena el evento con su etiqueta inicial `unknown`; la auditoría y etiquetado se realizan allí.
+- `ronan`
+- `andy`
+- `stefano`
 
-Las contraseñas, los códigos TOTP y las semillas TOTP nunca se transmiten a Centinela ni se escriben en logs. Las semillas TOTP se mantienen como variables secretas en Render.
+Las contraseñas son únicas y se mantienen como secretos de entorno en Render. No se guardan en el repositorio ni se envían a Centinela.
 
-## Variables de entorno
+## Flujo
 
-Configurar en Render:
+1. El participante introduce su usuario y contraseña.
+2. Resuelve una comprobación CAPTCHA aritmética, generada y validada en el servidor, con vencimiento y uso único.
+3. El laboratorio valida la contraseña de forma local.
+4. El laboratorio transmite a Centinela solamente el usuario, el resultado final de autenticación, la IP verificada y `campaign_id=laboratorio-web-auth-v2`.
+5. Centinela almacena el evento con etiqueta inicial `unknown`; la auditoría y el etiquetado se realizan allí.
+
+Los CAPTCHA incorrectos o caducados y los envíos que activan el campo trampa se rechazan antes de la autenticación y no se contabilizan como fallos de contraseña en el conjunto empírico. Así se evita contaminar los datos de autenticación con errores de la propia comprobación anti-bot.
+
+## Protecciones para esta fase experimental
+
+- CAPTCHA aritmético simple, distinto por intento, generado en el servidor, asociado a la IP, de un solo uso y con cinco minutos de caducidad.
+- Campo honeypot oculto para detectar formularios automatizados básicos.
+- Límite de 60 solicitudes de login por IP por minuto.
+- **No hay bloqueo por cuenta ni bloqueo por número de contraseñas incorrectas.** Los fallos de contraseña superado el CAPTCHA se envían a Centinela para estudiar la respuesta del detector.
+- Cabeceras de seguridad, validación de mismo origen, límite del tamaño del cuerpo, HTTPS en producción y verificación de la IP de origen de Render.
+- Las contraseñas se comparan localmente con SHA-256 y comparación de tiempo constante. No se almacenan ni registran.
+
+El CAPTCHA aritmético es una defensa ligera para un testbed experimental, no equivale a un servicio CAPTCHA avanzado ni convierte el portal en un sistema de producción. El límite por IP es local a la única instancia y se reinicia al reiniciar o desplegar Render.
+
+## Variables de entorno de Render
 
 - `NODE_ENV=production`
 - `CENTINELA_API_URL=https://bruteforce-detector-2uv4.onrender.com`
 - `CENTINELA_INGEST_TOKEN`: el mismo secreto de ingesta configurado en el servicio detector.
-- `LAB_CREDENTIALS_V2_JSON`: exactamente las tres cuentas seudónimas y sus contraseñas únicas de al menos 16 caracteres.
-- `LAB_TOTP_SECRETS_JSON`: exactamente las mismas tres cuentas con semillas TOTP Base32 privadas de 32 caracteres.
+- `LAB_CREDENTIALS_V2_JSON`: objeto JSON con exactamente `ronan`, `andy` y `stefano`, cada uno con contraseña distinta de 16 a 256 caracteres.
 
-No guardar estas variables en el repositorio ni compartir semillas TOTP entre participantes. Cada persona debe añadir su propia clave a Google Authenticator, Microsoft Authenticator, Aegis u otra aplicación compatible con TOTP. El primer paso de contraseña muestra la clave de configuración de esa cuenta; después, cada login exige el código actual de seis dígitos.
+No se necesita una variable de semillas TOTP para esta versión.
 
-## Protección de intentos
+## Despliegue
 
-- Máximo 5 fallos por cuenta en una ventana de 15 minutos.
-- Al alcanzar el umbral, se aplica un bloqueo temporal de 15 minutos.
-- Se conserva el límite adicional de 60 solicitudes por IP y minuto.
-- Los intentos hechos durante un bloqueo se siguen enviando a Centinela como fallidos, para no perder observaciones del experimento.
-- Los eventos de bloqueo generan una alerta de seguridad en los logs del servidor, sin incluir contraseña, código MFA, semilla TOTP ni IP en claro.
-- Las contraseñas se comparan con SHA-256 y comparación de tiempo constante; el código TOTP usa HMAC-SHA1, seis dígitos y una tolerancia de una ventana de 30 segundos.
+Servicio Render `centinela-auth-lab`, rama `feature/lab-auth-render-service`, contexto Docker `./lab-auth` y Dockerfile `./lab-auth/Dockerfile`. Health check: `/health`.
 
-El bloqueo por cuenta es en memoria y se reinicia si Render reinicia o despliega la instancia. El límite por IP también es local a la instancia. Por ello, estas medidas son protecciones del testbed de una sola instancia, no un control de producción distribuido.
+## Verificación
 
-## Despliegue en Render
+1. Abrir `/health` y comprobar `status=ok`, `credentials_configured=true`, `captcha_configured=true`, `centinela_configured=true`, `campaign_id=laboratorio-web-auth-v2` y `account_lockout_enabled=false`.
+2. Probar un login válido y confirmar su identificador de evento.
+3. Probar una contraseña incorrecta con CAPTCHA correcto y confirmar un evento fallido en Captura empírica.
+4. Probar un CAPTCHA incorrecto y confirmar que no se crea un evento de autenticación.
+5. En Centinela verificar `origin=integracion_autenticacion`, `campaign_id=laboratorio-web-auth-v2`, `is_simulated=false` y la partición temporal del experimento activo.
+6. Etiquetar únicamente con evidencia independiente de sesiones/campañas autorizadas, nunca a partir de alertas del detector.
 
-Servicio: `centinela-auth-lab`, rama `feature/lab-auth-render-service`, contexto Docker `./lab-auth`, Dockerfile `./lab-auth/Dockerfile`. El servicio escucha en `0.0.0.0` y usa el puerto de Render. Configurar el health check como `/health`.
-
-## Verificación tras desplegar
-
-1. Abrir `/health` y comprobar `status=ok`, `credentials_configured=true`, `mfa_configured=true`, `centinela_configured=true` y `campaign_id=laboratorio-web-auth-v2`.
-2. Probar una autenticación correcta, incluyendo TOTP, y comprobar el ID del evento en la respuesta.
-3. Realizar un fallo controlado y comprobar que el evento fallido también llega a Captura empírica.
-4. En Centinela verificar `origin=integracion_autenticacion`, `campaign_id=laboratorio-web-auth-v2`, `is_simulated=false` y la partición temporal del protocolo activo.
-5. Verificar el umbral de bloqueo solo en un ensayo controlado y después dejar que expire; evitar bloquear a los participantes durante la captura ordinaria.
-
-Si Centinela no confirma la persistencia, el portal muestra un error y no afirma que el evento haya quedado almacenado. Comprueba primero Captura empírica antes de repetir un intento.
+Si Centinela no confirma la persistencia, el laboratorio muestra un error y no afirma que el evento se haya guardado. Comprueba Captura empírica antes de repetir el intento.
 
 ## Desarrollo local
 
-Requiere Node.js 22 o superior. Define las mismas variables en un archivo local excluido de Git. Ejecuta:
+Requiere Node.js 22 o superior. Define las variables requeridas en un archivo local excluido de Git y ejecuta:
 
 ```bash
 cd lab-auth
