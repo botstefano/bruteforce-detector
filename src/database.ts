@@ -144,10 +144,10 @@ class Database {
   }
 
   public metricasResumen(): MetricasResumen | null {
-    let grupo = this.intentos.filter((i) => i.es_simulado === 1);
-    if (grupo.length === 0) {
-      grupo = this.intentos;
-    }
+    // El panel histórico resume exclusivamente eventos del simulador.
+    // La evaluación empírica usa /api/experimentos/metricas_capturadas,
+    // que calcula métricas sobre eventos persistidos y etiquetados en Supabase.
+    const grupo = this.intentos.filter((i) => i.es_simulado === 1);
     if (grupo.length === 0) return null;
 
     const calcular = (

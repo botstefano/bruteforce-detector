@@ -41,6 +41,8 @@ import {
 import { RealCaptchaCanvas } from './RealCaptchaCanvas';
 import { CicidsDatasetView } from './CicidsDatasetView';
 import { ReporteAcademicoView } from './ReporteAcademicoView';
+import { EmpiricalStudyPanel } from './EmpiricalStudyPanel';
+import { CentinelaWorkspace } from './CentinelaWorkspace';
 import { CicidsEvaluationSummary } from './cicids_parser';
 
 interface Intento {
@@ -114,7 +116,7 @@ interface EstadoModelo {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'simulator' | 'dataset_cicids' | 'report' | 'demos' | 'training'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'home' | 'monitor' | 'analytics' | 'cycle_ml' | 'docs' | 'dashboard' | 'simulator' | 'dataset_cicids' | 'empirical' | 'report' | 'demos' | 'training'>('home');
   const [eventos, setEventos] = useState<Intento[]>([]);
   const [metricas, setMetricas] = useState<MetricasResumen | null>(null);
   const [ipsBloqueadas, setIpsBloqueadas] = useState<Record<string, number>>({});
@@ -140,11 +142,9 @@ export default function App() {
   const [botIntervalo, setBotIntervalo] = useState(0.3);
 
   // Gate de autenticación con CAPTCHA para entrar a Centinela
-  const [panelAutenticado, setPanelAutenticado] = useState<boolean>(() => {
-    return localStorage.getItem('centinela_sesion_activa') === 'true';
-  });
+  const [panelAutenticado, setPanelAutenticado] = useState(false);
   const [gateUser, setGateUser] = useState('admin');
-  const [gatePass, setGatePass] = useState('S3guro#2026');
+  const [gatePass, setGatePass] = useState('');
   const [gateCaptchaId, setGateCaptchaId] = useState('');
   const [gateCaptchaInput, setGateCaptchaInput] = useState('');
   const [gateCaptchaReset, setGateCaptchaReset] = useState(0);
@@ -171,11 +171,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Fetch initial data
-    fetchData();
-
-    // Socket.io connection
-    const socket = io();
+    // Socket.IO remains disconnected until the server validates the HttpOnly session.
+    const socket = io({ autoConnect: false, withCredentials: true });
     socketRef.current = socket;
 
     socket.on('nuevo_evento', (evento: Intento) => {
@@ -204,10 +201,35 @@ export default function App() {
       showToast('Sistema reiniciado');
     });
 
+    socket.on('connect_error', () => {
+      fetch('/api/session', { credentials: 'same-origin' })
+        .then((response) => { if (!response.ok) setPanelAutenticado(false); })
+        .catch(() => undefined);
+    });
+
+    fetch('/api/session', { credentials: 'same-origin' })
+      .then(async (response) => {
+        if (!response.ok) {
+          setPanelAutenticado(false);
+          return;
+        }
+        setPanelAutenticado(true);
+        await fetchData();
+      })
+      .catch(() => setPanelAutenticado(false));
+
     return () => {
       socket.disconnect();
+      socketRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const socket = socketRef.current;
+    if (!socket) return;
+    if (panelAutenticado) socket.connect();
+    else socket.disconnect();
+  }, [panelAutenticado]);
 
   const fetchData = async () => {
     try {
@@ -473,8 +495,8 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        localStorage.setItem('centinela_sesion_activa', 'true');
         setPanelAutenticado(true);
+        await fetchData();
         showToast('Acceso autorizado a Centinela');
       } else {
         setGateError(data.error || 'Fallo de autenticación');
@@ -610,29 +632,14 @@ export default function App() {
                     type={mostrarPassword ? 'text' : 'password'}
                     value={gatePass}
                     onChange={(e) => setGatePass(e.target.value)}
-                    placeholder="S3guro#2026"
+                    placeholder="Contraseña configurada en el servidor"
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 transition-colors font-mono"
                   />
                 </div>
               </div>
 
-              {/* Botón rápido para autocompletar credenciales por defecto */}
-              <div className="flex items-center justify-between text-[11px] bg-slate-950/60 p-2.5 rounded-xl border border-slate-800/80">
-                <span className="text-slate-400">Credenciales por defecto:</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGateUser('admin');
-                    setGatePass('S3guro#2026');
-                    showToast('Credenciales admin / S3guro#2026 aplicadas');
-                  }}
-                  className="text-cyan-400 hover:text-cyan-300 font-bold flex items-center space-x-1 cursor-pointer bg-cyan-950/60 hover:bg-cyan-900/60 px-2.5 py-1 rounded-lg border border-cyan-800/60 transition-colors"
-                >
-                  <Sparkles className="w-3 h-3 text-yellow-300" />
-                  <span>Autocompletar (admin / S3guro#2026)</span>
-                </button>
-              </div>
+              <p className="text-[11px] text-slate-500">Usa la contraseña definida en la variable DASHBOARD_PASSWORD del servidor.</p>
 
               <div className="bg-slate-950/80 p-4 rounded-2xl border border-slate-800/90 space-y-3">
                 <div className="flex items-center justify-between">
@@ -679,20 +686,9 @@ export default function App() {
               </button>
             </form>
 
-            <div className="mt-4 pt-4 border-t border-slate-800/80 flex flex-col items-center space-y-2">
-              <button
-                type="button"
-                onClick={() => {
-                  localStorage.setItem('centinela_sesion_activa', 'true');
-                  setPanelAutenticado(true);
-                  showToast('Acceso directo al panel activado');
-                }}
-                className="text-xs text-slate-400 hover:text-cyan-300 underline transition-colors cursor-pointer"
-              >
-                ¿Deseas omitir el inicio de sesión y entrar directamente al panel? Haz clic aquí
-              </button>
+            <div className="mt-4 pt-4 border-t border-slate-800/80">
               <p className="text-[10px] text-slate-500 text-center">
-                El servidor consume y destruye el token de CAPTCHA al validarlo para prevenir ataques por fuerza bruta.
+                El acceso al panel se valida en el servidor mediante una cookie de sesión HttpOnly.
               </p>
             </div>
           </div>
@@ -709,101 +705,42 @@ export default function App() {
                 <h1 className="text-xl font-black tracking-wider bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
                   CENTINELA
                 </h1>
-                <p className="text-xs text-slate-400 font-medium">Adaptive Brute Force Detector & WAF / ML Mitigation</p>
+                <p className="text-xs text-slate-400 font-medium">Plataforma de detección y monitoreo de autenticación</p>
               </div>
             </div>
 
-            {/* Navigation Tabs */}
-            <nav className="flex items-center bg-slate-950/80 p-1.5 rounded-2xl border border-slate-800 space-x-1">
-              <button
-                onClick={() => setActiveTab('dashboard')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === 'dashboard'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Activity className="w-4 h-4" />
-                <span>Dashboard</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('simulator')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  activeTab === 'simulator'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Play className="w-4 h-4" />
-                <span>Simulador & Bot</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('dataset_cicids')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  activeTab === 'dataset_cicids'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Database className="w-4 h-4 text-emerald-400" />
-                <span>Dataset CICIDS-2017</span>
-                {cicidsData && (
-                  <span className="bg-emerald-500/20 text-emerald-300 text-[10px] px-1.5 py-0.5 rounded-full font-bold">
-                    {cicidsData.totalRegistros}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={() => setActiveTab('report')}
-                className={`flex items-center space-x-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all ${
-                  activeTab === 'report'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <BarChart2 className="w-4 h-4" />
-                <span>Reporte Científico</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('demos')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === 'demos'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Lock className="w-4 h-4" />
-                <span>Logins Demo</span>
-              </button>
-              <button
-                onClick={() => setActiveTab('training')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === 'training'
-                    ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                }`}
-              >
-                <Cpu className="w-4 h-4" />
-                <span>ML & Entrenamiento</span>
-              </button>
-            </nav>
-
-            {/* Status / Quick Reset / Logout */}
-            <div className="flex items-center space-x-3">
-              <div className="hidden lg:flex items-center space-x-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-full text-xs font-semibold">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                <span>WAF & ML Activos</span>
-              </div>
-              <button
-                onClick={reiniciarSistema}
-                title="Reiniciar sistema"
-                className="p-2.5 bg-slate-800 hover:bg-red-600/20 hover:border-red-500/50 text-slate-300 hover:text-red-400 border border-slate-700 rounded-xl transition-all cursor-pointer"
-              >
-                <RotateCcw className="w-4 h-4" />
-              </button>
+            {/* Navegación principal de la plataforma */}
+            <div className="flex flex-col xl:flex-row items-center gap-3">
+              <nav aria-label="Navegación principal" className="flex flex-wrap items-center justify-center gap-1">
+                {([
+                  { id: 'home', label: 'Inicio', icon: Shield },
+                  { id: 'monitor', label: 'Monitor', icon: Radio },
+                  { id: 'analytics', label: 'Analítica', icon: BarChart2 },
+                  { id: 'cycle_ml', label: 'Ciclo de ML', icon: Cpu },
+                  { id: 'docs', label: 'Documentación', icon: FileText },
+                ] as const).map((item) => {
+                  const Icon = item.icon;
+                  const selected = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setActiveTab(item.id)}
+                      aria-current={selected ? 'page' : undefined}
+                      className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-semibold transition-colors ${
+                        selected
+                          ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                          : 'border-transparent text-slate-400 hover:border-slate-700 hover:bg-slate-800 hover:text-white'
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </nav>
               <button
                 onClick={() => {
-                  localStorage.removeItem('centinela_sesion_activa');
                   setPanelAutenticado(false);
                   setGateCaptchaReset((prev) => prev + 1);
                   setGateCaptchaInput('');
@@ -821,6 +758,12 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
+        {activeTab === 'home' && <CentinelaWorkspace section="home" />}
+        {activeTab === 'monitor' && <CentinelaWorkspace section="monitor" />}
+        {activeTab === 'analytics' && <CentinelaWorkspace section="analytics" />}
+        {activeTab === 'cycle_ml' && <CentinelaWorkspace section="cycle" />}
+        {activeTab === 'docs' && <CentinelaWorkspace section="docs" />}
+
         {activeTab === 'dashboard' && (
           <div className="space-y-6 animate-fadeIn">
             {/* Top Metric Cards */}
@@ -1068,6 +1011,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {activeTab === 'empirical' && <EmpiricalStudyPanel />}
 
         {activeTab === 'simulator' && (
           <div className="space-y-6 animate-fadeIn">
