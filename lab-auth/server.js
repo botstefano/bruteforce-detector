@@ -334,9 +334,9 @@ async function waitForCentinelaReady() {
 
   // Los servicios gratuitos de Render pueden necesitar cerca de un minuto
   // para despertar después de un periodo sin tráfico.
-  for (let attempt = 1; attempt <= 8; attempt += 1) {
+  for (let attempt = 1; attempt <= 24; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8_000);
+    const timeout = setTimeout(() => controller.abort(), 5_000);
 
     try {
       const response = await fetch(CENTINELA_API_URL + "/health", {
@@ -345,6 +345,7 @@ async function waitForCentinelaReady() {
         cache: "no-store",
         signal: controller.signal
       });
+      console.info(`Centinela warm-up ${attempt}/24: HTTP ${response.status}`);
       const health = await response.json().catch(() => ({}));
 
       if (response.ok) {
@@ -382,7 +383,7 @@ async function waitForCentinelaReady() {
   }
 
   const error = new Error(
-    "El detector experimental no terminó de despertar después de varios intentos (" +
+    "El detector experimental no terminó de despertar después de 24 intentos (" +
     lastProblem +
     "). El intento de autenticación no se envió a Centinela; espera un momento y vuelve a intentarlo."
   );
@@ -390,8 +391,39 @@ async function waitForCentinelaReady() {
   throw error;
 }
 
+
+let centinelaWarmupPromise = null;
+let centinelaReadyUntil = 0;
+const CENTINELA_READY_CACHE_MS = 4 * 60_000;
+
+function ensureCentinelaReady() {
+  if (Date.now() < centinelaReadyUntil) return Promise.resolve({ cached: true });
+  if (centinelaWarmupPromise) return centinelaWarmupPromise;
+
+  const pending = waitForCentinelaReady()
+    .then((health) => {
+      centinelaReadyUntil = Date.now() + CENTINELA_READY_CACHE_MS;
+      console.info("Detector experimental listo para recibir eventos de autenticación.");
+      return health;
+    })
+    .finally(() => {
+      if (centinelaWarmupPromise === pending) centinelaWarmupPromise = null;
+    });
+
+  centinelaWarmupPromise = pending;
+  return pending;
+}
+
+function primeCentinelaWarmup() {
+  if (Date.now() < centinelaReadyUntil || centinelaWarmupPromise) return;
+  ensureCentinelaReady().catch((error) => {
+    const detail = error instanceof Error ? error.message : "error de conexión";
+    console.warn("Precalentamiento de Centinela no completado:", detail);
+  });
+}
+
 async function sendEventToCentinela(username, authenticated, ip) {
-  await waitForCentinelaReady();
+  await ensureCentinelaReady();
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90_000);
@@ -492,6 +524,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && pathname === "/") {
+    primeCentinelaWarmup();
     return serveStatic(res, "index.html", "text/html; charset=utf-8");
   }
   if (req.method === "GET" && pathname === "/app.js") {
