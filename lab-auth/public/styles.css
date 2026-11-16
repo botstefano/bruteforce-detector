@@ -148,3 +148,33 @@ button:disabled { opacity: .65; cursor: wait; transform: none; }
 .captcha-refresh:hover { background: transparent; color: #69e0d0; transform: none; text-decoration: underline; }
 .captcha-refresh:disabled { opacity: .55; }
 .honeypot { position: absolute !important; left: -10000px !important; width: 1px !important; height: 1px !important; overflow: hidden !important; }
+
+
+/* CAPTCHA visual: ruido moderado y caracteres con inclinación variable. */
+.captcha-image-wrap {
+  width: min(100%, 420px);
+  margin: 13px auto 6px;
+  padding: 5px;
+  overflow: hidden;
+  border: 1px solid rgba(150, 179, 193, .3);
+  border-radius: 10px;
+  background: #aebfc8;
+}
+.captcha-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.captcha-image[hidden] { display: none; }
+.captcha-question {
+  margin: 7px 0 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #a9bdca;
+  font-size: 10px;
+  font-weight: 550;
+  line-height: 1.5;
+  letter-spacing: .01em;
+}
