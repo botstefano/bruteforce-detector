@@ -1,90 +1,59 @@
 # Centinela Auth Lab
 
-Servicio web independiente para realizar inicios de sesión de laboratorio y enviar el resultado de cada intento al detector Centinela v2. Este servicio no tiene base de datos propia, panel de etiquetado ni motor de detección.
+Servicio web independiente para realizar inicios de sesión del laboratorio y enviar los resultados a Centinela v2. Este servicio no tiene base de datos propia, panel de etiquetado ni motor de detección.
 
-## Flujo
+## Flujo de autenticación
 
-1. El participante envía usuario y contraseña por HTTPS a este servicio.
-2. El laboratorio valida las credenciales en el servidor.
-3. El laboratorio envía a Centinela solamente `usuario`, `exitoso`, la IP verificada y un `campaign_id`.
-4. Centinela procesa el evento y lo almacena en la tabla empírica existente de Supabase.
-5. El evento aparece en **Captura empírica** de Centinela con etiqueta inicial `unknown`.
-6. La revisión y el etiquetado se realizan únicamente desde Centinela.
+1. El participante se identifica con una cuenta seudónima: `participante-01`, `participante-02` o `participante-03`.
+2. El laboratorio valida su contraseña localmente.
+3. El participante configura y presenta un código TOTP de seis dígitos generado por su aplicación autenticadora.
+4. Solo después del resultado completo, el laboratorio envía a Centinela el identificador, el resultado, la IP verificada y la campaña `laboratorio-web-auth-v2`.
+5. Centinela almacena el evento con su etiqueta inicial `unknown`; la auditoría y etiquetado se realizan allí.
 
-Las contraseñas nunca se incluyen en la petición a Centinela ni se escriben en logs o en Supabase.
+Las contraseñas, los códigos TOTP y las semillas TOTP nunca se transmiten a Centinela ni se escriben en logs. Las semillas TOTP se mantienen como variables secretas en Render.
 
-## Despliegue en Render
+## Variables de entorno
 
-Crear un nuevo **Web Service** usando el repositorio `botstefano/bruteforce-detector`:
-
-- **Branch:** `feature/lab-auth-render-service`
-- **Root Directory:** `lab-auth`
-- **Runtime:** Node
-- **Build Command:** `npm install`
-- **Start Command:** `npm start`
-- **Health Check Path:** `/health`
-- **Region:** la misma región del servicio Centinela, si está disponible.
-
-Render asigna al servicio su propio subdominio `.onrender.com`. El laboratorio escucha en `0.0.0.0` y utiliza el puerto proporcionado por Render.
-
-## Variables de entorno obligatorias
-
-Configurar en el nuevo servicio:
+Configurar en Render:
 
 - `NODE_ENV=production`
 - `CENTINELA_API_URL=https://bruteforce-detector-2uv4.onrender.com`
-- `CENTINELA_INGEST_TOKEN`: copiar el valor privado ya configurado en el servicio experimental de Centinela. Debe ser el mismo secreto en ambos servicios; nunca escribirlo en el repositorio.
-- `LAB_CREDENTIALS_JSON`: objeto JSON con exactamente las cuentas `lab01`, `lab02` y `lab03`.
+- `CENTINELA_INGEST_TOKEN`: el mismo secreto de ingesta configurado en el servicio detector.
+- `LAB_CREDENTIALS_V2_JSON`: exactamente las tres cuentas seudónimas y sus contraseñas únicas de al menos 16 caracteres.
+- `LAB_TOTP_SECRETS_JSON`: exactamente las mismas tres cuentas con semillas TOTP Base32 privadas de 32 caracteres.
 
-Ejemplo de formato, usando valores nuevos y secretos (no reutilizar las contraseñas compartidas anteriormente):
+No guardar estas variables en el repositorio ni compartir semillas TOTP entre participantes. Cada persona debe añadir su propia clave a Google Authenticator, Microsoft Authenticator, Aegis u otra aplicación compatible con TOTP. El primer paso de contraseña muestra la clave de configuración de esa cuenta; después, cada login exige el código actual de seis dígitos.
 
-```json
-{
-  "lab01": "GENERAR_UNA_CLAVE_ALEATORIA_UNICA_DE_16_CARACTERES_O_MAS",
-  "lab02": "GENERAR_OTRA_CLAVE_ALEATORIA_UNICA_DE_16_CARACTERES_O_MAS",
-  "lab03": "GENERAR_OTRA_CLAVE_ALEATORIA_UNICA_DE_16_CARACTERES_O_MAS"
-}
-```
+## Protección de intentos
 
-Cada cuenta debe tener una contraseña única de al menos 16 caracteres. El servicio no inicia si falta una cuenta, si las claves son repetidas o si no cumplen la longitud mínima.
+- Máximo 5 fallos por cuenta en una ventana de 15 minutos.
+- Al alcanzar el umbral, se aplica un bloqueo temporal de 15 minutos.
+- Se conserva el límite adicional de 60 solicitudes por IP y minuto.
+- Los intentos hechos durante un bloqueo se siguen enviando a Centinela como fallidos, para no perder observaciones del experimento.
+- Los eventos de bloqueo generan una alerta de seguridad en los logs del servidor, sin incluir contraseña, código MFA, semilla TOTP ni IP en claro.
+- Las contraseñas se comparan con SHA-256 y comparación de tiempo constante; el código TOTP usa HMAC-SHA1, seis dígitos y una tolerancia de una ventana de 30 segundos.
 
-No es necesario configurar CORS: el navegador se comunica únicamente con el laboratorio y el laboratorio se comunica servidor a servidor con Centinela.
+El bloqueo por cuenta es en memoria y se reinicia si Render reinicia o despliega la instancia. El límite por IP también es local a la instancia. Por ello, estas medidas son protecciones del testbed de una sola instancia, no un control de producción distribuido.
 
-## Verificación
+## Despliegue en Render
 
-1. Abrir `https://<servicio-lab>.onrender.com/health` y confirmar `status: ok`, `credentials_configured: true` y `centinela_configured: true`.
-2. Probar un login correcto de una de las cuentas.
-3. Comprobar que la respuesta indica que el evento fue registrado y devuelve su identificador.
-4. Probar un error de contraseña intencional y controlado.
-5. Abrir el panel experimental de Centinela, entrar en **Captura empírica**, actualizar el estado y localizar ambos eventos.
-6. Confirmar que `origin=integracion_autenticacion`, `campaign_id=laboratorio-web-auth-v1`, `is_simulated=false` y que la partición temporal coincide con la fecha del evento.
-7. Etiquetar los eventos en Centinela solamente después de verificar la actividad y su evidencia.
+Servicio: `centinela-auth-lab`, rama `feature/lab-auth-render-service`, contexto Docker `./lab-auth`, Dockerfile `./lab-auth/Dockerfile`. El servicio escucha en `0.0.0.0` y usa el puerto de Render. Configurar el health check como `/health`.
 
-Si Centinela no confirma el registro, el laboratorio muestra un error y no afirma que el evento se haya guardado. No repitas inmediatamente ese intento: primero revisa Captura empírica para evitar duplicados.
+## Verificación tras desplegar
 
-## Seguridad e IP de origen
+1. Abrir `/health` y comprobar `status=ok`, `credentials_configured=true`, `mfa_configured=true`, `centinela_configured=true` y `campaign_id=laboratorio-web-auth-v2`.
+2. Probar una autenticación correcta, incluyendo TOTP, y comprobar el ID del evento en la respuesta.
+3. Realizar un fallo controlado y comprobar que el evento fallido también llega a Captura empírica.
+4. En Centinela verificar `origin=integracion_autenticacion`, `campaign_id=laboratorio-web-auth-v2`, `is_simulated=false` y la partición temporal del protocolo activo.
+5. Verificar el umbral de bloqueo solo en un ensayo controlado y después dejar que expire; evitar bloquear a los participantes durante la captura ordinaria.
 
-- El token de ingesta existe solo en variables de entorno del servidor.
-- La contraseña se valida en este servicio y nunca se reenvía a Centinela.
-- Se utiliza el encabezado `X-Forwarded-For` que Render documenta para identificar la IP del cliente. El servicio toma la primera dirección válida de la cadena y no acepta una IP suministrada por el navegador en el cuerpo JSON.
-- Se aplica un límite de 60 solicitudes de login por minuto y por IP.
-- Las respuestas incluyen políticas de no-cache, CSP, protección contra framing y otras cabeceras de seguridad.
-- La aplicación no guarda sesiones ni contraseñas. Es un testbed de login, no un portal de producción.
-
-Referencias operativas:
-- Render Web Services: https://render.com/docs/web-services
-- Render Monorepo Support: https://render.com/docs/monorepo-support
-- Render sobre IP real y protección de aplicaciones: https://render.com/articles/how-render-handles-ddos-attacks
+Si Centinela no confirma la persistencia, el portal muestra un error y no afirma que el evento haya quedado almacenado. Comprueba primero Captura empírica antes de repetir un intento.
 
 ## Desarrollo local
 
-Requiere Node.js 22 o superior.
+Requiere Node.js 22 o superior. Define las mismas variables en un archivo local excluido de Git. Ejecuta:
 
 ```bash
 cd lab-auth
-cp .env.example .env
-# Completar .env con credenciales nuevas y el token del servicio experimental.
 node --env-file=.env server.js
 ```
-
-En local, la IP se toma del socket local. En producción, el servicio exige una IP válida en `X-Forwarded-For` antes de enviar el evento a Centinela.
