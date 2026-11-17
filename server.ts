@@ -733,32 +733,36 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
       if (!event || event.experiment_id !== campaign.experimentId || event.campaign_id !== campaignId) {
         throw new Error(`El evento ${eventId} no pertenece a la campaña y experimento esperados.`);
       }
-      if (event.is_simulated || event.dataset_split !== campaign.phase) {
-        throw new Error(`El evento ${eventId} es simulado o quedó fuera de la fase temporal de su campaña.`);
-      }
       const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
-      if (eventMetadata.run_id !== job.runId ||
-          eventMetadata.scenario_id !== job.scenarioId ||
-          eventMetadata.agent_id !== job.agentId ||
-          eventMetadata.job_id !== job.jobId ||
-          eventMetadata.actor_type !== expected.actorType ||
-          eventMetadata.generation_method !== 'automated_http_agent') {
-        throw new Error(`La procedencia de agente, tarea o escenario del evento ${eventId} no coincide con su manifiesto.`);
-      }
-      if (event.source_ip_hash !== job.egressIpHash) {
-        throw new Error(`La IP de salida observada del evento ${eventId} no coincide con el origen registrado del agente.`);
-      }
-      const expectedUserHash = getAnalyticsIdentifiers('', job.targetAccount).userKey;
-      if (event.user_key_hash !== expectedUserHash) {
-        throw new Error(`La cuenta observada del evento ${eventId} no coincide con la cuenta planificada.`);
-      }
-      const attemptIndex = Number(eventMetadata.attempt_index);
-      if (!Number.isInteger(attemptIndex) || attemptIndex < 0 || attemptIndex >= job.attemptsPlanned ||
-          event.request_id !== labAttemptRequestId(job.jobId, attemptIndex)) {
-        throw new Error(`El índice o la clave idempotente del evento ${eventId} no coincide con la tarea.`);
-      }
-      if (expected.plannedOutcomes && event.auth_success !== expected.plannedOutcomes[attemptIndex]) {
-        throw new Error(`El resultado de autenticación del evento ${eventId} no coincide con la secuencia preregistrada.`);
+      if (requireV4Fields) {
+        if (event.is_simulated || event.dataset_split !== campaign.phase) {
+          throw new Error(`El evento ${eventId} es simulado o quedó fuera de la fase temporal de su campaña.`);
+        }
+        if (eventMetadata.run_id !== job.runId ||
+            eventMetadata.scenario_id !== job.scenarioId ||
+            eventMetadata.agent_id !== job.agentId ||
+            eventMetadata.job_id !== job.jobId ||
+            eventMetadata.actor_type !== expected.actorType ||
+            eventMetadata.generation_method !== 'automated_http_agent') {
+          throw new Error(`La procedencia de agente, tarea o escenario del evento ${eventId} no coincide con su manifiesto.`);
+        }
+        if (event.source_ip_hash !== job.egressIpHash) {
+          throw new Error(`La IP de salida observada del evento ${eventId} no coincide con el origen registrado del agente.`);
+        }
+        const expectedUserHash = getAnalyticsIdentifiers('', job.targetAccount).userKey;
+        if (event.user_key_hash !== expectedUserHash) {
+          throw new Error(`La cuenta observada del evento ${eventId} no coincide con la cuenta planificada.`);
+        }
+        const attemptIndex = Number(eventMetadata.attempt_index);
+        if (!Number.isInteger(attemptIndex) || attemptIndex < 0 || attemptIndex >= job.attemptsPlanned ||
+            event.request_id !== labAttemptRequestId(job.jobId, attemptIndex)) {
+          throw new Error(`El índice o la clave idempotente del evento ${eventId} no coincide con la tarea.`);
+        }
+        if (expected.plannedOutcomes && event.auth_success !== expected.plannedOutcomes[attemptIndex]) {
+          throw new Error(`El resultado de autenticación del evento ${eventId} no coincide con la secuencia preregistrada.`);
+        }
+      } else if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId) {
+        throw new Error(`La procedencia del evento ${eventId} no coincide con su manifiesto.`);
       }
       if (event.ground_truth_label === expected.label) {
         alreadyLabeled++;
