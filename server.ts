@@ -880,6 +880,7 @@ async function tickLabAutomation(): Promise<void> {
     const { campaign, manifest } = createLabCampaign({
       experimentId: experiment.id,
       targetAccount: batch.targetAccount,
+      targetAccounts: batch.targetAccounts,
       scenarioIds: [batch.scenarioId],
       repetitions: batch.repetitions,
       phase,
