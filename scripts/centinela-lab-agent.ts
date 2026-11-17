@@ -201,8 +201,18 @@ async function executeJob(job: LabJob): Promise<void> {
       }
       const password = expectedAuthSuccess ? credentials[job.target_account] : invalidCandidate;
       const controller = new AbortController();
-      // The portal may need up to ~235s for detector warm-up and up to 90s to persist an event.
+      // Keep the runner alive while the portal may take several minutes to
+      // warm the detector and persist the event.
       const timeout = setTimeout(() => controller.abort(), 360_000);
+      let heartbeatInFlight = false;
+      const heartbeatTimer = setInterval(() => {
+        if (heartbeatInFlight) return;
+        heartbeatInFlight = true;
+        void checkCommand(job.job_id)
+          .then((nextCommand) => { command = nextCommand; })
+          .catch(() => { /* The request timeout and stale-runner guard remain authoritative. */ })
+          .finally(() => { heartbeatInFlight = false; });
+      }, 10_000);
       try {
         const response = await fetch(portalUrl + '/agent/login', {
           method: 'POST',
@@ -235,6 +245,7 @@ async function executeJob(job: LabJob): Promise<void> {
         await log(`Evento ${attemptsCompleted}/${job.outcomes.length} confirmado: ${payload.event_id.slice(0, 8)} · HTTP ${response.status}.`);
       } finally {
         clearTimeout(timeout);
+        clearInterval(heartbeatTimer);
       }
 
       if (index < job.outcomes.length - 1) {
