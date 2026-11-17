@@ -492,7 +492,7 @@ export function createLabCampaign(input: {
     throw new Error('No hay agentes conectados. Registra al menos un runner antes de crear una campaña.');
   }
 
-  const campaignId = `v3-${randomUUID()}`;
+  const campaignId = `${input.scheduledByAutomation ? 'v4' : 'v3'}-${randomUUID()}`;
   const jobIds: string[] = [];
   const manifestRuns: Record<string, unknown>[] = [];
   // Ejecutar primero los escenarios que necesitan sincronización distribuida
@@ -515,7 +515,7 @@ export function createLabCampaign(input: {
         ? buildScenarioProfile(scenarioId, runSeed)
         : buildLegacyScenarioProfile(scenarioId);
       const startAt = nextSessionStart;
-      const sessionGapMs = randomBetween(seededRandom(runSeed ^ 0x9e3779b9), 10 * 60_000, 45 * 60_000);
+      const sessionGapMs = randomBetween(seededRandom(runSeed ^ 0x9e3779b9), 1 * 60_000, 15 * 60_000);
       const plannedActiveDurationMs = profile.delaysMs.reduce((sum, delay) => sum + delay, 0) + profile.outcomes.length * 2_000;
       nextSessionStart = startAt + plannedActiveDurationMs + sessionGapMs;
       const assignedAgents = scenarioId === 'attack_distributed'
@@ -576,6 +576,7 @@ export function createLabCampaign(input: {
         session_profile: profile.profile,
         reproducibility_seed: runSeed,
         planned_session_gap_after_ms: sessionGapMs,
+        planned_session_gap_profile: 'uniform_random_1_to_15_minutes',
         job_ids: runJobIds,
       });
     }
