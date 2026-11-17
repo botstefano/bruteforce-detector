@@ -302,10 +302,12 @@ function refreshCampaignStatus(campaign: LabCampaign): void {
   if (campaign.status === 'stopped') return;
   if (campaignJobs.length > 0 && campaignJobs.every((job) => ['completed', 'failed', 'cancelled'].includes(job.status))) {
     campaign.status = campaignJobs.some((job) => job.status === 'failed' || job.status === 'cancelled') ? 'failed' : 'completed';
+  } else if (campaignJobs.some((job) => job.status === 'paused' || job.pauseRequested)) {
+    // A pending pause request must win over an assigned/running status after
+    // restoring a snapshot, otherwise a sleeping runner appears active.
+    campaign.status = 'paused';
   } else if (campaignJobs.some((job) => job.status === 'running' || job.status === 'assigned')) {
     campaign.status = 'running';
-  } else if (campaignJobs.some((job) => job.status === 'paused' || job.pauseRequested)) {
-    campaign.status = 'paused';
   }
 }
 
