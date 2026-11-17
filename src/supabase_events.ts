@@ -418,6 +418,58 @@ export async function createExperimentRecord(input: {
   return data;
 }
 
+let labCoordinatorPersistQueue: Promise<void> = Promise.resolve();
+
+export async function loadLabCoordinatorState(experimentId: string): Promise<Record<string, unknown> | null> {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .select('id, metadata, status')
+    .eq('id', experimentId)
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo restaurar el estado del coordinador: ${error.message}`);
+  if (!data || data.status !== 'running') return null;
+  const metadata = (data.metadata ?? {}) as Record<string, unknown>;
+  const snapshot = metadata.lab_coordinator_state;
+  return snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+    ? snapshot as Record<string, unknown>
+    : null;
+}
+
+export function saveLabCoordinatorState(
+  experimentId: string,
+  getSnapshot: () => Record<string, unknown>,
+): Promise<void> {
+  if (!client || !hashSecret) return Promise.reject(new Error('El almacén persistente de Centinela no está configurado.'));
+  const operation = labCoordinatorPersistQueue.then(async () => {
+    const { data: current, error: readError } = await client!
+      .from('centinela_experiments')
+      .select('id, metadata, status')
+      .eq('id', experimentId)
+      .maybeSingle();
+    if (readError) throw new Error(`No se pudo leer el estado antes de persistir el coordinador: ${readError.message}`);
+    if (!current || current.status !== 'running') throw new Error('El experimento dejó de estar activo; no se guardó el estado del coordinador.');
+
+    const metadata = (current.metadata ?? {}) as Record<string, unknown>;
+    const updatedMetadata = {
+      ...metadata,
+      lab_coordinator_state: getSnapshot(),
+      lab_coordinator_state_saved_at: new Date().toISOString(),
+    };
+    const { data, error } = await client!
+      .from('centinela_experiments')
+      .update({ metadata: updatedMetadata })
+      .eq('id', experimentId)
+      .eq('status', 'running')
+      .select('id')
+      .maybeSingle();
+    if (error) throw new Error(`No se pudo persistir el estado del coordinador: ${error.message}`);
+    if (!data) throw new Error('El experimento dejó de estar activo antes de guardar el estado del coordinador.');
+  });
+  labCoordinatorPersistQueue = operation.catch(() => undefined);
+  return operation;
+}
+
 export async function appendLabCampaignManifest(
   experimentId: string,
   manifest: Record<string, unknown>
