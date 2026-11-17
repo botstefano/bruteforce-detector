@@ -1,6 +1,6 @@
 # Centinela Auth Lab
 
-Servicio web independiente para realizar inicios de sesión de laboratorio y enviar los resultados a Centinela v2. No mantiene una base de datos propia, panel de etiquetado ni motor de detección.
+Servicio web independiente para realizar inicios de sesión de laboratorio y enviar los resultados a Centinela v3. Mantiene una ruta privada autenticada para agentes experimentales. No mantiene una base de datos propia, panel de etiquetado ni motor de detección.
 
 ## Cuentas de participantes
 
@@ -15,7 +15,9 @@ Las contraseñas son únicas y se mantienen como secretos de entorno en Render. 
 1. El participante introduce su usuario y contraseña.
 2. Resuelve una comprobación CAPTCHA aritmética, generada y validada en el servidor, con vencimiento y uso único.
 3. El laboratorio valida la contraseña de forma local.
-4. El laboratorio transmite a Centinela solamente el usuario, el resultado final de autenticación, la IP verificada y el identificador de campaña indicado por `LAB_CAMPAIGN_ID`.
+4. El laboratorio transmite a Centinela solamente el usuario, el resultado final de autenticación, la IP verificada y los identificadores de campaña/ejecución/agente/escenario. No transmite la contraseña.
+
+Los agentes autorizados usan `POST /agent/login` con `CENTINELA_LAB_AGENT_TOKEN`. Esta ruta no solicita CAPTCHA interactivo, pero acepta exclusivamente las tres cuentas del testbed, aplica límites por IP y exige metadatos de campaña válidos. No hay endpoint para un destino arbitrario.
 5. Centinela almacena el evento con etiqueta inicial `unknown`; la auditoría y el etiquetado se realizan allí.
 
 Los CAPTCHA incorrectos o caducados y los envíos que activan el campo trampa se rechazan antes de la autenticación y no se contabilizan como fallos de contraseña en el conjunto empírico. Así se evita contaminar los datos de autenticación con errores de la propia comprobación anti-bot.
@@ -35,7 +37,8 @@ El CAPTCHA aritmético es una defensa ligera para un testbed experimental, no eq
 
 - `NODE_ENV=production`
 - `CENTINELA_API_URL=https://bruteforce-detector-2uv4.onrender.com`
-- `CENTINELA_INGEST_TOKEN`: el mismo secreto de ingesta configurado en el servicio detector.
+- `CENTINELA_INGEST_TOKEN`: secreto de ingesta servicio-a-servicio configurado en el detector.
+- `CENTINELA_LAB_AGENT_TOKEN`: secreto aleatorio de al menos 32 caracteres compartido solo con el coordinador v3 y los runners autorizados.
 - `LAB_CAMPAIGN_ID`: identificador de la campaña activa. Usa un valor distinto para validación y prueba; los eventos nuevos lo conservarán como `campaign_id`. Por compatibilidad, el valor predeterminado es `laboratorio-web-auth-v2`.
 - `LAB_CREDENTIALS_V2_JSON`: objeto JSON con exactamente `ronan`, `andy` y `stefano`, cada uno con contraseña distinta de 16 a 256 caracteres.
 
@@ -43,7 +46,7 @@ No se necesita una variable de semillas TOTP para esta versión.
 
 ## Despliegue
 
-Servicio Render `centinela-auth-lab`, rama `feature/lab-auth-render-service`, contexto Docker `./lab-auth` y Dockerfile `./lab-auth/Dockerfile`. Health check: `/health`.
+Servicio Render `centinela-auth-lab`, rama `feature/lab-auth-v3-agent-ingest`, contexto Docker `./lab-auth` y Dockerfile `./lab-auth/Dockerfile`. Health check: `/health`. La ruta nueva aún no debe usarse hasta que se despliegue esta rama y se configuren los dos tokens secretos.
 
 ## Verificación
 
@@ -64,3 +67,13 @@ Requiere Node.js 22 o superior. Define las variables requeridas en un archivo lo
 cd lab-auth
 node --env-file=.env server.js
 ```
+
+
+## Agentes automatizados Centinela v3
+
+- La ruta `POST /agent/login` requiere `Authorization: Bearer $CENTINELA_LAB_AGENT_TOKEN` y metadatos válidos de campaña y ejecución.
+- Las solicitudes deben proceder de los runners configurados y utilizar una cuenta del testbed. Los agentes no pueden definir el destino ni la IP observada.
+- En producción, el portal acepta la IP solo desde `CF-Connecting-IP` junto con `CF-Ray` de la capa Cloudflare/Render. No confía en la primera entrada de `X-Forwarded-For`, porque puede contener un valor introducido por el cliente.
+- Para el escenario distribuido, cada agente debe ejecutar desde una salida de red pública distinta, verificada en el registro del coordinador. Procesos distintos detrás de una misma NAT cuentan como una sola IP.
+- No se debe enviar `expected_label` ni puntuaciones del manifiesto al detector. La verdad de referencia se conserva en el manifiesto independiente del coordinador.
+- Los CAPTCHA fallidos no se contabilizan como errores de autenticación; el agente interno omite el CAPTCHA interactivo solo porque se autentica con el token de agente y usa las cuentas cerradas del laboratorio.
