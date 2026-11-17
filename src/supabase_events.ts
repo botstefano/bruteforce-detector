@@ -583,6 +583,8 @@ export async function persistLabCollectionPlan(
     throw new Error('El diseño de recolección ya está preregistrado y no puede modificarse.');
   }
 
+  const distributedValidation = Number((plan.targets.validation as Record<string, unknown> | undefined)?.attack_distributed ?? -1);
+  const distributedTest = Number((plan.targets.test as Record<string, unknown> | undefined)?.attack_distributed ?? -1);
   const collectionPlan = {
     protocol_revision: 4,
     plan_version: 1,
@@ -595,6 +597,9 @@ export async function persistLabCollectionPlan(
     quota_unit: 'completed_independent_sessions',
     immutable_after_start: true,
     phase_policy: 'train_benign_only_validation_mixed_freeze_before_test',
+    excluded_scenarios: distributedValidation === 0 && distributedTest === 0
+      ? [{ scenario: 'attack_distributed', reason: 'No se dispone de cuatro IP de salida verificadas e independientes; se excluye explícitamente en lugar de falsificar o suplantar direcciones.' }]
+      : [],
   };
   const updatedMetadata = {
     ...metadata,
