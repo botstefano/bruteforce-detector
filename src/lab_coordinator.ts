@@ -482,10 +482,30 @@ export function completeLabJob(input: {
   const job = jobs.get(input.jobId);
   if (!job || job.agentId !== input.agentId) throw new Error('La tarea no pertenece a este agente.');
   if (!['completed', 'failed', 'cancelled'].includes(input.status)) throw new Error('Estado de finalización no válido.');
+  if (!Number.isInteger(input.attemptsCompleted) || input.attemptsCompleted < 0 || input.attemptsCompleted > job.outcomes.length) {
+    throw new Error('El número final de intentos no es válido.');
+  }
+  const persistedEventIds = Array.isArray(job.summary.event_ids)
+    ? (job.summary.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
+    : [];
+  const suppliedEventIds = Array.isArray(input.summary?.event_ids)
+    ? (input.summary!.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
+    : persistedEventIds;
+  if (suppliedEventIds.length !== persistedEventIds.length ||
+      suppliedEventIds.some((eventId, index) => eventId !== persistedEventIds[index])) {
+    throw new Error('Los IDs de eventos informados no coinciden con el progreso confirmado por el coordinador.');
+  }
+  if (input.status === 'completed' &&
+      (input.attemptsCompleted !== job.outcomes.length || persistedEventIds.length !== job.outcomes.length)) {
+    throw new Error('Una tarea solo se completa cuando todos sus intentos tienen un evento persistido y confirmado.');
+  }
+  if (input.attemptsCompleted !== job.attemptsCompleted || persistedEventIds.length !== job.attemptsCompleted) {
+    throw new Error('El estado final no coincide con los intentos y eventos confirmados.');
+  }
   job.status = input.status;
-  job.attemptsCompleted = Math.max(0, Math.min(job.outcomes.length, Math.floor(input.attemptsCompleted)));
+  job.attemptsCompleted = input.attemptsCompleted;
   job.finishedAt = Date.now();
-  job.summary = input.summary ?? {};
+  job.summary = { ...(input.summary ?? {}), event_ids: [...persistedEventIds] };
   const agent = agents.get(input.agentId);
   if (agent) {
     agent.lastSeenAt = Date.now();
