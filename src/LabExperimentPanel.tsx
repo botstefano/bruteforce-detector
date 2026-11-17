@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import io, { type Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
 
 type ScenarioId = 'benign_mixed' | 'attack_rapid' | 'attack_low_frequency' | 'attack_distributed';
 
@@ -111,7 +111,7 @@ export function LabExperimentPanel() {
   }, []);
 
   useEffect(() => {
-    let socket: Socket | null = null;
+    let socket: ReturnType<typeof io> | null = null;
     let interval: number | undefined;
     let disposed = false;
     fetch('/api/session', { credentials: 'same-origin', cache: 'no-store' })
