@@ -485,14 +485,13 @@ async function procesarIntentoCapturado(
   return evento;
 }
 
-// Middleware de autenticación de admin
-function bloquearSimulacionDuranteExperimento(req: Request, res: Response, next: NextFunction) {
-  if (getActiveExperimentId()) {
-    return res.status(409).json({
-      error: 'Las simulaciones están deshabilitadas durante un experimento empírico activo para evitar contaminar las ventanas de características.',
-    });
-  }
-  return next();
+// Los generadores históricos se deshabilitan permanentemente en v3.
+// El conjunto empírico solo puede recibir solicitudes que atraviesen el portal de laboratorio
+// o una integración de autenticación explícitamente autorizada.
+function bloquearSimulacionDuranteExperimento(_req: Request, res: Response, _next: NextFunction) {
+  return res.status(410).json({
+    error: 'Los generadores históricos/simulados están deshabilitados en Centinela v3. Utiliza el laboratorio de agentes autenticados.',
+  });
 }
 
 function requiereAdmin(req: Request, res: Response, next: NextFunction) {
