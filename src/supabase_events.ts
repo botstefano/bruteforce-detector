@@ -555,7 +555,7 @@ export async function getExperimentMetadata(experimentId: string) {
   if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
   const { data, error } = await client
     .from('centinela_experiments')
-    .select('id, metadata, status')
+    .select('id, protocol_name, metadata, status')
     .eq('id', experimentId)
     .maybeSingle();
   if (error) throw new Error(`No se pudo recuperar el metadato del experimento: ${error.message}`);
