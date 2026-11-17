@@ -997,7 +997,9 @@ async function tickLabAutomation(): Promise<void> {
         ? (job.planned_inter_attempt_delays_ms as unknown[]).filter((value): value is number => typeof value === 'number')
         : [];
       const effectiveStart = Math.max(plannedStart, finishByAgent.get(agentId) || plannedStart);
-      finishByAgent.set(agentId, effectiveStart + (attempts * 360_000) + plannedDelays.reduce((sum, delay) => sum + delay, 0));
+      const sessionGapAfterMs = Number(job.planned_session_gap_after_ms || 0);
+      finishByAgent.set(agentId, effectiveStart + (attempts * 366_000) +
+        plannedDelays.reduce((sum, delay) => sum + delay, 0) + sessionGapAfterMs);
     }
     const latestFinish = Math.max(...finishByAgent.values());
     if (!Number.isFinite(latestFinish) || !phaseEndAtMs || latestFinish >= phaseEndAtMs) {
@@ -1186,8 +1188,9 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
         const plannedDelays = Array.isArray(job.planned_inter_attempt_delays_ms)
           ? (job.planned_inter_attempt_delays_ms as unknown[]).filter((value): value is number => typeof value === 'number')
           : [];
+        const sessionGapAfterMs = Number(job.planned_session_gap_after_ms || 0);
         const estimatedFinish = effectiveStart + (attempts * 366_000) +
-          plannedDelays.reduce((sum, delay) => sum + delay, 0);
+          plannedDelays.reduce((sum, delay) => sum + delay, 0) + sessionGapAfterMs;
         finishByAgent.set(agentId, estimatedFinish);
       }
       const latestFinish = Math.max(...finishByAgent.values());
