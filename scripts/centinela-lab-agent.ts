@@ -185,8 +185,8 @@ async function executeJob(job: LabJob): Promise<void> {
       }
       const password = expectedAuthSuccess ? credentials[job.target_account] : invalidCandidate;
       const controller = new AbortController();
-      // The portal may need up to ~120s to wake/check the detector and up to 90s to persist an event.
-      const timeout = setTimeout(() => controller.abort(), 240_000);
+      // The portal may need up to ~235s for detector warm-up and up to 90s to persist an event.
+      const timeout = setTimeout(() => controller.abort(), 360_000);
       try {
         const response = await fetch(portalUrl + '/agent/login', {
           method: 'POST',
