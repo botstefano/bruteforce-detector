@@ -693,8 +693,9 @@ export function configureLabAutomation(input: {
   const evaluationScenarios: LabScenarioId[] = ['benign_mixed', 'attack_rapid', 'attack_low_frequency', 'attack_distributed'];
   for (const phase of ['validation', 'test'] as const) {
     for (const scenarioId of evaluationScenarios) {
-      if (!Number.isInteger(targets[phase][scenarioId]) || (targets[phase][scenarioId] ?? 0) < 1) {
-        throw new Error(`La fase ${phase} debe incluir al menos una sesión de ${scenarioId}; no se omitirá ningún escenario de evaluación.`);
+      const minimum = scenarioId === 'attack_distributed' ? 0 : 1;
+      if (!Number.isInteger(targets[phase][scenarioId]) || (targets[phase][scenarioId] ?? -1) < minimum) {
+        throw new Error(`La fase ${phase} debe incluir al menos ${minimum} sesiones de ${scenarioId}; los escenarios de un solo origen siguen siendo obligatorios.`);
       }
     }
   }
