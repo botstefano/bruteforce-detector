@@ -198,7 +198,7 @@ export function createLabCampaign(input: {
     throw new Error('Selecciona uno o más escenarios válidos del catálogo experimental.');
   }
 
-  const readyAgents = activeAgents(now);
+  const readyAgents = activeAgents(now).filter((agent) => agent.status === 'ready' && agent.currentJobId === null);
   const distributedRuns = scenarioIds.filter((id) => id === 'attack_distributed').length * repetitions;
   const distinctEgress = new Set(readyAgents.map((agent) => agent.egressIpHash));
   if (distributedRuns > 0 && distinctEgress.size < 4) {
@@ -408,6 +408,43 @@ export function updateLabCampaign(campaignId: string, action: 'pause' | 'resume'
     }
   }
   return { ...campaign };
+}
+
+export function getLabCampaignForLabeling(campaignId: string): {
+  campaign: LabCampaign;
+  jobs: Array<{
+    jobId: string;
+    runId: string;
+    scenarioId: LabScenarioId;
+    expectedLabel: 'benign' | 'attack';
+    status: JobStatus;
+    attemptsCompleted: number;
+    attemptsPlanned: number;
+    eventIds: string[];
+  }>;
+} {
+  const campaign = campaigns.get(campaignId);
+  if (!campaign) throw new Error('Campaña no encontrada en esta instancia.');
+  const campaignJobs = campaign.jobIds.map((id) => jobs.get(id)).filter((job): job is LabJob => Boolean(job));
+  if (!campaignJobs.length || campaignJobs.some((job) => job.status !== 'completed')) {
+    throw new Error('Solo se pueden etiquetar campañas cuyas tareas hayan finalizado correctamente.');
+  }
+  const normalizedJobs = campaignJobs.map((job) => ({
+    jobId: job.jobId,
+    runId: job.runId,
+    scenarioId: job.scenarioId,
+    expectedLabel: job.expectedLabel,
+    status: job.status,
+    attemptsCompleted: job.attemptsCompleted,
+    attemptsPlanned: job.outcomes.length,
+    eventIds: Array.isArray(job.summary.event_ids)
+      ? (job.summary.event_ids as unknown[]).filter((value): value is string => typeof value === 'string')
+      : [],
+  }));
+  if (normalizedJobs.some((job) => job.attemptsCompleted !== job.attemptsPlanned || job.eventIds.length !== job.attemptsPlanned)) {
+    throw new Error('La campaña tiene tareas con solicitudes faltantes o sin IDs de evento confirmados; no se aplicarán etiquetas automáticamente.');
+  }
+  return { campaign: { ...campaign }, jobs: normalizedJobs };
 }
 
 export function getLabSnapshot(experimentId?: string | null): Record<string, unknown> {
