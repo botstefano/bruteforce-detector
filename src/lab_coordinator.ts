@@ -211,15 +211,23 @@ export function createLabCampaign(input: {
   const campaignId = `v3-${randomUUID()}`;
   const jobIds: string[] = [];
   const manifestRuns: Record<string, unknown>[] = [];
+  // Ejecutar primero los escenarios que necesitan sincronización distribuida
+  // y dejar los low-frequency largos para el final.
+  const orderedScenarioIds: LabScenarioId[] = [
+    ...scenarioIds.filter((id) => id === 'attack_distributed'),
+    ...scenarioIds.filter((id) => id !== 'attack_distributed' && id !== 'attack_low_frequency'),
+    ...scenarioIds.filter((id) => id === 'attack_low_frequency'),
+  ];
+  let nextSingleAgent = 0;
 
-  for (const scenarioId of scenarioIds) {
+  for (const scenarioId of orderedScenarioIds) {
     const definition = LAB_SCENARIO_CATALOG[scenarioId];
     for (let repetition = 1; repetition <= repetitions; repetition += 1) {
       const runId = randomUUID();
       const startAt = now + 25_000 + (repetition - 1) * 5_000;
       const assignedAgents = scenarioId === 'attack_distributed'
         ? readyAgents.slice(0, 4)
-        : [readyAgents[(repetition - 1) % readyAgents.length]];
+        : [readyAgents[nextSingleAgent++ % readyAgents.length]];
       const runJobIds: string[] = [];
 
       for (const agent of assignedAgents) {
@@ -229,7 +237,7 @@ export function createLabCampaign(input: {
           campaignId,
           runId,
           scenarioId,
-          agentId: scenarioId === 'attack_distributed' ? agent.agentId : null,
+          agentId: agent.agentId,
           targetAccount: input.targetAccount,
           startAt,
           intervalMs: definition.intervalMs,
