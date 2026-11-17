@@ -512,7 +512,7 @@ app.get('/health', async (_req: Request, res: Response) => {
 
   res.json({
     status: eventCapturePaused || !eventStore.configured || !supabaseOk ? 'degraded' : 'ok',
-    service: 'centinela-v2-detector',
+    service: 'centinela-v3-detector',
     timestamp: Date.now() / 1000,
     // db_ok now represents a real read probe against Supabase, not the in-memory cache.
     db_ok: supabaseOk,
@@ -794,7 +794,23 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
   const usuario = typeof data.usuario === 'string' ? data.usuario.trim() : '';
   const reportedIp = typeof data.ip === 'string' ? data.ip.trim() : '';
   const campaignId = typeof data.campaign_id === 'string' ? data.campaign_id.trim() : '';
+  const runId = typeof data.run_id === 'string' ? data.run_id.trim() : '';
+  const agentId = typeof data.agent_id === 'string' ? data.agent_id.trim() : '';
+  const scenarioId = typeof data.scenario_id === 'string' ? data.scenario_id.trim() : '';
+  const actorType = typeof data.actor_type === 'string' ? data.actor_type.trim() : '';
+  const generationMethod = typeof data.generation_method === 'string' ? data.generation_method.trim() : '';
   if (campaignId.length > 120) return res.status(400).json({ error: 'campaign_id no puede superar 120 caracteres.' });
+  if (runId && !/^[a-f0-9-]{36}$/i.test(runId)) return res.status(400).json({ error: 'run_id no es válido.' });
+  if (agentId && !/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(agentId)) return res.status(400).json({ error: 'agent_id no es válido.' });
+  if (scenarioId && !['benign_mixed', 'attack_rapid', 'attack_low_frequency', 'attack_distributed'].includes(scenarioId)) {
+    return res.status(400).json({ error: 'scenario_id no está permitido.' });
+  }
+  if (actorType && !['benign_agent', 'attack_agent'].includes(actorType)) return res.status(400).json({ error: 'actor_type no es válido.' });
+  if (generationMethod && generationMethod !== 'automated_http_agent') return res.status(400).json({ error: 'generation_method no está permitido.' });
+  if (Boolean(runId || agentId || scenarioId || actorType || generationMethod) &&
+      !(campaignId && runId && agentId && scenarioId && actorType && generationMethod)) {
+    return res.status(400).json({ error: 'La procedencia del agente requiere campaign_id, run_id, agent_id, scenario_id, actor_type y generation_method.' });
+  }
   if (!usuario || usuario.length > 254 || typeof data.exitoso !== 'boolean') {
     return res.status(400).json({ error: 'Se requiere usuario válido y exitoso booleano.' });
   }
@@ -811,7 +827,14 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
       usuario,
       data.exitoso,
       'integracion_autenticacion',
-      campaignId ? { campaign_id: campaignId } : {}
+      campaignId ? {
+        campaign_id: campaignId,
+        ...(runId ? { run_id: runId } : {}),
+        ...(agentId ? { agent_id: agentId } : {}),
+        ...(scenarioId ? { scenario_id: scenarioId } : {}),
+        ...(actorType ? { actor_type: actorType } : {}),
+        ...(generationMethod ? { generation_method: generationMethod } : {}),
+      } : {}
     );
     return res.json({
       event_id: evento.event_id,
