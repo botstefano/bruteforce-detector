@@ -360,8 +360,7 @@ export async function restoreActiveExperimentRecord() {
   let query = client
     .from('centinela_experiments')
     .select('id, protocol_name, scenario, status, started_at, metadata')
-    .eq('status', 'running')
-    .ilike('protocol_name', '%v3%');
+    .eq('status', 'running');
   if (activeExperimentId) query = query.eq('id', activeExperimentId);
   const { data, error } = await query
     .order('started_at', { ascending: false })
@@ -399,7 +398,6 @@ export async function createExperimentRecord(input: {
     .from('centinela_experiments')
     .select('id, protocol_name')
     .eq('status', 'running')
-    .ilike('protocol_name', '%v3%')
     .limit(1)
     .maybeSingle();
   if (existingError) throw new Error(`No se pudo comprobar si existe otro experimento activo: ${existingError.message}`);
@@ -412,9 +410,9 @@ export async function createExperimentRecord(input: {
     throw new Error('Define train_end_at y validation_end_at como fechas ISO futuras, con validation_end_at posterior a train_end_at.');
   }
   const testEndMs = input.testEndAt ? Date.parse(input.testEndAt) : NaN;
-  const requiresTestCutoff = input.protocolName.toLowerCase().includes('v3');
+  const requiresTestCutoff = /v[34]/i.test(input.protocolName);
   if (requiresTestCutoff && (!Number.isFinite(testEndMs) || testEndMs <= validationEndMs)) {
-    throw new Error('El protocolo v3 exige test_end_at en ISO futuro, posterior a validation_end_at.');
+    throw new Error('Los protocolos v3/v4 exigen test_end_at en ISO futuro, posterior a validation_end_at.');
   }
   if (input.testEndAt && (!Number.isFinite(testEndMs) || testEndMs <= validationEndMs)) {
     throw new Error('test_end_at debe ser una fecha ISO posterior a validation_end_at.');
@@ -427,7 +425,9 @@ export async function createExperimentRecord(input: {
     train_end_at: trainEndAt,
     validation_end_at: validationEndAt,
     ...(testEndAt ? { test_end_at: testEndAt } : {}),
-    split_policy: 'temporal_by_event_timestamp_v1',
+    split_policy: Number(input.metadata?.protocol_revision) >= 4
+      ? 'temporal_by_event_timestamp_and_campaign_v1'
+      : 'temporal_by_event_timestamp_v1',
     training_frozen: false,
     validation_frozen: false,
   };
