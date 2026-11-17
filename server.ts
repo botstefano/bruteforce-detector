@@ -1478,9 +1478,9 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
         const protocolName = typeof activeExperiment.protocol_name === 'string'
           ? activeExperiment.protocol_name.toLowerCase()
           : '';
-        if (protocolName.includes('v3')) {
+        if (protocolName.includes('v3') || protocolName.includes('v4')) {
           return res.status(409).json({
-            error: 'El protocolo v3 solo acepta eventos de agentes autenticados con manifiesto de campaña. Los logins manuales o integraciones sin procedencia completa se rechazan.',
+            error: 'Los protocolos v3/v4 solo aceptan eventos de agentes autenticados con manifiesto de campaña. Los logins manuales o integraciones sin procedencia completa se rechazan.',
             persisted: false,
           });
         }
