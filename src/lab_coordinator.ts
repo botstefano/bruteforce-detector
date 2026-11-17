@@ -130,7 +130,6 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
     const agent = raw as LabAgent;
     if (typeof agent.agentId !== 'string' || !/^[a-f0-9]{64}$/i.test(agent.egressIpHash || '')) continue;
     agent.status = 'offline';
-    agent.lastSeenAt = 0;
     agents.set(agent.agentId, { ...agent });
   }
   for (const raw of state.campaigns) {
@@ -853,6 +852,33 @@ export function reportLabJobProgress(agentId: string, jobId: string, attemptsCom
   job.summary = { ...job.summary, event_ids: [...currentIds, eventId] };
   const agent = agents.get(agentId);
   if (agent) agent.lastSeenAt = Date.now();
+}
+
+
+export function expireStaleLabJobs(now = Date.now()): number {
+  let expired = 0;
+  for (const job of jobs.values()) {
+    if (!['assigned', 'running', 'paused'].includes(job.status) || !job.agentId) continue;
+    const agent = agents.get(job.agentId);
+    if (agent && now - agent.lastSeenAt <= AGENT_STALE_MS) continue;
+    job.status = 'failed';
+    job.finishedAt = now;
+    job.pauseRequested = false;
+    job.cancelRequested = false;
+    job.summary = {
+      ...job.summary,
+      failure_reason: 'agent_heartbeat_timeout',
+      failure_message: 'El runner dejó de enviar heartbeats durante más de 90 segundos.',
+    };
+    if (agent) {
+      agent.currentJobId = null;
+      agent.status = 'offline';
+    }
+    const campaign = campaigns.get(job.campaignId);
+    if (campaign) refreshCampaignStatus(campaign);
+    expired++;
+  }
+  return expired;
 }
 
 export function completeLabJob(input: {
