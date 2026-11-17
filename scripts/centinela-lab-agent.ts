@@ -174,7 +174,7 @@ async function executeJob(job: LabJob): Promise<void> {
       }
 
       const expectedAuthSuccess = Boolean(job.outcomes[index]);
-      const password = expectedAuthSuccess ? credentials[job.target_account] : invalidPassword;
+      const password = expectedAuthSuccess ? credentials[job.target_account] : `${invalidPassword}-${index + 1}`;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 25_000);
       try {
