@@ -829,6 +829,7 @@ export function isLabAutomationPhaseComplete(experimentId: string, phase: Experi
         campaign.phase === phase && campaign.scheduledByAutomation
     );
     for (const campaign of phaseCampaigns) {
+      if (!campaign.labelsAppliedAt || campaign.status !== 'completed') continue;
       const runs = new Map<string, LabJob[]>();
       for (const jobId of campaign.jobIds) {
         const job = jobs.get(jobId);
