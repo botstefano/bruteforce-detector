@@ -684,6 +684,7 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
     actorType: string;
     targetAccount: string;
     plannedAgentIds: string[];
+    plannedAgentOrigins: Array<{ agentId: string; egressIpHash: string }>;
     plannedOutcomes: boolean[] | null;
   }>();
   for (const run of savedManifest.scenarios as Record<string, unknown>[]) {
@@ -693,11 +694,17 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
     const plannedAgentIds = Array.isArray(run.planned_agent_ids)
       ? run.planned_agent_ids.filter((value): value is string => typeof value === 'string')
       : [];
+    const plannedAgentOrigins = Array.isArray(run.planned_agent_origins)
+      ? run.planned_agent_origins.filter((value): value is Record<string, unknown> =>
+          Boolean(value && typeof value === 'object' && typeof value.agent_id === 'string' && typeof value.egress_ip_hash === 'string')
+        ).map((value) => ({ agentId: String(value.agent_id), egressIpHash: String(value.egress_ip_hash) }))
+      : [];
     const plannedOutcomes = Array.isArray(run.planned_outcomes) &&
       run.planned_outcomes.every((value) => typeof value === 'boolean')
       ? run.planned_outcomes as boolean[]
       : null;
-    if (requireV4Fields && (!plannedOutcomes || !plannedAgentIds.length || typeof run.target_account !== 'string')) {
+    if (requireV4Fields && (!plannedOutcomes || !plannedAgentIds.length ||
+        plannedAgentOrigins.length !== plannedAgentIds.length || typeof run.target_account !== 'string')) {
       throw new Error(`El manifiesto V4 de la ejecución ${run.run_id} no contiene la secuencia, cuenta u orígenes planificados.`);
     }
     labelByRun.set(run.run_id, {
@@ -706,6 +713,7 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
       actorType: String(run.actor_type || ''),
       targetAccount: String(run.target_account || ''),
       plannedAgentIds,
+      plannedAgentOrigins,
       plannedOutcomes,
     });
   }
@@ -723,6 +731,13 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
     }
     if (job.agentId && expected.plannedAgentIds.length && !expected.plannedAgentIds.includes(job.agentId)) {
       throw new Error(`El agente ${job.agentId} no figura como origen planificado para la ejecución ${job.runId}.`);
+    }
+    if (requireV4Fields) {
+      const plannedOrigin = expected.plannedAgentOrigins.find((origin) => origin.agentId === job.agentId);
+      if (!plannedOrigin || plannedOrigin.egressIpHash !== job.egressIpHash ||
+          new Set(expected.plannedAgentOrigins.map((origin) => origin.egressIpHash)).size !== expected.plannedAgentOrigins.length) {
+        throw new Error(`El origen de red de la ejecución ${job.runId} no coincide con el manifiesto independiente o no es único.`);
+      }
     }
     if (expected.targetAccount && expected.targetAccount !== job.targetAccount) {
       throw new Error(`La cuenta objetivo de la tarea ${job.jobId} no coincide con el manifiesto.`);
