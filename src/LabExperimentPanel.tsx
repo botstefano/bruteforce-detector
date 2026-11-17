@@ -32,12 +32,22 @@ interface LabCampaign {
   target_account: string;
   scenario_ids: ScenarioId[];
   repetitions: number;
+  phase: 'train' | 'validation' | 'test';
   jobs: LabJob[];
+}
+
+interface ExperimentPhaseState {
+  id: string;
+  trainEndMs: number;
+  validationEndMs: number;
+  trainingFrozen: boolean;
+  validationFrozen: boolean;
 }
 
 interface LabSnapshot {
   generated_at: string;
   experiment_id: string | null;
+  experiment: ExperimentPhaseState | null;
   agent_token_configured: boolean;
   agents: LabAgent[];
   campaigns: LabCampaign[];
@@ -183,6 +193,26 @@ export function LabExperimentPanel() {
     }
   };
 
+  const freezeValidation = async () => {
+    if (!snapshot?.experiment_id) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/experimentos/${encodeURIComponent(snapshot.experiment_id)}/congelar_validacion`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      const data = await readJson(response);
+      setNotice(`Validación congelada: ${data.validation_benign_events} benignos y ${data.validation_attack_events} ataques. Configuración ${data.validation_config_version}.`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo congelar la configuración de validación.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const campaignAction = async (campaignId: string, action: 'pause' | 'resume' | 'stop') => {
     setBusy(true);
     setError(null);
@@ -234,6 +264,35 @@ export function LabExperimentPanel() {
 
       {error && <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-300">{error}</div>}
       {notice && <div role="status" className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">{notice}</div>}
+
+      {snapshot?.experiment && (
+        <div className={card}>
+          <h3 className="text-sm font-bold text-white">Fases temporales preregistradas</h3>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+              <p className="text-[10px] uppercase text-slate-500">Entrenamiento</p>
+              <p className="mt-1 text-xs text-white">{localDate(snapshot.experiment.trainEndMs)}</p>
+              <Pill tone={snapshot.experiment.trainingFrozen ? 'good' : 'warning'}>{snapshot.experiment.trainingFrozen ? 'Baseline congelado' : 'Solo benignos'}</Pill>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+              <p className="text-[10px] uppercase text-slate-500">Validación</p>
+              <p className="mt-1 text-xs text-white">{localDate(snapshot.experiment.validationEndMs)}</p>
+              <Pill tone={snapshot.experiment.validationFrozen ? 'good' : 'warning'}>{snapshot.experiment.validationFrozen ? 'Configuración congelada' : 'Pendiente de congelación'}</Pill>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+              <p className="text-[10px] uppercase text-slate-500">Test independiente</p>
+              <p className="mt-1 text-xs text-white">{snapshot.experiment.validationFrozen ? 'Habilitado al alcanzar el corte' : 'Bloqueado hasta congelar validación'}</p>
+              <Pill tone={snapshot.experiment.validationFrozen ? 'good' : 'bad'}>{snapshot.experiment.validationFrozen ? 'Preparado' : 'Bloqueado'}</Pill>
+            </div>
+          </div>
+          {Date.now() >= snapshot.experiment.validationEndMs && snapshot.experiment.trainingFrozen && !snapshot.experiment.validationFrozen && (
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-[11px] text-amber-300">Revisa las métricas y etiquetas de validación. Al congelar, el sistema registrará el código y versión de configuración antes de permitir campañas de test.</p>
+              <button type="button" disabled={busy} onClick={() => void freezeValidation()} className="rounded-xl bg-amber-600 px-4 py-3 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-40">Congelar configuración de validación</button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="rounded-xl border border-slate-800 bg-slate-950 p-4">
@@ -312,7 +371,20 @@ export function LabExperimentPanel() {
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="max-w-2xl text-[11px] text-amber-300">El escenario distribuido solo se habilitará cuando existan cuatro IP de salida distintas, verificadas por el servidor. No se aceptan cabeceras que simulen direcciones.</p>
-          <button type="button" onClick={() => void createCampaign()} disabled={busy || selected.length === 0 || !snapshot?.agent_token_configured || !snapshot?.experiment_id} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">
+          <button
+            type="button"
+            onClick={() => void createCampaign()}
+            disabled={
+              busy ||
+              selected.length === 0 ||
+              !snapshot?.agent_token_configured ||
+              !snapshot?.experiment_id ||
+              (snapshot.experiment?.trainingFrozen !== true && snapshot.experiment?.trainEndMs !== undefined && Date.now() >= snapshot.experiment.trainEndMs) ||
+              (Date.now() < (snapshot?.experiment?.trainEndMs ?? 0) && selected.some((scenarioId) => scenarioId !== 'benign_mixed')) ||
+              (Date.now() >= (snapshot?.experiment?.validationEndMs ?? Infinity) && snapshot?.experiment?.validationFrozen !== true)
+            }
+            className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40"
+          >
             {busy ? 'Procesando…' : 'Crear campaña'}
           </button>
         </div>
@@ -325,7 +397,7 @@ export function LabExperimentPanel() {
         ) : snapshot?.campaigns.map((campaign) => (
           <div key={campaign.campaign_id} className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div><p className="text-xs font-bold text-white">{campaign.campaign_id}</p><p className="mt-1 text-[11px] text-slate-500">Cuenta: {campaign.target_account} · Repeticiones: {campaign.repetitions}</p></div>
+              <div><p className="text-xs font-bold text-white">{campaign.campaign_id}</p><p className="mt-1 text-[11px] text-slate-500">Fase: {campaign.phase} · Cuenta: {campaign.target_account} · Repeticiones: {campaign.repetitions}</p></div>
               <div className="flex flex-wrap gap-2 items-center">
                 <Pill tone={campaign.status === 'completed' ? 'good' : campaign.status === 'stopped' || campaign.status === 'failed' ? 'bad' : campaign.status === 'paused' ? 'warning' : 'neutral'}>{campaign.status}</Pill>
                 <button type="button" disabled={busy || ['completed', 'failed', 'stopped'].includes(campaign.status)} onClick={() => void campaignAction(campaign.campaign_id, campaign.status === 'paused' ? 'resume' : 'pause')} className="rounded-lg border border-slate-700 px-3 py-2 text-[11px] text-slate-200 disabled:opacity-40">{campaign.status === 'paused' ? 'Reanudar' : 'Pausar'}</button>
