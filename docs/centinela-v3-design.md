@@ -80,7 +80,7 @@ Se implementará un coordinador experimental y agentes separados del detector.
 - Las cuentas y credenciales de prueba se inyectarán mediante secretos de entorno; nunca se incluirán claves de cuentas reales en el repositorio.
 - Los agentes tendrán límites explícitos de concurrencia, tasa, duración y número de solicitudes; habrá pausa y parada de emergencia.
 - No se admitirán objetivos arbitrarios ni se ejecutarán pruebas contra servicios de terceros o producción.
-- Los agentes no decidirán etiquetas según las alertas del detector.
+- Los agentes no decidirán etiquetas según las alertas del detector. Durante un experimento v3, el endpoint de ingesta rechazará solicitudes sin procedencia completa de una tarea y manifiesto; los logins manuales o integraciones históricas no se mezclarán en el conjunto v3.
 
 ## 4. Procedencia y verdad de referencia
 
