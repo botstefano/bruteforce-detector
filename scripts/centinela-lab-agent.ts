@@ -13,6 +13,8 @@ interface LabJob {
   interval_ms: number;
   outcomes: boolean[];
   max_attempts: number;
+  attempts_completed?: number;
+  event_ids?: string[];
 }
 
 interface AgentCredentials {
@@ -150,9 +152,9 @@ async function pauseUntilResumed(job: LabJob): Promise<AgentCommand> {
 }
 
 async function executeJob(job: LabJob): Promise<void> {
-  const eventIds: string[] = [];
+  const eventIds: string[] = Array.isArray(job.event_ids) ? job.event_ids.filter((id) => typeof id === 'string') : [];
   const httpStatuses: number[] = [];
-  let attemptsCompleted = 0;
+  let attemptsCompleted = Number.isInteger(job.attempts_completed) ? Number(job.attempts_completed) : 0;
   let finalStatus: 'completed' | 'failed' | 'cancelled' = 'completed';
   let failureReason: string | null = null;
 
@@ -167,7 +169,7 @@ async function executeJob(job: LabJob): Promise<void> {
     let command = await waitUntilAndCheck(job);
     if (command === 'cancel') finalStatus = 'cancelled';
 
-    for (let index = 0; index < job.outcomes.length && finalStatus === 'completed'; index += 1) {
+    for (let index = attemptsCompleted; index < job.outcomes.length && finalStatus === 'completed'; index += 1) {
       while (command === 'pause') {
         command = await pauseUntilResumed(job);
       }
@@ -211,6 +213,7 @@ async function executeJob(job: LabJob): Promise<void> {
           agent_id: agentId,
           job_id: job.job_id,
           attempts_completed: attemptsCompleted,
+          event_id: payload.event_id,
         });
         await log(`Evento ${attemptsCompleted}/${job.outcomes.length} confirmado: ${payload.event_id.slice(0, 8)} · HTTP ${response.status}.`);
       } finally {
