@@ -1434,7 +1434,10 @@ app.get('/api/dataset/capturado', requiereAdmin, async (req: Request, res: Respo
         event_id: '', occurred_at: '', source_ip_hash: '', user_key_hash: '',
         auth_success: '', origin: '', ground_truth_label: '', alerta_reglas: '', alerta_ml: '',
       });
-      const escapeCsv = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+      const escapeCsv = (value: unknown) => {
+        const rendered = value !== null && typeof value === 'object' ? JSON.stringify(value) : String(value ?? '');
+        return `"${rendered.replace(/"/g, '""')}"`;
+      };
       const csv = [headers.join(','), ...events.map((event) =>
         headers.map((header) => escapeCsv((event as unknown as Record<string, unknown>)[header])).join(',')
       )].join('\n');
