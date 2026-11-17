@@ -568,6 +568,10 @@ export function createLabCampaign(input: {
         target_account: runTargetAccount,
         required_independent_egress_ips: definition.requiredAgents,
         planned_agent_ids: assignedAgents.map((agent) => agent.agentId),
+        planned_agent_origins: assignedAgents.map((agent) => ({
+          agent_id: agent.agentId,
+          egress_ip_hash: agent.egressIpHash,
+        })),
         planned_start_at: new Date(startAt).toISOString(),
         planned_attempts_per_agent: profile.outcomes.length,
         planned_outcomes: [...profile.outcomes],
