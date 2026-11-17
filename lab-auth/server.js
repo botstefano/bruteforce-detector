@@ -15,6 +15,7 @@ const CENTINELA_API_URL = (() => {
   return value;
 })();
 const CENTINELA_INGEST_TOKEN = (process.env.CENTINELA_INGEST_TOKEN || "").trim();
+const CENTINELA_LAB_AGENT_TOKEN = (process.env.CENTINELA_LAB_AGENT_TOKEN || "").trim();
 const CAMPAIGN_ID = (() => {
   const value = (process.env.LAB_CAMPAIGN_ID || "laboratorio-web-auth-v2").trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{2,119}$/.test(value)) {
@@ -85,6 +86,9 @@ function validateConfiguration() {
   }
   if (CENTINELA_INGEST_TOKEN.length < 32) {
     throw new Error("CENTINELA_INGEST_TOKEN debe contener al menos 32 caracteres.");
+  }
+  if (CENTINELA_LAB_AGENT_TOKEN.length < 32) {
+    throw new Error("CENTINELA_LAB_AGENT_TOKEN debe contener al menos 32 caracteres.");
   }
 }
 
@@ -428,7 +432,7 @@ function primeCentinelaWarmup() {
   });
 }
 
-async function sendEventToCentinela(username, authenticated, ip) {
+async function sendEventToCentinela(username, authenticated, ip, labMetadata = {}) {
   await ensureCentinelaReady();
 
   const controller = new AbortController();
@@ -446,7 +450,12 @@ async function sendEventToCentinela(username, authenticated, ip) {
         usuario: username,
         exitoso: authenticated,
         ip,
-        campaign_id: CAMPAIGN_ID
+        campaign_id: labMetadata.campaign_id || CAMPAIGN_ID,
+        ...(labMetadata.run_id ? { run_id: labMetadata.run_id } : {}),
+        ...(labMetadata.agent_id ? { agent_id: labMetadata.agent_id } : {}),
+        ...(labMetadata.scenario_id ? { scenario_id: labMetadata.scenario_id } : {}),
+        ...(labMetadata.actor_type ? { actor_type: labMetadata.actor_type } : {}),
+        ...(labMetadata.generation_method ? { generation_method: labMetadata.generation_method } : {})
       }),
       signal: controller.signal
     });
@@ -542,6 +551,81 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && pathname === "/favicon.ico") {
     res.writeHead(204);
     return res.end();
+  }
+
+  // Endpoint privado de agentes del testbed. Autentica cuentas de laboratorio reales
+  // sin CAPTCHA interactivo; exige un token de agente compartido y conserva el límite por IP.
+  if (req.method === "POST" && pathname === "/agent/login") {
+    const authorization = String(req.headers.authorization || "");
+    const suppliedToken = authorization.toLowerCase().startsWith("bearer ") ? authorization.slice(7).trim() : "";
+    if (!safeEqualDigest(sha256(suppliedToken), sha256(CENTINELA_LAB_AGENT_TOKEN))) {
+      return sendJson(res, 401, { error: "Agente experimental no autorizado.", event_recorded: false });
+    }
+
+    let data;
+    try {
+      data = await readJsonBody(req);
+    } catch (error) {
+      return sendJson(res, error.statusCode || 400, { error: error.message, event_recorded: false });
+    }
+
+    const username = typeof data.username === "string" ? data.username.trim().toLowerCase() : "";
+    const password = typeof data.password === "string" ? data.password : "";
+    if (!EXPECTED_USERS.includes(username) || password.length < 1 || password.length > 256) {
+      return sendJson(res, 400, { error: "Cuenta o credencial de laboratorio no válida.", event_recorded: false });
+    }
+
+    const campaignId = String(req.headers["x-centinela-campaign-id"] || "").trim();
+    const runId = String(req.headers["x-centinela-run-id"] || "").trim();
+    const agentId = String(req.headers["x-centinela-agent-id"] || "").trim();
+    const scenarioId = String(req.headers["x-centinela-scenario-id"] || "").trim();
+    const scenarioActor = scenarioId === "benign_mixed"
+      ? "benign_agent"
+      : ["attack_rapid", "attack_low_frequency", "attack_distributed"].includes(scenarioId)
+        ? "attack_agent"
+        : "";
+    if (!/^v3-[a-f0-9-]{36}$/i.test(campaignId) ||
+        !/^[a-f0-9-]{36}$/i.test(runId) ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(agentId) ||
+        !scenarioActor) {
+      return sendJson(res, 400, { error: "Faltan identificadores válidos de campaña, ejecución, agente o escenario.", event_recorded: false });
+    }
+
+    let ip;
+    try {
+      ip = clientIpFromRender(req);
+    } catch (error) {
+      console.error("No se pudo verificar la IP del agente:", error.message);
+      return sendJson(res, 503, { error: "No se pudo verificar la IP real del runner.", event_recorded: false });
+    }
+
+    const rate = consumeRateLimit(ip);
+    if (!rate.allowed) {
+      res.setHeader("Retry-After", String(rate.retryAfter));
+      return sendJson(res, 429, { error: "El runner alcanzó el límite por IP.", retry_after_seconds: rate.retryAfter, event_recorded: false });
+    }
+
+    const authenticated = authenticate(username, password);
+    try {
+      const event = await sendEventToCentinela(username, authenticated, ip, {
+        campaign_id: campaignId,
+        run_id: runId,
+        agent_id: agentId,
+        scenario_id: scenarioId,
+        actor_type: scenarioActor,
+        generation_method: "automated_http_agent"
+      });
+      return sendJson(res, authenticated ? 200 : 401, {
+        authenticated,
+        event_recorded: true,
+        event_id: event.event_id,
+        message: authenticated ? "Autenticación de agente registrada por Centinela." : "Credenciales no válidas; evento registrado por Centinela."
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Error de integración desconocido.";
+      console.error("No se pudo entregar el evento del agente a Centinela:", detail);
+      return sendJson(res, 503, { error: "Centinela no confirmó la persistencia del evento.", event_recorded: false });
+    }
   }
 
   if (req.method === "POST" && pathname === "/login") {
