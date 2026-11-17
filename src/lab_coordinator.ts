@@ -1002,7 +1002,7 @@ export function getLabCampaignForLabeling(campaignId: string): {
       ? (job.summary.event_ids as unknown[]).filter((value): value is string => typeof value === 'string')
       : [],
   }));
-  if (normalizedJobs.some((job) => !job.agentId || !job.egressIpHash ||
+  if (normalizedJobs.some((job) => !job.agentId ||
       job.attemptsCompleted !== job.attemptsPlanned || job.eventIds.length !== job.attemptsPlanned)) {
     throw new Error('La campaña tiene tareas con solicitudes faltantes o sin IDs de evento confirmados; no se aplicarán etiquetas automáticamente.');
   }
