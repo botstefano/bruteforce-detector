@@ -27,6 +27,7 @@ interface LabJob {
   agentId: string | null;
   targetAccount: string;
   startAt: number;
+  deadlineAt: number | null;
   intervalMs: number;
   interAttemptDelaysMs: number[];
   outcomes: boolean[];
@@ -156,6 +157,7 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
     }
     if (!job.sessionProfile || typeof job.sessionProfile !== 'object') job.sessionProfile = { profile_version: 'legacy-fixed-v1' };
     if (!Number.isInteger(job.seed)) job.seed = 0;
+    if (typeof job.deadlineAt !== 'number' || !Number.isFinite(job.deadlineAt)) job.deadlineAt = null;
     const eventIds = Array.isArray(job.summary?.event_ids)
       ? (job.summary.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
       : [];
@@ -345,6 +347,7 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
   targetAccount: string;
   expectedSuccess: boolean;
   egressIpHash: string;
+  deadlineAt: number | null;
 } {
   const job = jobs.get(jobId);
   const agent = agents.get(agentId);
@@ -353,6 +356,9 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
   }
   if (!['assigned', 'running'].includes(job.status)) {
     throw new Error('La tarea no está activa para capturar eventos.');
+  }
+  if (job.deadlineAt !== null && Date.now() + 360_000 >= job.deadlineAt) {
+    throw new Error('La solicitud no se capturará porque ya no hay margen suficiente para completar la autenticación antes del corte temporal.');
   }
   if (!Number.isInteger(attemptIndex) || attemptIndex !== job.attemptsCompleted ||
       attemptIndex < 0 || attemptIndex >= job.outcomes.length) {
@@ -365,6 +371,7 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
     targetAccount: job.targetAccount,
     expectedSuccess: job.outcomes[attemptIndex],
     egressIpHash: agent.egressIpHash,
+    deadlineAt: job.deadlineAt,
   };
 }
 
@@ -400,6 +407,7 @@ export function createLabCampaign(input: {
   phase: ExperimentPhase;
   repetitions?: number;
   scheduledByAutomation?: boolean;
+  phaseEndAtMs?: number | null;
 }): { campaign: LabCampaign; manifest: Record<string, unknown> } {
   const now = Date.now();
   const scenarioIds = [...new Set(input.scenarioIds.filter(isScenarioId))];
@@ -479,6 +487,7 @@ export function createLabCampaign(input: {
           agentId: agent.agentId,
           targetAccount: runTargetAccount,
           startAt,
+          deadlineAt: Number.isFinite(input.phaseEndAtMs) ? Number(input.phaseEndAtMs) : null,
           intervalMs: profile.delaysMs.length ? Math.round(profile.delaysMs.reduce((sum, delay) => sum + delay, 0) / profile.delaysMs.length) : 0,
           interAttemptDelaysMs: [...profile.delaysMs],
           outcomes: [...profile.outcomes],
@@ -568,6 +577,7 @@ function serializeJobForAgent(job: LabJob, agentId: string): Record<string, unkn
     agent_id: agentId,
     target_account: job.targetAccount,
     start_at: new Date(job.startAt).toISOString(),
+    deadline_at: job.deadlineAt !== null ? new Date(job.deadlineAt).toISOString() : null,
     interval_ms: job.intervalMs,
     inter_attempt_delays_ms: [...job.interAttemptDelaysMs],
     session_profile: { ...job.sessionProfile },
@@ -997,6 +1007,7 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
           planned_inter_attempt_delays_ms: [...job.interAttemptDelaysMs],
           session_profile: { ...job.sessionProfile },
           start_at: new Date(job.startAt).toISOString(),
+          deadline_at: job.deadlineAt !== null ? new Date(job.deadlineAt).toISOString() : null,
           started_at: job.startedAt ? new Date(job.startedAt).toISOString() : null,
           finished_at: job.finishedAt ? new Date(job.finishedAt).toISOString() : null,
           expected_label: job.expectedLabel,
