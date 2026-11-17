@@ -181,28 +181,28 @@ export const LAB_SCENARIO_CATALOG: Record<LabScenarioId, {
 }> = {
   benign_mixed: {
     label: 'Sesión legítima con errores ocasionales',
-    description: 'Autenticaciones correctas intercaladas con errores aislados de contraseña.',
+    description: 'Sesiones controladas de 3–8 autenticaciones, con 0–2 errores ocasionales y pausas reproducibles variables de 8–180 segundos.',
     expectedLabel: 'benign',
     actorType: 'benign_agent',
     requiredAgents: 1,
   },
   attack_rapid: {
     label: 'Fuerza bruta desde un origen',
-    description: 'Seis intentos fallidos controlados desde un único agente y origen de red.',
+    description: 'Entre 6 y 10 autenticaciones fallidas controladas desde un único agente y origen de red.',
     expectedLabel: 'attack',
     actorType: 'attack_agent',
     requiredAgents: 1,
   },
   attack_low_frequency: {
     label: 'Intentos de baja frecuencia',
-    description: 'Ocho intentos fallidos espaciados desde un único origen.',
+    description: 'Entre 8 y 12 autenticaciones fallidas con intervalos variables desde un único origen.',
     expectedLabel: 'attack',
     actorType: 'attack_agent',
     requiredAgents: 1,
   },
   attack_distributed: {
     label: 'Fuerza bruta distribuida',
-    description: 'Cuatro agentes desde cuatro IP observadas distintas, coordinados contra una cuenta de laboratorio.',
+    description: 'Entre 2 y 4 intentos fallidos por agente, desde cuatro IP observadas distintas y verificadas.',
     expectedLabel: 'attack',
     actorType: 'attack_agent',
     requiredAgents: 4,
@@ -458,9 +458,12 @@ export function createLabCampaign(input: {
       const profile = buildScenarioProfile(scenarioId, runSeed);
       const startAt = nextSessionStart;
       const sessionGapMs = randomBetween(seededRandom(runSeed ^ 0x9e3779b9), 10 * 60_000, 45 * 60_000);
-      nextSessionStart = startAt + profile.delaysMs.reduce((sum, delay) => sum + delay, 0) + sessionGapMs;
+      const plannedActiveDurationMs = profile.delaysMs.reduce((sum, delay) => sum + delay, 0) + profile.outcomes.length * 2_000;
+      nextSessionStart = startAt + plannedActiveDurationMs + sessionGapMs;
       const assignedAgents = scenarioId === 'attack_distributed'
-        ? readyAgents.slice(0, 4)
+        ? readyAgents.filter((agent, index, all) =>
+            all.findIndex((candidate) => candidate.egressIpHash === agent.egressIpHash) === index
+          ).slice(0, 4)
         : [readyAgents[nextSingleAgent++ % readyAgents.length]];
       const runJobIds: string[] = [];
 
@@ -508,6 +511,8 @@ export function createLabCampaign(input: {
         planned_agent_ids: assignedAgents.map((agent) => agent.agentId),
         planned_start_at: new Date(startAt).toISOString(),
         planned_attempts_per_agent: profile.outcomes.length,
+        planned_outcomes: [...profile.outcomes],
+        planned_active_duration_ms: plannedActiveDurationMs,
         planned_inter_attempt_delays_ms: [...profile.delaysMs],
         session_profile: profile.profile,
         reproducibility_seed: runSeed,
