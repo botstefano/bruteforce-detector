@@ -631,11 +631,24 @@ app.get('/api/experimentos/estado', requiereAdmin, (_req: Request, res: Response
 // LABORATORIO V3: coordinador y agentes HTTP controlados
 // =================================================================
 
-app.get('/api/lab/state', requiereAdmin, (_req: Request, res: Response) => {
+app.get('/api/lab/state', requiereAdmin, async (_req: Request, res: Response) => {
+  const experimentId = getActiveExperimentId();
+  let protocolRevision: number | null = null;
+  if (experimentId) {
+    try {
+      const record = await getExperimentMetadata(experimentId);
+      const metadata = (record.metadata ?? {}) as Record<string, unknown>;
+      protocolRevision = Number(metadata.protocol_revision) ||
+        (/v4/i.test(String(record.protocol_name || '')) ? 4 : /v3/i.test(String(record.protocol_name || '')) ? 3 : null);
+    } catch {
+      protocolRevision = null;
+    }
+  }
   return res.json({
-    ...getLabSnapshot(getActiveExperimentId()),
+    ...getLabSnapshot(experimentId),
     experiment: getActiveExperimentState(),
-    experiment_id: getActiveExperimentId(),
+    experiment_id: experimentId,
+    protocol_revision: protocolRevision,
     agent_token_configured: CENTINELA_LAB_AGENT_TOKEN.length >= 32,
   });
 });
