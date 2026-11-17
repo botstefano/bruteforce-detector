@@ -73,7 +73,7 @@ function parseCredentials(raw: string): AgentCredentials {
       throw new Error(`La contraseña de ${username} debe tener entre 16 y 256 caracteres.`);
     }
   }
-  return record as AgentCredentials;
+  return record as unknown as AgentCredentials;
 }
 
 async function requestJson(
