@@ -348,6 +348,7 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
   expectedSuccess: boolean;
   egressIpHash: string;
   deadlineAt: number | null;
+  deadlineExpired: boolean;
 } {
   const job = jobs.get(jobId);
   const agent = agents.get(agentId);
@@ -357,9 +358,7 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
   if (!['assigned', 'running'].includes(job.status)) {
     throw new Error('La tarea no está activa para capturar eventos.');
   }
-  if (job.deadlineAt !== null && Date.now() + 360_000 >= job.deadlineAt) {
-    throw new Error('La solicitud no se capturará porque ya no hay margen suficiente para completar la autenticación antes del corte temporal.');
-  }
+
   if (!Number.isInteger(attemptIndex) || attemptIndex !== job.attemptsCompleted ||
       attemptIndex < 0 || attemptIndex >= job.outcomes.length) {
     throw new Error('El índice de intento no coincide con el progreso confirmado de la tarea.');
@@ -372,6 +371,7 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
     expectedSuccess: job.outcomes[attemptIndex],
     egressIpHash: agent.egressIpHash,
     deadlineAt: job.deadlineAt,
+    deadlineExpired: job.deadlineAt !== null && Date.now() >= job.deadlineAt,
   };
 }
 
