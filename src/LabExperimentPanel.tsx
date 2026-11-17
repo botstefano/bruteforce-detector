@@ -123,9 +123,9 @@ export function LabExperimentPanel() {
   const [protocolName, setProtocolName] = useState('centinela-auth-study-v4');
   const [scenario, setScenario] = useState('automated-authentication-testbed-v4');
   const [description, setDescription] = useState('Evaluación experimental reproducible mediante agentes automatizados en el portal autorizado de autenticación HTTP.');
-  const [trainEndAt, setTrainEndAt] = useState('2026-12-01T17:00');
-  const [validationEndAt, setValidationEndAt] = useState('2026-12-08T17:00');
-  const [testEndAt, setTestEndAt] = useState('2026-12-15T17:00');
+  const [trainEndAt, setTrainEndAt] = useState('2026-11-20T17:00');
+  const [validationEndAt, setValidationEndAt] = useState('2026-11-22T17:00');
+  const [testEndAt, setTestEndAt] = useState('2026-11-23T17:00');
 
   const refresh = useCallback(async () => {
     try {
@@ -437,7 +437,7 @@ export function LabExperimentPanel() {
             <span className="font-semibold">Descripción y alcance</span>
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} maxLength={1000} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"/>
           </label>
-          <p className="text-[11px] text-amber-300">Fechas iniciales V4: entrenamiento 1 dic., validación 8 dic. y test 15 dic. de 2026, a las 17:00 (hora de Perú). Verifica que sean futuras antes de crear; después no se deben mover.</p>
+          <p className="text-[11px] text-amber-300">Cortes del protocolo V4: entrenamiento 20 nov., validación 22 nov. y test 23 nov. de 2026, a las 17:00 (hora de Perú). Son los límites originales registrados; no se deben mover.</p>
           <button type="button" onClick={() => void createExperiment()} disabled={busy || !protocolName.trim() || !scenario.trim()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">
             {busy ? 'Creando…' : 'Crear protocolo y habilitar laboratorio'}
           </button>
@@ -493,7 +493,7 @@ export function LabExperimentPanel() {
               {snapshot.automation?.enabled ? 'Automatización activa' : snapshot.automation?.status === 'completed' ? 'Objetivos completados' : 'Automatización detenida'}
             </Pill>
           </div>
-          <p className="text-xs text-slate-300">Protocolo actual: V{snapshot.protocol_revision ?? '—'}. Entrenamiento: 200 sesiones benignas; validación: 100 benignas, 30 rápidas, 30 de baja frecuencia y 20 distribuidas; prueba final: 200 benignas, 50 rápidas, 50 de baja frecuencia y 30 distribuidas.</p>
+          <p className="text-xs text-slate-300">Protocolo actual: V{snapshot.protocol_revision ?? '—'}. Cuotas V4: entrenamiento 100 benignas; validación 20 benignas, 20 rápidas y 15 de baja frecuencia; test 15 benignas, 15 rápidas y 10 de baja frecuencia. El escenario distribuido queda excluido explícitamente por ahora: solo hay una IP de salida verificada.</p>
           {snapshot.automation_progress && (
             <div className="mt-3 grid gap-2 md:grid-cols-3">
               {Object.entries(snapshot.automation_progress).map(([phase, scenarios]) => (
@@ -519,7 +519,7 @@ export function LabExperimentPanel() {
             )}
             <button type="button" disabled={busy || snapshot.automation?.enabled !== true} onClick={() => void stopAutomation()} className="rounded-xl border border-rose-500/30 px-4 py-3 text-xs font-bold text-rose-300 disabled:opacity-40">Pausar planificación</button>
           </div>
-          {snapshot.protocol_revision !== 4 && <p className="text-[11px] text-amber-300">El experimento V3 activo no se modificará. Finalízalo o ciérralo formalmente y crea un protocolo V4 para habilitar este planificador.</p>}
+          {snapshot.protocol_revision !== 4 && <p className="text-[11px] text-amber-300">El V3 fue descartado como piloto y sus eventos no se reutilizarán. El nuevo protocolo V4 debe crearse desde cero.</p>}
         </div>
       )}
 
