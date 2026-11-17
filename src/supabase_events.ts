@@ -305,12 +305,13 @@ export async function fetchBenignTrainingSamples(windowSeconds = 120): Promise<n
       intervalStd = Math.sqrt(variance);
     }
 
+    // v3 baseline matches the four-dimensional online feature schema.
+    // Absolute UTC hour was removed to prevent artificial day-boundary drift.
     samples.push([
       timestamps.length,
       distinctUsers,
       Math.round(intervalMean * 100) / 100,
       Math.round(intervalStd * 100) / 100,
-      new Date(timestamp * 1000).getUTCHours(),
     ]);
   }
 
