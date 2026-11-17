@@ -46,6 +46,11 @@ import {
 import {
   LAB_SCENARIO_CATALOG,
   activateLabCampaign,
+  configureLabAutomation,
+  getLabAutomationPlan,
+  getNextLabAutomationBatch,
+  stopLabAutomation,
+  updateLabAutomationStatus,
   claimNextLabJob,
   completeLabJob,
   createLabCampaign,
@@ -635,6 +640,199 @@ app.get('/api/lab/state', requiereAdmin, (_req: Request, res: Response) => {
   });
 });
 
+
+
+let labAutomationTickRunning = false;
+
+async function persistLabAutomationState(experimentId: string): Promise<void> {
+  await saveLabCoordinatorState(experimentId, () => serializeLabCoordinatorState(experimentId));
+  io.emit('lab_campaign_update', getLabSnapshot(experimentId));
+}
+
+async function tickLabAutomation(): Promise<void> {
+  if (labAutomationTickRunning) return;
+  const plan = getLabAutomationPlan();
+  if (!plan?.enabled || plan.status !== 'running') return;
+  labAutomationTickRunning = true;
+
+  try {
+    const experiment = getActiveExperimentState();
+    if (!experiment || experiment.id !== plan.experimentId) {
+      updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La recolección automática se pausó porque el experimento configurado ya no está activo.' });
+      return;
+    }
+    if (eventCapturePaused) {
+      updateLabAutomationStatus({ lastError: eventCapturePauseReason || 'Captura pausada por el estado del almacén.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    const now = Date.now();
+    let phase: 'train' | 'validation' | 'test';
+    if (now < experiment.trainEndMs) phase = 'train';
+    else if (now < experiment.validationEndMs) phase = 'validation';
+    else if (experiment.testEndMs && now < experiment.testEndMs) phase = 'test';
+    else {
+      updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'Se alcanzó el corte temporal del experimento; la automatización se detuvo sin mover las fechas preregistradas.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    const metadataRecord = await getExperimentMetadata(experiment.id);
+    const metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    const protocolName = String(metadataRecord.protocol_name || '');
+    if (!(Number(metadata.protocol_revision) >= 4) && !/v4/i.test(protocolName)) {
+      updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La planificación automática solo puede activarse en un protocolo V4 nuevo. El experimento V3 existente no se modifica.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+    if (phase !== 'train' && metadata.training_frozen !== true) {
+      updateLabAutomationStatus({ lastError: 'En espera: el baseline benigno debe entrenarse y congelarse antes de iniciar validación.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+    if (phase === 'test' && metadata.validation_frozen !== true) {
+      updateLabAutomationStatus({ lastError: 'En espera: la validación debe congelarse antes de iniciar el test independiente.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    const currentSnapshot = getLabSnapshot(experiment.id) as {
+      agents: Array<{ agent_id: string; egress_ip_hash_prefix: string; status: string }>;
+      campaigns: Array<{ status: string }>;
+    };
+    if (currentSnapshot.campaigns.some((campaign) => ['queued', 'running', 'paused'].includes(campaign.status))) return;
+
+    const readyAgents = currentSnapshot.agents.filter((agent) => agent.status === 'ready');
+    if (!readyAgents.length) {
+      updateLabAutomationStatus({ lastError: 'En espera: no hay agentes locales conectados y disponibles.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    const batch = getNextLabAutomationBatch(experiment.id, phase);
+    if (!batch) {
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+    if (batch.scenarioId === 'attack_distributed') {
+      const distinctOrigins = new Set(readyAgents.map((agent) => agent.egress_ip_hash_prefix));
+      if (readyAgents.length < 4 || distinctOrigins.size < 4) {
+        updateLabAutomationStatus({ lastError: 'En espera: la fase requiere cuatro agentes activos desde cuatro IP de salida verificadas para la campaña distribuida.' });
+        await persistLabAutomationState(experiment.id);
+        return;
+      }
+    }
+
+    const { campaign, manifest } = createLabCampaign({
+      experimentId: experiment.id,
+      targetAccount: batch.targetAccount,
+      scenarioIds: [batch.scenarioId],
+      repetitions: batch.repetitions,
+      phase,
+      scheduledByAutomation: true,
+    });
+
+    const phaseEndAtMs = phase === 'train'
+      ? experiment.trainEndMs
+      : phase === 'validation'
+        ? experiment.validationEndMs
+        : experiment.testEndMs;
+    const plannedJobs = (getLabSnapshot(experiment.id).campaigns as Array<Record<string, unknown>>)
+      .find((item) => item.campaign_id === campaign.campaignId)?.jobs as Array<Record<string, unknown>>;
+    const finishByAgent = new Map<string, number>();
+    for (const job of [...plannedJobs].sort((a, b) => Date.parse(String(a.start_at)) - Date.parse(String(b.start_at)))) {
+      const agentId = String(job.agent_id || '');
+      const plannedStart = Date.parse(String(job.start_at));
+      const attempts = Number(job.attempts_planned || 0);
+      const plannedDelays = Array.isArray(job.planned_inter_attempt_delays_ms)
+        ? (job.planned_inter_attempt_delays_ms as unknown[]).filter((value): value is number => typeof value === 'number')
+        : [];
+      const effectiveStart = Math.max(plannedStart, finishByAgent.get(agentId) || plannedStart);
+      finishByAgent.set(agentId, effectiveStart + (attempts * 330_000) + plannedDelays.reduce((sum, delay) => sum + delay, 0));
+    }
+    const latestFinish = Math.max(...finishByAgent.values());
+    if (!Number.isFinite(latestFinish) || !phaseEndAtMs || latestFinish >= phaseEndAtMs) {
+      updateLabCampaign(campaign.campaignId, 'stop');
+      updateLabAutomationStatus({ lastError: 'Lote no programado: su duración máxima estimada cruza el corte preregistrado de la fase.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    try {
+      await appendLabCampaignManifest(experiment.id, manifest);
+      await saveLabCoordinatorState(experiment.id, () => serializeLabCoordinatorState(experiment.id));
+      activateLabCampaign(campaign.campaignId);
+      await saveLabCoordinatorState(experiment.id, () => serializeLabCoordinatorState(experiment.id));
+      updateLabAutomationStatus({ lastError: null });
+      await persistLabAutomationState(experiment.id);
+      console.log(`Recolección automática: campaña ${campaign.campaignId}, fase ${phase}, escenario ${batch.scenarioId}, ${batch.repetitions} sesiones.`);
+    } catch (error) {
+      updateLabCampaign(campaign.campaignId, 'stop');
+      throw error;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Error desconocido del planificador experimental.';
+    console.error('Planificador de recolección Centinela:', message);
+    const current = getLabAutomationPlan();
+    if (current) {
+      updateLabAutomationStatus({ lastError: message.slice(0, 240) });
+      try { await persistLabAutomationState(current.experimentId); } catch { /* se reintentará en el próximo ciclo */ }
+    }
+  } finally {
+    labAutomationTickRunning = false;
+  }
+}
+
+
+app.post('/api/lab/automation/start', requiereAdmin, async (req: Request, res: Response) => {
+  try {
+    const experiment = getActiveExperimentState();
+    if (!experiment) return res.status(409).json({ error: 'No hay un experimento activo.' });
+    const metadataRecord = await getExperimentMetadata(experiment.id);
+    const metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    if (!(Number(metadata.protocol_revision) >= 4) && !/v4/i.test(String(metadataRecord.protocol_name || ''))) {
+      return res.status(409).json({ error: 'La recolección automática requiere crear un protocolo V4 nuevo. El experimento V3 actual permanece intacto.' });
+    }
+    if (CENTINELA_LAB_AGENT_TOKEN.length < 32 || !eventStoreStatus().configured) {
+      return res.status(503).json({ error: 'El token de agentes y el almacenamiento persistente deben estar configurados.' });
+    }
+    const targets = req.body?.targets && typeof req.body.targets === 'object'
+      ? req.body.targets as Record<string, Record<string, number>>
+      : {
+          train: { benign_mixed: 200 },
+          validation: { benign_mixed: 100, attack_rapid: 30, attack_low_frequency: 30, attack_distributed: 20 },
+          test: { benign_mixed: 200, attack_rapid: 50, attack_low_frequency: 50, attack_distributed: 30 },
+        };
+    const plan = configureLabAutomation({
+      experimentId: experiment.id,
+      batchSize: Number(req.body?.batch_size ?? 5),
+      accounts: Array.isArray(req.body?.accounts) ? req.body.accounts : ['ronan', 'andy', 'stefano'],
+      targets,
+    });
+    await persistLabAutomationState(experiment.id);
+    io.emit('lab_campaign_update', getLabSnapshot(experiment.id));
+    void tickLabAutomation();
+    return res.status(201).json({ status: 'running', plan });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo activar la recolección automática.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/lab/automation/stop', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    const plan = stopLabAutomation();
+    const experimentId = getActiveExperimentId();
+    if (experimentId) await persistLabAutomationState(experimentId);
+    io.emit('lab_campaign_update', getLabSnapshot(experimentId));
+    return res.json({ status: 'paused', plan });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo pausar la recolección automática.';
+    return res.status(400).json({ error: message });
+  }
+});
+
 app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response) => {
   try {
     if (CENTINELA_LAB_AGENT_TOKEN.length < 32) {
@@ -687,9 +885,12 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
         const plannedStart = Date.parse(String(job.start_at));
         const scenario = LAB_SCENARIO_CATALOG[String(job.scenario_id) as keyof typeof LAB_SCENARIO_CATALOG];
         const effectiveStart = Math.max(plannedStart, finishByAgent.get(agentId) || plannedStart);
-        const estimatedFinish = effectiveStart +
-          (scenario.outcomes.length * 330_000) +
-          ((scenario.outcomes.length - 1) * scenario.intervalMs);
+        const attempts = Number(job.attempts_planned || 0);
+        const plannedDelays = Array.isArray(job.planned_inter_attempt_delays_ms)
+          ? (job.planned_inter_attempt_delays_ms as unknown[]).filter((value): value is number => typeof value === 'number')
+          : [];
+        const estimatedFinish = effectiveStart + (attempts * 330_000) +
+          plannedDelays.reduce((sum, delay) => sum + delay, 0);
         finishByAgent.set(agentId, estimatedFinish);
       }
       const latestFinish = Math.max(...finishByAgent.values());
