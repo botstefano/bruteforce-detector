@@ -49,7 +49,7 @@ FEATURE_SCHEMA_COUNTS = {
     "centinela-auth-features-v2": 5,
     "centinela-auth-features-v3": 4,
 }
-FEATURE_WINDOW_SECONDS = 120.0
+WINDOW_SECONDS = 120.0
 WINDOW_SECONDS = 120.0
 
 
