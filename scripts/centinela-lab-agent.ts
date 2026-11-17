@@ -10,6 +10,7 @@ interface LabJob {
   agent_id: string;
   target_account: 'ronan' | 'andy' | 'stefano';
   start_at: string;
+  deadline_at?: string | null;
   interval_ms: number;
   inter_attempt_delays_ms?: number[];
   session_profile?: Record<string, unknown>;
@@ -187,6 +188,12 @@ async function executeJob(job: LabJob): Promise<void> {
         break;
       }
 
+      if (job.deadline_at) {
+        const deadlineMs = Date.parse(job.deadline_at);
+        if (!Number.isFinite(deadlineMs) || Date.now() + 366_000 >= deadlineMs) {
+          throw new Error('Se detuvo la tarea antes de iniciar una autenticación que podría cruzar el corte temporal de la fase.');
+        }
+      }
       const expectedAuthSuccess = Boolean(job.outcomes[index]);
       const invalidCandidate = `${invalidPassword}-${index + 1}`;
       if (!expectedAuthSuccess && Object.values(credentials).includes(invalidCandidate)) {
