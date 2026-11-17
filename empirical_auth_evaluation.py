@@ -214,6 +214,41 @@ def cluster_bootstrap_f1(
     }
 
 
+def scenario_metrics(
+    rows: list[dict[str, Any]],
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    groups: np.ndarray,
+    seed: int,
+    iterations: int,
+    scores: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Report test performance by preregistered scenario without event-level pseudoreplication."""
+    scenario_names = [
+        str(row.get("scenario") or row.get("origin") or "unknown")
+        for row in rows
+    ]
+    output: dict[str, Any] = {}
+    for scenario in sorted(set(scenario_names)):
+        indexes = np.asarray([i for i, name in enumerate(scenario_names) if name == scenario], dtype=np.int64)
+        scenario_scores = scores[indexes] if scores is not None else None
+        metrics = binary_metrics(y_true[indexes], y_pred[indexes], scenario_scores)
+        scenario_groups = groups[indexes]
+        metrics["independent_campaigns"] = int(len(np.unique(scenario_groups)))
+        metrics["unique_observed_sources"] = int(len({
+            str(rows[int(i)].get("source_ip_hash") or "")
+            for i in indexes
+            if rows[int(i)].get("source_ip_hash")
+        }))
+        metrics["benign_events"] = int(np.sum(y_true[indexes] == 0))
+        metrics["attack_events"] = int(np.sum(y_true[indexes] == 1))
+        metrics["f1_cluster_bootstrap_95ci"] = cluster_bootstrap_f1(
+            y_true[indexes], y_pred[indexes], scenario_groups, seed, iterations
+        )
+        output[scenario] = metrics
+    return output
+
+
 def latency_summary(values: list[Any]) -> dict[str, Any]:
     numeric = np.asarray(
         [float(value) for value in values if value not in (None, "") and math.isfinite(float(value))],
@@ -369,6 +404,7 @@ def main() -> int:
         "event_id": [r["event_id"] for r in test_labeled_rows],
         "occurred_at": [r["occurred_at"] for r in test_labeled_rows],
         "campaign_id": [r.get("campaign_id", "") for r in test_labeled_rows],
+        "scenario": [r.get("scenario", "") for r in test_labeled_rows],
         "ground_truth_label": [r["ground_truth_label"] for r in test_labeled_rows],
     }
 
@@ -383,6 +419,9 @@ def main() -> int:
             y_test, test_pred, test_groups, args.seed, args.bootstrap
         )
         metrics["f1_cluster_bootstrap_95ci"] = bootstrap
+        metrics["by_scenario"] = scenario_metrics(
+            test_labeled_rows, y_test, test_pred, test_groups, args.seed, args.bootstrap, test_scores
+        )
         metrics["threshold_selected_on_validation"] = threshold
         metrics["validation_f1_at_selected_threshold"] = float(
             f1_score(y_val, (val_scores >= threshold).astype(np.int8), zero_division=0)
@@ -407,6 +446,9 @@ def main() -> int:
         metrics["f1_cluster_bootstrap_95ci"] = cluster_bootstrap_f1(
             y_test, predictions, test_groups, args.seed, args.bootstrap
         )
+        metrics["by_scenario"] = scenario_metrics(
+            test_labeled_rows, y_test, predictions, test_groups, args.seed, args.bootstrap
+        )
         runtime_metrics[name] = metrics
         prediction_frame[f"{name}_predicted_attack"] = predictions
 
@@ -426,6 +468,18 @@ def main() -> int:
         "test_labeled": len(test_rows),
         "test_benign": sum(r["ground_truth_label"] == "benign" for r in test_rows),
         "test_attack": sum(r["ground_truth_label"] == "attack" for r in test_rows),
+        "test_independent_campaigns": len({r.get("campaign_id") for r in test_labeled_rows if r.get("campaign_id")}),
+        "test_unique_observed_sources": len({r.get("source_ip_hash") for r in test_labeled_rows if r.get("source_ip_hash")}),
+        "test_by_scenario": {
+            scenario: {
+                "events": sum(str(r.get("scenario") or r.get("origin") or "unknown") == scenario for r in test_labeled_rows),
+                "benign": sum(str(r.get("scenario") or r.get("origin") or "unknown") == scenario and r["ground_truth_label"] == "benign" for r in test_labeled_rows),
+                "attack": sum(str(r.get("scenario") or r.get("origin") or "unknown") == scenario and r["ground_truth_label"] == "attack" for r in test_labeled_rows),
+                "campaigns": len({r.get("campaign_id") for r in test_labeled_rows if str(r.get("scenario") or r.get("origin") or "unknown") == scenario and r.get("campaign_id")}),
+                "observed_sources": len({r.get("source_ip_hash") for r in test_labeled_rows if str(r.get("scenario") or r.get("origin") or "unknown") == scenario and r.get("source_ip_hash")}),
+            }
+            for scenario in sorted({str(r.get("scenario") or r.get("origin") or "unknown") for r in test_labeled_rows})
+        },
     }
 
     input_hash = sha256_file(input_path)
