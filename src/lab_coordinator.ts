@@ -401,6 +401,50 @@ export function heartbeatLabAgent(agentId: string): {
   return { agent: { ...agent }, command: 'continue' };
 }
 
+
+function buildLegacyScenarioProfile(scenarioId: LabScenarioId): {
+  outcomes: boolean[];
+  delaysMs: number[];
+  profile: Record<string, unknown>;
+} {
+  const definitions: Record<LabScenarioId, { outcomes: boolean[]; intervalMs: number; profileId: string }> = {
+    benign_mixed: {
+      outcomes: [true, true, false, true, false, true, true],
+      intervalMs: 4_000,
+      profileId: 'legacy_benign_mixed_v1',
+    },
+    attack_rapid: {
+      outcomes: [false, false, false, false, false, false],
+      intervalMs: 2_000,
+      profileId: 'legacy_attack_rapid_v1',
+    },
+    attack_low_frequency: {
+      outcomes: [false, false, false, false, false, false, false, false],
+      intervalMs: 75_000,
+      profileId: 'legacy_attack_low_frequency_v1',
+    },
+    attack_distributed: {
+      outcomes: [false, false],
+      intervalMs: 12_000,
+      profileId: 'legacy_attack_distributed_v1',
+    },
+  };
+  const definition = definitions[scenarioId];
+  const delaysMs = Array.from({ length: Math.max(0, definition.outcomes.length - 1) }, () => definition.intervalMs);
+  return {
+    outcomes: [...definition.outcomes],
+    delaysMs,
+    profile: {
+      profile_id: definition.profileId,
+      profile_version: 1,
+      planned_attempts: definition.outcomes.length,
+      planned_failures: definition.outcomes.filter((success) => !success).length,
+      inter_attempt_delays_ms: [...delaysMs],
+      reproducibility: 'legacy_fixed_v1',
+    },
+  };
+}
+
 export function createLabCampaign(input: {
   experimentId: string;
   targetAccount: string;
@@ -467,7 +511,9 @@ export function createLabCampaign(input: {
       const runTargetAccount = targetAccounts[(repetition - 1) % targetAccounts.length];
       const runId = randomUUID();
       const runSeed = Number.parseInt(randomUUID().replace(/-/g, '').slice(0, 8), 16) >>> 0;
-      const profile = buildScenarioProfile(scenarioId, runSeed);
+      const profile = input.scheduledByAutomation
+        ? buildScenarioProfile(scenarioId, runSeed)
+        : buildLegacyScenarioProfile(scenarioId);
       const startAt = nextSessionStart;
       const sessionGapMs = randomBetween(seededRandom(runSeed ^ 0x9e3779b9), 10 * 60_000, 45 * 60_000);
       const plannedActiveDurationMs = profile.delaysMs.reduce((sum, delay) => sum + delay, 0) + profile.outcomes.length * 2_000;
