@@ -1004,6 +1004,9 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
         : 'test';
     const metadataRecord = await getExperimentMetadata(activeExperiment.id);
     const experimentMetadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    if (Number(experimentMetadata.protocol_revision) >= 4 || /v4/i.test(String(metadataRecord.protocol_name || ''))) {
+      return res.status(409).json({ error: 'En el protocolo V4 las campañas se generan únicamente mediante el planificador científico automático; las campañas manuales están deshabilitadas para evitar alterar las cuotas preregistradas.' });
+    }
     if (phase !== 'train' && experimentMetadata.training_frozen !== true) {
       return res.status(409).json({ error: 'No se permiten campañas de validación o test hasta entrenar y congelar el baseline benigno.' });
     }
@@ -1908,7 +1911,22 @@ app.post('/api/experimentos/:experimentId/abortar', requiereAdmin, async (req: R
 
 app.post('/api/experimentos/:experimentId/finalizar', requiereAdmin, async (req: Request, res: Response) => {
   try {
-    const experiment = await finishExperimentRecord(singleRouteParam(req.params.experimentId));
+    const experimentId = singleRouteParam(req.params.experimentId);
+    const metadataRecord = await getExperimentMetadata(experimentId);
+    const metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    const isTemporalProtocol = /v[34]/i.test(String(metadataRecord.protocol_name || '')) ||
+      Number(metadata.protocol_revision) >= 3;
+    if (isTemporalProtocol) {
+      const testEndAt = typeof metadata.test_end_at === 'string' ? Date.parse(metadata.test_end_at) : NaN;
+      if (!Number.isFinite(testEndAt) || Date.now() < testEndAt) {
+        return res.status(409).json({ error: 'El experimento temporal no puede finalizarse antes de su corte preregistrado test_end_at.' });
+      }
+    }
+    const snapshot = getLabSnapshot(experimentId) as { campaigns: Array<{ status: string }> };
+    if (snapshot.campaigns.some((campaign) => ['queued', 'running', 'paused'].includes(campaign.status))) {
+      return res.status(409).json({ error: 'No se puede finalizar mientras haya campañas con tareas pendientes o en ejecución.' });
+    }
+    const experiment = await finishExperimentRecord(experimentId);
     return res.json({ status: 'completed', experiment });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo finalizar el experimento.';
