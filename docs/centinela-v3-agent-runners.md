@@ -66,6 +66,14 @@ Render ofrece IP de salida dedicadas únicamente en planes Pro o superiores; la 
 - El coordinador persiste en `centinela_experiments.metadata.lab_coordinator_state` las campañas, tareas, progreso y `event_id` confirmados. Al reiniciar, restaura las tareas activas y las deja disponibles para que el mismo runner vuelva a registrarse y continúe. Cada intento usa una clave `request_id` determinista para que un reintento posterior a un timeout no duplique el evento. La migración que añade el índice único parcial de `request_id` está en la rama de desarrollo, pero aún debe aplicarse a Supabase antes del despliegue v3. Antes de una captura definitiva deben probarse reinicio, recuperación del coordinador, reanudación del mismo runner y replay idempotente; no desplegar durante una campaña.
 - La interfaz muestra las IP solo como prefijos HMAC y los eventos que el detector persiste. El canal Socket.IO exige sesión administrativa.
 
+## Operación en Render Free
+
+El detector y el portal están en instancias Free. Render apaga una web service Free tras 15 minutos sin tráfico entrante y la vuelve a iniciar cuando recibe una nueva petición HTTP; la documentación indica que el arranque puede tardar aproximadamente un minuto. Render también puede reiniciar instancias Free en cualquier momento.
+
+Antes de iniciar un runner, visita `https://bruteforce-detector-2uv4.onrender.com/health` y espera hasta obtener la respuesta JSON del detector. Después comprueba el health del portal. Un HTTP 502 durante el primer arranque no debe interpretarse como un evento capturado ni como un fallo del detector; si continúa tras el arranque, detén el piloto y revisa el despliegue y los logs de Render.
+
+Para una campaña experimental desatendida y de larga duración, una instancia que no se apague por inactividad es operativamente más fiable. No se recomienda usar pings externos como sustituto de una arquitectura estable: cualquier reinicio puede interrumpir una tarea, aunque la cola y el progreso estén persistidos en Supabase.
+
 ## Verificación previa
 
 Antes de crear una campaña:
