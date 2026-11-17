@@ -661,7 +661,7 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
         const scenario = LAB_SCENARIO_CATALOG[String(job.scenario_id) as keyof typeof LAB_SCENARIO_CATALOG];
         const effectiveStart = Math.max(plannedStart, finishByAgent.get(agentId) || plannedStart);
         const estimatedFinish = effectiveStart +
-          (scenario.outcomes.length * 25_000) +
+          (scenario.outcomes.length * 330_000) +
           ((scenario.outcomes.length - 1) * scenario.intervalMs);
         finishByAgent.set(agentId, estimatedFinish);
       }
