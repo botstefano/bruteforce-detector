@@ -416,7 +416,7 @@ export function createLabCampaign(input: {
     throw new Error('repetitions debe ser un entero entre 1 y 5.');
   }
   if (!input.experimentId) throw new Error('Se requiere un experimento activo.');
-  const targetAccounts = input.targetAccounts?.length ? input.targetAccounts : [input.targetAccount];
+  const targetAccounts = [...new Set(input.targetAccounts?.length ? input.targetAccounts : [input.targetAccount])];
   if (!targetAccounts.length || targetAccounts.some((account) => !/^(ronan|andy|stefano)$/.test(account))) {
     throw new Error('Las cuentas objetivo deben ser cuentas de laboratorio autorizadas.');
   }
@@ -603,9 +603,9 @@ export function configureLabAutomation(input: {
     throw new Error('El tamaño de lote automático debe estar entre 1 y 5 sesiones.');
   }
   const allowedAccounts = ['ronan', 'andy', 'stefano'] as const;
-  const accounts = (input.accounts ?? [...allowedAccounts]).filter(
+  const accounts = [...new Set((input.accounts ?? [...allowedAccounts]).filter(
     (account): account is typeof allowedAccounts[number] => allowedAccounts.includes(account as typeof allowedAccounts[number])
-  );
+  ))];
   if (!accounts.length) throw new Error('Configura al menos una cuenta de laboratorio autorizada.');
   const targets: LabAutomationPlan['targets'] = { train: {}, validation: {}, test: {} };
   for (const phase of ['train', 'validation', 'test'] as const) {
@@ -623,8 +623,13 @@ export function configureLabAutomation(input: {
   if (!targets.train.benign_mixed || targets.train.benign_mixed < 1) {
     throw new Error('Define un objetivo de al menos una sesión benigna para entrenamiento.');
   }
-  if (Object.keys(targets.validation).length === 0 || Object.keys(targets.test).length === 0) {
-    throw new Error('Define objetivos independientes para validación y test.');
+  const evaluationScenarios: LabScenarioId[] = ['benign_mixed', 'attack_rapid', 'attack_low_frequency', 'attack_distributed'];
+  for (const phase of ['validation', 'test'] as const) {
+    for (const scenarioId of evaluationScenarios) {
+      if (!Number.isInteger(targets[phase][scenarioId]) || (targets[phase][scenarioId] ?? 0) < 1) {
+        throw new Error(`La fase ${phase} debe incluir al menos una sesión de ${scenarioId}; no se omitirá ningún escenario de evaluación.`);
+      }
+    }
   }
 
   labAutomationPlan = {
