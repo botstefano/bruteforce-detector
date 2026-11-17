@@ -397,6 +397,62 @@ export async function createExperimentRecord(input: {
   return data;
 }
 
+export async function appendLabCampaignManifest(
+  experimentId: string,
+  manifest: Record<string, unknown>
+) {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  if (!experimentId || typeof manifest.campaign_id !== 'string') {
+    throw new Error('Se requiere experiment_id y campaign_id para registrar el manifiesto.');
+  }
+
+  const { data: current, error: readError } = await client
+    .from('centinela_experiments')
+    .select('id, metadata, status')
+    .eq('id', experimentId)
+    .maybeSingle();
+  if (readError) throw new Error(`No se pudo consultar el experimento para registrar el manifiesto: ${readError.message}`);
+  if (!current || current.status !== 'running') {
+    throw new Error('El manifiesto solo puede añadirse a un experimento activo.');
+  }
+
+  const metadata = (current.metadata ?? {}) as Record<string, unknown>;
+  const existing = Array.isArray(metadata.lab_campaign_manifests)
+    ? metadata.lab_campaign_manifests as Record<string, unknown>[]
+    : [];
+  if (existing.some((item) => item.campaign_id === manifest.campaign_id)) {
+    throw new Error('El manifiesto de esta campaña ya está registrado.');
+  }
+  const updatedMetadata = {
+    ...metadata,
+    lab_campaign_manifests: [...existing, manifest],
+    lab_protocol_version: 'centinela-auth-study-v3',
+  };
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ metadata: updatedMetadata })
+    .eq('id', experimentId)
+    .eq('status', 'running')
+    .select('id, metadata')
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo persistir el manifiesto de campaña: ${error.message}`);
+  if (!data) throw new Error('El experimento dejó de estar activo antes de guardar el manifiesto.');
+  if (activeExperimentId === experimentId) activeExperimentMetadata = updatedMetadata;
+  return data;
+}
+
+export async function getExperimentMetadata(experimentId: string) {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .select('id, metadata, status')
+    .eq('id', experimentId)
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo recuperar el metadato del experimento: ${error.message}`);
+  if (!data) throw new Error('El experimento solicitado no existe.');
+  return data;
+}
+
 export async function finishExperimentRecord(experimentId: string) {
   if (!client || !hashSecret) throw new Error('El almacén persistente no está configurado.');
   const { data, error } = await client
