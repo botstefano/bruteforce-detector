@@ -17,6 +17,7 @@ interface LabAgent {
   status: 'ready' | 'running' | 'paused' | 'offline' | 'error';
   currentJobId: string | null;
   version: string;
+  nextJobAvailableAt: number;
 }
 
 interface LabJob {
@@ -28,6 +29,7 @@ interface LabJob {
   targetAccount: string;
   startAt: number;
   deadlineAt: number | null;
+  sessionGapAfterMs: number;
   intervalMs: number;
   interAttemptDelaysMs: number[];
   outcomes: boolean[];
@@ -133,6 +135,7 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
     // A live runner's next authenticated poll will restore its ready/running state.
     agent.status = 'offline';
     agent.lastSeenAt = Date.now();
+    if (!Number.isFinite(agent.nextJobAvailableAt)) agent.nextJobAvailableAt = 0;
     agents.set(agent.agentId, { ...agent });
   }
   for (const raw of state.campaigns) {
@@ -160,6 +163,7 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
     if (!job.sessionProfile || typeof job.sessionProfile !== 'object') job.sessionProfile = { profile_version: 'legacy-fixed-v1' };
     if (!Number.isInteger(job.seed)) job.seed = 0;
     if (typeof job.deadlineAt !== 'number' || !Number.isFinite(job.deadlineAt)) job.deadlineAt = null;
+    if (!Number.isFinite(job.sessionGapAfterMs)) job.sessionGapAfterMs = 0;
     const eventIds = Array.isArray(job.summary?.event_ids)
       ? (job.summary.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
       : [];
@@ -329,8 +333,10 @@ export function registerLabAgent(input: {
     status: 'ready',
     currentJobId: null,
     version: input.version || 'unknown',
+    nextJobAvailableAt: 0,
   };
   agent.lastSeenAt = Date.now();
+  if (!Number.isFinite(agent.nextJobAvailableAt)) agent.nextJobAvailableAt = 0;
   agent.version = input.version || agent.version;
   if (agent.status === 'offline' || agent.status === 'error') agent.status = 'ready';
   agents.set(agentId, agent);
@@ -536,6 +542,7 @@ export function createLabCampaign(input: {
           targetAccount: runTargetAccount,
           startAt,
           deadlineAt: Number.isFinite(input.phaseEndAtMs) ? Number(input.phaseEndAtMs) : null,
+          sessionGapAfterMs: input.scheduledByAutomation ? sessionGapMs : 0,
           intervalMs: profile.delaysMs.length ? Math.round(profile.delaysMs.reduce((sum, delay) => sum + delay, 0) / profile.delaysMs.length) : 0,
           interAttemptDelaysMs: [...profile.delaysMs],
           outcomes: [...profile.outcomes],
@@ -622,6 +629,8 @@ function serializeJobForAgent(job: LabJob, agentId: string): Record<string, unkn
   const eventIds = Array.isArray(job.summary.event_ids)
     ? (job.summary.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
     : [];
+  const agent = agents.get(agentId);
+  const effectiveStartAt = Math.max(job.startAt, agent?.nextJobAvailableAt ?? 0);
   return {
     job_id: job.jobId,
     campaign_id: job.campaignId,
@@ -629,7 +638,7 @@ function serializeJobForAgent(job: LabJob, agentId: string): Record<string, unkn
     scenario_id: job.scenarioId,
     agent_id: agentId,
     target_account: job.targetAccount,
-    start_at: new Date(job.startAt).toISOString(),
+    start_at: new Date(effectiveStartAt).toISOString(),
     deadline_at: job.deadlineAt !== null ? new Date(job.deadlineAt).toISOString() : null,
     interval_ms: job.intervalMs,
     inter_attempt_delays_ms: [...job.interAttemptDelaysMs],
@@ -997,6 +1006,9 @@ export function completeLabJob(input: {
     agent.lastSeenAt = Date.now();
     agent.currentJobId = null;
     agent.status = input.status === 'failed' ? 'error' : 'ready';
+    agent.nextJobAvailableAt = input.status === 'completed'
+      ? Date.now() + job.sessionGapAfterMs
+      : Date.now();
   }
   const campaign = campaigns.get(job.campaignId);
   if (campaign) refreshCampaignStatus(campaign);
