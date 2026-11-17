@@ -560,7 +560,7 @@ export async function persistLabCollectionPlan(
     experimentId: string;
     batchSize: number;
     accounts: string[];
-    targets: Record<string, Record<string, number>>;
+    targets: Record<string, unknown>;
   },
   coordinatorState: Record<string, unknown>,
 ) {
