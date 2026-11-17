@@ -1373,6 +1373,9 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
           duplicate_replay: true,
         });
       }
+      if (context.deadlineExpired) {
+        return res.status(409).json({ error: 'El corte temporal de la fase ya venció; no se crearán eventos nuevos para esta tarea.' });
+      }
     }
     const eventMetadata = campaignId ? {
       campaign_id: campaignId,
