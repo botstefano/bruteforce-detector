@@ -32,6 +32,9 @@ const credentials = parseCredentials(requiredEnv('CENTINELA_LAB_CREDENTIALS_JSON
 
 if (agentToken.length < 32) throw new Error('CENTINELA_LAB_AGENT_TOKEN debe tener al menos 32 caracteres.');
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(agentId)) throw new Error('CENTINELA_LAB_AGENT_ID debe tener entre 3 y 64 caracteres.');
+if (invalidPassword.length < 16 || invalidPassword.length > 240) {
+  throw new Error('CENTINELA_LAB_INVALID_PASSWORD debe tener entre 16 y 240 caracteres.');
+}
 if (REQUIRED_USERS.some((username) => credentials[username] === invalidPassword)) {
   throw new Error('La credencial inválida coincide con una contraseña de prueba; cambia CENTINELA_LAB_INVALID_PASSWORD.');
 }
@@ -174,7 +177,11 @@ async function executeJob(job: LabJob): Promise<void> {
       }
 
       const expectedAuthSuccess = Boolean(job.outcomes[index]);
-      const password = expectedAuthSuccess ? credentials[job.target_account] : `${invalidPassword}-${index + 1}`;
+      const invalidCandidate = `${invalidPassword}-${index + 1}`;
+      if (!expectedAuthSuccess && Object.values(credentials).includes(invalidCandidate)) {
+        throw new Error('La credencial inválida generada coincide con una contraseña del testbed; cancela la tarea y cambia el secreto base.');
+      }
+      const password = expectedAuthSuccess ? credentials[job.target_account] : invalidCandidate;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 25_000);
       try {
