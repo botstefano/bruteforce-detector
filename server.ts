@@ -56,6 +56,7 @@ import {
   updateLabAutomationStatus,
   claimNextLabJob,
   completeLabJob,
+  expireStaleLabJobs,
   createLabCampaign,
   getLabCampaignForLabeling,
   getLabJobControl,
@@ -757,6 +758,12 @@ async function tickLabAutomation(): Promise<void> {
       updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La planificación automática solo puede activarse en un protocolo V4 nuevo. El experimento V3 existente no se modifica.' });
       await persistLabAutomationState(experiment.id);
       return;
+    }
+
+    const expiredJobs = expireStaleLabJobs();
+    if (expiredJobs > 0) {
+      console.warn(`El planificador marcó ${expiredJobs} tareas fallidas por pérdida de heartbeat del runner.`);
+      await persistLabAutomationState(experiment.id);
     }
 
     let snapshot = getLabSnapshot(experiment.id) as {
