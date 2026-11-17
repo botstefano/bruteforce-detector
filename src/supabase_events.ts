@@ -212,7 +212,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     ground_truth_updated_at: null,
     ground_truth_notes: null,
     experiment_id: activeExperimentId,
-    scenario: event.origen,
+    scenario: typeof event.metadata?.scenario_id === 'string' ? event.metadata.scenario_id : event.origen,
     campaign_id: event.campaign_id ?? null,
     dataset_split: splitForTimestamp(event.timestamp),
     request_id: event.request_id ?? null,
