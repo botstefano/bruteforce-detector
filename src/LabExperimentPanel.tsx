@@ -274,6 +274,25 @@ export function LabExperimentPanel() {
     }
   };
 
+
+  const resumeAutomation = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await readJson(await fetch('/api/lab/automation/resume', {
+        method: 'POST',
+        credentials: 'same-origin',
+      }));
+      setNotice('Recolección V4 reanudada con las mismas cuotas, cuentas y parámetros preregistrados.');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo reanudar la recolección automática.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const stopAutomation = async () => {
     setBusy(true);
     setError(null);
@@ -474,7 +493,10 @@ export function LabExperimentPanel() {
           <p className="text-xs text-slate-300">Protocolo actual: V{snapshot.protocol_revision ?? '—'}. Entrenamiento: 200 sesiones benignas; validación: 100 benignas y 30 por escenario de ataque; prueba final: 200 benignas y 50 rápidas, 50 de baja frecuencia y 30 distribuidas.</p>
           {snapshot.automation?.lastError && <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">{snapshot.automation.lastError}</p>}
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={busy || snapshot.protocol_revision !== 4 || snapshot.automation?.enabled === true} onClick={() => void startAutomation()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">Iniciar recolección automática V4</button>
+            <button type="button" disabled={busy || snapshot.protocol_revision !== 4 || snapshot.automation !== null && snapshot.automation !== undefined} onClick={() => void startAutomation()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">Configurar y empezar V4</button>
+            {snapshot.automation?.status === 'paused' && !snapshot.automation.enabled && (
+              <button type="button" disabled={busy} onClick={() => void resumeAutomation()} className="rounded-xl bg-amber-600 px-4 py-3 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-40">Reanudar plan V4</button>
+            )}
             <button type="button" disabled={busy || snapshot.automation?.enabled !== true} onClick={() => void stopAutomation()} className="rounded-xl border border-rose-500/30 px-4 py-3 text-xs font-bold text-rose-300 disabled:opacity-40">Pausar planificación</button>
           </div>
           {snapshot.protocol_revision !== 4 && <p className="text-[11px] text-amber-300">El experimento V3 activo no se modificará. Finalízalo o ciérralo formalmente y crea un protocolo V4 para habilitar este planificador.</p>}
