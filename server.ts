@@ -538,6 +538,233 @@ app.get('/api/experimentos/estado', requiereAdmin, (_req: Request, res: Response
   });
 });
 
+// =================================================================
+// LABORATORIO V3: coordinador y agentes HTTP controlados
+// =================================================================
+
+app.get('/api/lab/state', requiereAdmin, (_req: Request, res: Response) => {
+  return res.json({
+    ...getLabSnapshot(getActiveExperimentId()),
+    experiment_id: getActiveExperimentId(),
+    agent_token_configured: CENTINELA_LAB_AGENT_TOKEN.length >= 32,
+  });
+});
+
+app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response) => {
+  try {
+    if (CENTINELA_LAB_AGENT_TOKEN.length < 32) {
+      return res.status(503).json({ error: 'Configura CENTINELA_LAB_AGENT_TOKEN antes de crear campañas.' });
+    }
+    const activeExperiment = getActiveExperimentState();
+    if (!activeExperiment) return res.status(409).json({ error: 'Crea primero el experimento temporal v3.' });
+    if (eventCapturePaused) return res.status(503).json({ error: eventCapturePauseReason || 'La captura está pausada.' });
+    const scenarioIds = Array.isArray(req.body?.scenario_ids) ? req.body.scenario_ids : [];
+    const targetAccount = typeof req.body?.target_account === 'string' ? req.body.target_account.trim().toLowerCase() : '';
+    const repetitions = Number(req.body?.repetitions ?? 1);
+    const { campaign, manifest } = createLabCampaign({
+      experimentId: activeExperiment.id,
+      targetAccount,
+      scenarioIds,
+      repetitions,
+    });
+    try {
+      await appendLabCampaignManifest(activeExperiment.id, manifest);
+    } catch (error) {
+      updateLabCampaign(campaign.campaignId, 'stop');
+      throw error;
+    }
+    io.emit('lab_campaign_update', getLabSnapshot(activeExperiment.id));
+    return res.status(201).json({ campaign_id: campaign.campaignId, manifest, state: getLabSnapshot(activeExperiment.id) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo crear la campaña experimental.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/lab/campaigns/:campaignId/:action', requiereAdmin, (req: Request, res: Response) => {
+  const action = singleRouteParam(req.params.action);
+  if (!['pause', 'resume', 'stop'].includes(action)) {
+    return res.status(400).json({ error: 'Acción no válida. Usa pause, resume o stop.' });
+  }
+  try {
+    const campaign = updateLabCampaign(
+      singleRouteParam(req.params.campaignId),
+      action as 'pause' | 'resume' | 'stop'
+    );
+    const state = getLabSnapshot(campaign.experimentId);
+    io.emit('lab_campaign_update', state);
+    return res.json({ campaign_id: campaign.campaignId, status: campaign.status, state });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo actualizar la campaña.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/lab/campaigns/:campaignId/label', requiereAdmin, async (req: Request, res: Response) => {
+  try {
+    const campaignId = singleRouteParam(req.params.campaignId);
+    const { campaign, jobs } = getLabCampaignForLabeling(campaignId);
+    const experiment = await getExperimentMetadata(campaign.experimentId);
+    const metadata = (experiment.metadata ?? {}) as Record<string, unknown>;
+    const manifests = Array.isArray(metadata.lab_campaign_manifests)
+      ? metadata.lab_campaign_manifests as Record<string, unknown>[]
+      : [];
+    const savedManifest = manifests.find((item) => item.campaign_id === campaignId);
+    if (!savedManifest || !Array.isArray(savedManifest.scenarios)) {
+      throw new Error('No se encontró el manifiesto independiente persistido para esta campaña.');
+    }
+    const labelByRun = new Map<string, { label: 'benign' | 'attack'; scenarioId: string }>();
+    for (const run of savedManifest.scenarios as Record<string, unknown>[]) {
+      if (typeof run.run_id === 'string' && (run.expected_label === 'benign' || run.expected_label === 'attack')) {
+        labelByRun.set(run.run_id, { label: run.expected_label, scenarioId: String(run.scenario_id || 'unknown') });
+      }
+    }
+    const observed = await fetchObservedEvents(campaign.experimentId);
+    const byId = new Map(observed.map((event) => [event.event_id, event]));
+    let labeled = 0;
+    let alreadyLabeled = 0;
+    for (const job of jobs) {
+      const expected = labelByRun.get(job.runId);
+      if (!expected || expected.label !== job.expectedLabel) {
+        throw new Error(`El manifiesto no coincide con la tarea ${job.jobId}; se detuvo el etiquetado.`);
+      }
+      for (const eventId of job.eventIds) {
+        const event = byId.get(eventId);
+        if (!event || event.experiment_id !== campaign.experimentId || event.campaign_id !== campaignId) {
+          throw new Error(`El evento ${eventId} no pertenece a la campaña y experimento esperados.`);
+        }
+        const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
+        if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId) {
+          throw new Error(`La procedencia del evento ${eventId} no coincide con su manifiesto.`);
+        }
+        if (event.ground_truth_label === expected.label) {
+          alreadyLabeled++;
+          continue;
+        }
+        if (event.ground_truth_label !== 'unknown') {
+          throw new Error(`El evento ${eventId} ya tiene una etiqueta distinta; requiere revisión manual.`);
+        }
+        await labelObservedEvent({
+          eventId,
+          label: expected.label,
+          method: 'authorized_automated_campaign_manifest_v1',
+          rationale: `Evento de la campaña autorizada ${campaignId}, ejecución ${job.runId}, escenario ${expected.scenarioId}; etiqueta derivada del manifiesto independiente preregistrado, no de las alertas de Centinela.`,
+          labeledBy: 'centinela-v3-lab-coordinator',
+        });
+        labeled++;
+      }
+    }
+    return res.json({ status: 'ok', campaign_id: campaignId, labeled, already_labeled: alreadyLabeled });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudieron etiquetar los eventos de la campaña.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/lab/agent/register', requiereAgenteLab, (req: Request, res: Response) => {
+  try {
+    const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
+    const version = typeof req.body?.version === 'string' ? req.body.version.slice(0, 80) : 'unknown';
+    const sourceIp = ipDelCliente(req);
+    if (isIP(sourceIp) === 0) return res.status(400).json({ error: 'No se pudo verificar la IP de salida del agente.' });
+    const identifiers = getAnalyticsIdentifiers(sourceIp, agentId || 'invalid-agent');
+    const agent = registerLabAgent({ agentId, egressIpHash: identifiers.ipKey, version });
+    io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
+    return res.status(201).json({
+      agent_id: agent.agentId,
+      egress_ip_hash_prefix: agent.egressIpHash.slice(0, 12),
+      status: agent.status,
+      registered_at: new Date(agent.registeredAt).toISOString(),
+      heartbeat_interval_ms: 10_000,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo registrar el agente.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.get('/api/lab/agent/jobs/next', requiereAgenteLab, (req: Request, res: Response) => {
+  try {
+    const agentId = String(req.headers['x-centinela-agent-id'] || '').trim();
+    if (!agentId) return res.status(400).json({ error: 'Falta X-Centinela-Agent-Id.' });
+    const job = claimNextLabJob(agentId);
+    if (!job) return res.json({ job: null, status: 'idle' });
+    io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
+    return res.json({ job, status: 'assigned' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo asignar una tarea.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/lab/agent/heartbeat', requiereAgenteLab, (req: Request, res: Response) => {
+  try {
+    const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
+    const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
+    const result = heartbeatLabAgent(agentId);
+    const command = jobId ? getLabJobControl(agentId, jobId) : result.command;
+    io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
+    return res.json({ command, last_seen_at: new Date(result.agent.lastSeenAt).toISOString() });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo actualizar el heartbeat.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/lab/agent/progress', requiereAgenteLab, (req: Request, res: Response) => {
+  try {
+    const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
+    const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
+    reportLabJobProgress(agentId, jobId, Number(req.body?.attempts_completed));
+    io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
+    return res.json({ status: 'ok' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo registrar el progreso.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/lab/agent/complete', requiereAgenteLab, (req: Request, res: Response) => {
+  try {
+    const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
+    const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
+    const status = req.body?.status;
+    if (!['completed', 'failed', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'Estado final de tarea no válido.' });
+    }
+    const rawSummary = req.body?.summary && typeof req.body.summary === 'object' ? req.body.summary : {};
+    const summary = {
+      event_ids: Array.isArray(rawSummary.event_ids)
+        ? rawSummary.event_ids.filter((value: unknown): value is string => typeof value === 'string').slice(0, 40)
+        : [],
+      http_statuses: Array.isArray(rawSummary.http_statuses)
+        ? rawSummary.http_statuses.filter((value: unknown): value is number => typeof value === 'number').slice(0, 40)
+        : [],
+    };
+    const job = completeLabJob({
+      agentId,
+      jobId,
+      status: status as 'completed' | 'failed' | 'cancelled',
+      attemptsCompleted: Number(req.body?.attempts_completed),
+      summary,
+    });
+    io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
+    io.emit('lab_campaign_update', getLabSnapshot(getActiveExperimentId()));
+    return res.json({ status: job.status, job_id: job.jobId });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo completar la tarea.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/lab/agent/log', requiereAgenteLab, (req: Request, res: Response) => {
+  const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
+  const message = typeof req.body?.message === 'string' ? req.body.message.slice(0, 240) : '';
+  if (!agentId || !message) return res.status(400).json({ error: 'Se requiere agent_id y message.' });
+  io.emit('lab_agent_log', { agent_id: agentId, message, timestamp: new Date().toISOString() });
+  return res.json({ status: 'ok' });
+});
+
 app.post('/evaluar', (req: Request, res: Response) => {
   const data = req.body || {};
   const ip = ipDelCliente(req, data);
