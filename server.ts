@@ -976,10 +976,21 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
     // de servicio a servicio; nunca se acepta de clientes públicos.
     const ip = reportedIp || ipDelCliente(req);
     if (hasLabMetadata) {
+      const context = getLabJobCaptureContext(agentId, jobId, attemptIndex);
+      const expectedActor = context.scenarioId === 'benign_mixed' ? 'benign_agent' : 'attack_agent';
+      const observedIpHash = getAnalyticsIdentifiers(ip, agentId).ipKey;
+      if (context.campaignId !== campaignId || context.runId !== runId ||
+          context.scenarioId !== scenarioId || context.targetAccount !== usuario ||
+          actorType !== expectedActor || generationMethod !== 'automated_http_agent' ||
+          data.exitoso !== context.expectedSuccess || observedIpHash !== context.egressIpHash) {
+        return res.status(403).json({ error: 'La solicitud no coincide con el manifiesto, tarea o IP observada del agente.' });
+      }
+
+      // Solo se admite replay idempotente después de validar nuevamente la tarea y
+      // la IP de red del agente; conocer el request_id no concede acceso al evento.
       const requestId = labAttemptRequestId(jobId, attemptIndex);
       const existing = await findObservedLabAttempt(requestId);
       if (existing) {
-        const expectedActor = scenarioId === 'benign_mixed' ? 'benign_agent' : 'attack_agent';
         const existingMetadata = existing.metadata ?? {};
         if (existing.experiment_id !== getActiveExperimentId() ||
             existing.campaign_id !== campaignId ||
@@ -999,15 +1010,6 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
           persisted: true,
           duplicate_replay: true,
         });
-      }
-      const context = getLabJobCaptureContext(agentId, jobId, attemptIndex);
-      const expectedActor = context.scenarioId === 'benign_mixed' ? 'benign_agent' : 'attack_agent';
-      const observedIpHash = getAnalyticsIdentifiers(ip, agentId).ipKey;
-      if (context.campaignId !== campaignId || context.runId !== runId ||
-          context.scenarioId !== scenarioId || context.targetAccount !== usuario ||
-          actorType !== expectedActor || generationMethod !== 'automated_http_agent' ||
-          data.exitoso !== context.expectedSuccess || observedIpHash !== context.egressIpHash) {
-        return res.status(403).json({ error: 'La solicitud no coincide con el manifiesto, tarea o IP observada del agente.' });
       }
     }
     const evento = await procesarIntentoCapturado(
