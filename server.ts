@@ -52,6 +52,7 @@ import {
   registerLabAgent,
   reportLabJobProgress,
   updateLabCampaign,
+  verifyLabAgentOrigin,
 } from './src/lab_coordinator.js';
 
 import { db } from './src/database.js';
@@ -335,6 +336,27 @@ function validarTokenAgenteLab(req: Request): boolean {
   const auth = req.headers.authorization || '';
   const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
   return safeStringEqual(token, CENTINELA_LAB_AGENT_TOKEN);
+}
+
+function validarIdentidadAgente(req: Request, res: Response, agentId: string): boolean {
+  const headerAgentId = String(req.headers['x-centinela-agent-id'] || '').trim();
+  if (!agentId || headerAgentId !== agentId) {
+    res.status(403).json({ error: 'La identidad del agente no coincide con el encabezado autenticado.' });
+    return false;
+  }
+  try {
+    const sourceIp = ipVerificadaDesdeEdge(req);
+    const observedHash = getAnalyticsIdentifiers(sourceIp, agentId).ipKey;
+    if (!verifyLabAgentOrigin(agentId, observedHash)) {
+      res.status(403).json({ error: 'La solicitud proviene de una IP distinta a la registrada para este agente.' });
+      return false;
+    }
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo verificar el origen del agente.';
+    res.status(403).json({ error: message });
+    return false;
+  }
 }
 
 function requiereAgenteLab(req: Request, res: Response, next: NextFunction) {
@@ -751,6 +773,8 @@ app.post('/api/lab/campaigns/:campaignId/label', requiereAdmin, async (req: Requ
 app.post('/api/lab/agent/register', requiereAgenteLab, (req: Request, res: Response) => {
   try {
     const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
+    const headerAgentId = String(req.headers['x-centinela-agent-id'] || '').trim();
+    if (!agentId || headerAgentId !== agentId) return res.status(403).json({ error: 'La identidad de registro no coincide con el encabezado del agente.' });
     const version = typeof req.body?.version === 'string' ? req.body.version.slice(0, 80) : 'unknown';
     let sourceIp: string;
     try {
@@ -779,6 +803,7 @@ app.get('/api/lab/agent/jobs/next', requiereAgenteLab, (req: Request, res: Respo
   try {
     const agentId = String(req.headers['x-centinela-agent-id'] || '').trim();
     if (!agentId) return res.status(400).json({ error: 'Falta X-Centinela-Agent-Id.' });
+    if (!validarIdentidadAgente(req, res, agentId)) return;
     const job = claimNextLabJob(agentId);
     if (!job) return res.json({ job: null, status: 'idle' });
     io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
@@ -793,6 +818,7 @@ app.post('/api/lab/agent/heartbeat', requiereAgenteLab, (req: Request, res: Resp
   try {
     const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
     const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
+    if (!validarIdentidadAgente(req, res, agentId)) return;
     const result = heartbeatLabAgent(agentId);
     const command = jobId ? getLabJobControl(agentId, jobId) : result.command;
     io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
@@ -807,6 +833,7 @@ app.post('/api/lab/agent/progress', requiereAgenteLab, (req: Request, res: Respo
   try {
     const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
     const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
+    if (!validarIdentidadAgente(req, res, agentId)) return;
     reportLabJobProgress(agentId, jobId, Number(req.body?.attempts_completed));
     io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
     return res.json({ status: 'ok' });
@@ -820,6 +847,7 @@ app.post('/api/lab/agent/complete', requiereAgenteLab, (req: Request, res: Respo
   try {
     const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
     const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
+    if (!validarIdentidadAgente(req, res, agentId)) return;
     const status = req.body?.status;
     if (!['completed', 'failed', 'cancelled'].includes(status)) {
       return res.status(400).json({ error: 'Estado final de tarea no válido.' });
@@ -853,6 +881,7 @@ app.post('/api/lab/agent/log', requiereAgenteLab, (req: Request, res: Response) 
   const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
   const message = typeof req.body?.message === 'string' ? req.body.message.slice(0, 240) : '';
   if (!agentId || !message) return res.status(400).json({ error: 'Se requiere agent_id y message.' });
+  if (!validarIdentidadAgente(req, res, agentId)) return;
   io.emit('lab_agent_log', { agent_id: agentId, message, timestamp: new Date().toISOString() });
   return res.json({ status: 'ok' });
 });
