@@ -23,7 +23,7 @@ interface AgentCredentials {
 
 const REQUIRED_USERS = ['ronan', 'andy', 'stefano'] as const;
 const coordinatorUrl = requireOrigin('CENTINELA_LAB_COORDINATOR_URL', 'bruteforce-detector-2uv4.onrender.com');
-const portalUrl = coordinatorUrl;
+const portalUrl = requireOrigin('CENTINELA_LAB_PORTAL_URL', 'centinela-auth-lab.onrender.com');
 const agentToken = requiredEnv('CENTINELA_LAB_AGENT_TOKEN');
 const agentId = requiredEnv('CENTINELA_LAB_AGENT_ID');
 const version = process.env.CENTINELA_LAB_AGENT_VERSION || 'centinela-v3-agent/1.0.0';
@@ -185,7 +185,7 @@ async function executeJob(job: LabJob): Promise<void> {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 25_000);
       try {
-        const response = await fetch(portalUrl + '/api/lab/agent/auth', {
+        const response = await fetch(portalUrl + '/agent/login', {
           method: 'POST',
           redirect: 'error',
           headers: {
@@ -197,7 +197,7 @@ async function executeJob(job: LabJob): Promise<void> {
             'X-Centinela-Agent-Id': agentId,
             'X-Centinela-Scenario-Id': job.scenario_id,
           },
-          body: JSON.stringify({ job_id: job.job_id, attempt_index: index, username: job.target_account, password }),
+          body: JSON.stringify({ job_id: job.job_id, attempt_index: index, campaign_id: job.campaign_id, run_id: job.run_id, scenario_id: job.scenario_id, username: job.target_account, password }),
           signal: controller.signal,
         });
         const payload = await response.json().catch(() => ({}));
