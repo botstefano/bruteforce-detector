@@ -74,6 +74,7 @@ let activeExperimentId: string | null = null;
 let activeExperimentMetadata: Record<string, unknown> = {};
 let activeSplitBoundaries: { trainEndMs: number; validationEndMs: number } | null = null;
 let activeTrainingFrozen = false;
+let activeValidationFrozen = false;
 
 function splitForTimestamp(timestampSeconds: number): 'unassigned' | 'train' | 'validation' | 'test' {
   if (!activeSplitBoundaries) return 'unassigned';
@@ -105,6 +106,7 @@ export function getActiveExperimentState() {
     trainEndMs: activeSplitBoundaries.trainEndMs,
     validationEndMs: activeSplitBoundaries.validationEndMs,
     trainingFrozen: activeTrainingFrozen,
+    validationFrozen: activeValidationFrozen,
   };
 }
 
@@ -333,6 +335,7 @@ export async function restoreActiveExperimentRecord() {
   const metadata = (data.metadata ?? {}) as Record<string, unknown>;
   activeExperimentMetadata = metadata;
   activeTrainingFrozen = metadata.training_frozen === true;
+  activeValidationFrozen = metadata.validation_frozen === true;
   const trainEndMs = typeof metadata.train_end_at === 'string' ? Date.parse(metadata.train_end_at) : NaN;
   const validationEndMs = typeof metadata.validation_end_at === 'string' ? Date.parse(metadata.validation_end_at) : NaN;
   activeSplitBoundaries = Number.isFinite(trainEndMs) && Number.isFinite(validationEndMs) && validationEndMs > trainEndMs
@@ -394,6 +397,7 @@ export async function createExperimentRecord(input: {
   activeExperimentMetadata = experimentMetadata;
   activeSplitBoundaries = { trainEndMs, validationEndMs };
   activeTrainingFrozen = false;
+  activeValidationFrozen = false;
   return data;
 }
 
@@ -469,6 +473,7 @@ export async function finishExperimentRecord(experimentId: string) {
     activeExperimentMetadata = {};
     activeSplitBoundaries = null;
     activeTrainingFrozen = false;
+    activeValidationFrozen = false;
   }
   return data;
 }
@@ -498,6 +503,55 @@ export async function freezeActiveExperimentTraining(sampleCount: number) {
 
   activeExperimentMetadata = metadata;
   activeTrainingFrozen = true;
+  return data;
+}
+
+export async function freezeActiveExperimentValidation(experimentId: string) {
+  if (!client || !hashSecret || !activeExperimentId || !activeSplitBoundaries) {
+    throw new Error('No hay un experimento activo con almacenamiento y cortes temporales válidos.');
+  }
+  if (activeExperimentId !== experimentId) {
+    throw new Error('El identificador no corresponde al experimento activo.');
+  }
+  if (!activeTrainingFrozen) {
+    throw new Error('El baseline de entrenamiento debe estar congelado antes de cerrar la validación.');
+  }
+  if (Date.now() < activeSplitBoundaries.validationEndMs) {
+    throw new Error('El periodo de validación todavía está abierto; no se puede congelar la configuración antes de su corte.');
+  }
+  if (activeValidationFrozen) throw new Error('La configuración de validación ya está congelada.');
+  const events = await fetchObservedEvents(experimentId);
+  const validation = events.filter((event) => event.dataset_split === 'validation');
+  const labeled = validation.filter((event) => event.ground_truth_label !== 'unknown');
+  const benign = labeled.filter((event) => event.ground_truth_label === 'benign').length;
+  const attacks = labeled.filter((event) => event.ground_truth_label === 'attack').length;
+  if (benign < 1 || attacks < 1) {
+    throw new Error('La validación debe contener eventos benignos y de ataque etiquetados independientemente antes de congelar la configuración.');
+  }
+  const completedAt = new Date().toISOString();
+  const metadata = {
+    ...activeExperimentMetadata,
+    validation_frozen: true,
+    validation_completed_at: completedAt,
+    validation_total_events: validation.length,
+    validation_labeled_events: labeled.length,
+    validation_unknown_events: validation.length - labeled.length,
+    validation_benign_events: benign,
+    validation_attack_events: attacks,
+    validation_code_version: process.env.CENTINELA_VERSION?.trim() || 'unversioned',
+    validation_config_version: process.env.CENTINELA_CONFIG_VERSION?.trim() || 'unversioned',
+  };
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ metadata })
+    .eq('id', experimentId)
+    .eq('status', 'running')
+    .select('id, metadata')
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo congelar la configuración validada: ${error.message}`);
+  if (!data) throw new Error('El experimento dejó de estar activo antes de congelar la configuración.');
+  activeExperimentMetadata = metadata;
+  activeValidationFrozen = true;
   return data;
 }
 
@@ -536,6 +590,7 @@ export async function abortExperimentRecord(experimentId: string, reason: string
     activeExperimentMetadata = {};
     activeSplitBoundaries = null;
     activeTrainingFrozen = false;
+    activeValidationFrozen = false;
   }
   return data;
 }
