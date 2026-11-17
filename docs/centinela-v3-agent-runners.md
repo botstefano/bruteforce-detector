@@ -4,18 +4,19 @@ Este documento describe cómo registrar runners de laboratorio para **un único 
 
 ## Componentes
 
-- Detector, coordinador y portal de autenticación de laboratorio: `https://bruteforce-detector-2uv4.onrender.com` (un único servicio Render).
-- Los agentes consultan tareas y envían solicitudes a `POST /api/lab/agent/auth` en el mismo servicio.
-- El endpoint valida token, tarea asignada, índice de intento, cuenta permitida, resultado esperado e IP de salida observada; después procesa y persiste el evento en el propio Centinela.
-- No se requiere ni se debe configurar un segundo portal Render para este flujo.
+- Detector y coordinador: `https://bruteforce-detector-2uv4.onrender.com`.
+- Portal de autenticación del testbed: `https://centinela-auth-lab.onrender.com`.
+- Los agentes consultan tareas al detector y realizan solicitudes HTTP a `POST /agent/login` en el portal.
+- El portal valida las credenciales localmente, obtiene la IP de origen observada por el edge y transmite al detector el resultado y los metadatos mediante `/registrar_intento`.
+- El detector valida token de ingesta, tarea asignada, índice de intento, cuenta, resultado esperado, campaña y HMAC de la IP antes de persistir.
 - El detector almacena inicialmente `ground_truth_label=unknown`. Las etiquetas se aplican después de que la tarea completa, a partir del manifiesto independiente persistido en el experimento.
 
 ## Secretos requeridos
 
 Generar un token de agente aleatorio con al menos 32 caracteres y guardarlo en el gestor de secretos; no subirlo a Git. El mismo valor se configura en:
 
-1. Servicio detector: `CENTINELA_LAB_AGENT_TOKEN`.
-2. Servicio de portal: `CENTINELA_LAB_AGENT_TOKEN`.
+1. Servicio detector/coordinador: `CENTINELA_LAB_AGENT_TOKEN`.
+2. Servicio portal `centinela-auth-lab`: `CENTINELA_LAB_AGENT_TOKEN`.
 3. Cada runner autorizado: `CENTINELA_LAB_AGENT_TOKEN`.
 
 Este token es distinto de `CENTINELA_INGEST_TOKEN`, utilizado por el portal para hablar con el detector.
@@ -24,7 +25,8 @@ Cada runner también requiere:
 - `CENTINELA_LAB_AGENT_ID`: identificador único y estable, por ejemplo `runner-a`.
 - `CENTINELA_LAB_CREDENTIALS_JSON`: objeto JSON con las contraseñas de las tres cuentas del testbed. Deben ser las mismas que usa el portal, con los secretos copiados manualmente desde el gestor de contraseñas de Render; nunca se guardan en Git.
 - `CENTINELA_LAB_COORDINATOR_URL=https://bruteforce-detector-2uv4.onrender.com`.
-- `CENTINELA_LAB_COORDINATOR_URL=https://bruteforce-detector-2uv4.onrender.com` (el runner usa este mismo origen para la captura HTTP).
+- `CENTINELA_LAB_COORDINATOR_URL=https://bruteforce-detector-2uv4.onrender.com`.
+- `CENTINELA_LAB_PORTAL_URL=https://centinela-auth-lab.onrender.com`.
 - `CENTINELA_LAB_INVALID_PASSWORD`: cadena aleatoria que no coincida con ninguna contraseña real del testbed. El runner añadirá un sufijo por intento.
 
 ## Ejecutar un runner
@@ -68,7 +70,7 @@ Render ofrece IP de salida dedicadas únicamente en planes Pro o superiores; la 
 
 Antes de crear una campaña:
 
-1. Confirmar el endpoint `/health` del portal y del detector.
+1. Confirmar `/health` del portal y del detector; el portal debe informar `centinela_configured=true` y el detector debe estar listo para captura.
 2. Confirmar que el experimento v3 está activo y las fechas temporales fueron preregistradas.
 3. Registrar los runners y confirmar al menos cuatro prefijos HMAC distintos para un test distribuido.
 4. En cada runner confirmar que la versión de Node y las credenciales del testbed son válidas, sin registrar las contraseñas.
