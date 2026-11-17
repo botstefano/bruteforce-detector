@@ -41,3 +41,37 @@ test('capture context is bound to the assigned agent and exact next attempt', ()
   );
   resetLabCoordinatorForTesting();
 });
+
+
+test('a runner resumes a partially completed task after coordinator state restoration', () => {
+  resetLabCoordinatorForTesting();
+  const egress = 'b'.repeat(64);
+  registerLabAgent({ agentId: 'runner-resume-01', egressIpHash: egress, version: 'test' });
+  const { campaign } = createLabCampaign({
+    experimentId: 'experiment-resume',
+    targetAccount: 'ronan',
+    scenarioIds: ['benign_mixed'],
+    phase: 'train',
+  });
+  const firstJob = claimNextLabJob('runner-resume-01');
+  assert.ok(firstJob);
+  const jobId = String(firstJob.job_id);
+  const eventId = '11111111-1111-4111-8111-111111111111';
+  reportLabJobProgress('runner-resume-01', jobId, 1, eventId);
+
+  const persisted = serializeLabCoordinatorState('experiment-resume');
+  resetLabCoordinatorForTesting();
+  const restored = restoreLabCoordinatorState(persisted);
+  assert.equal(restored.agents, 1);
+  assert.equal(restored.campaigns, 1);
+  assert.equal(restored.jobs, 1);
+
+  registerLabAgent({ agentId: 'runner-resume-01', egressIpHash: egress, version: 'test-restarted' });
+  const resumed = claimNextLabJob('runner-resume-01');
+  assert.ok(resumed);
+  assert.equal(resumed.job_id, jobId);
+  assert.equal(resumed.attempts_completed, 1);
+  assert.deepEqual(resumed.event_ids, [eventId]);
+  assert.equal(resumed.campaign_id, campaign.campaignId);
+  resetLabCoordinatorForTesting();
+});
