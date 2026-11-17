@@ -589,7 +589,9 @@ app.get('/health', async (_req: Request, res: Response) => {
     supabaseOk &&
     activeExperimentReady &&
     !eventCapturePaused;
-  const integrationReady = captureReady && Boolean(CENTINELA_INGEST_TOKEN);
+  const labAgentTokenConfigured = CENTINELA_LAB_AGENT_TOKEN.length >= 32;
+  const integrationReady =
+    captureReady && Boolean(CENTINELA_INGEST_TOKEN) && labAgentTokenConfigured;
 
   res.json({
     status: eventCapturePaused || !eventStore.configured || !supabaseOk ? 'degraded' : 'ok',
@@ -601,6 +603,7 @@ app.get('/health', async (_req: Request, res: Response) => {
     local_store_ok: db.checkConnection(),
     event_store: eventStore,
     ingest_token_configured: Boolean(CENTINELA_INGEST_TOKEN),
+    lab_agent_token_configured: labAgentTokenConfigured,
     active_experiment: Boolean(getActiveExperimentId()),
     active_experiment_boundaries_valid: activeExperimentReady,
     capture_ready: captureReady,
@@ -2730,7 +2733,7 @@ async function startServer() {
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`\n======================================================`);
-    console.log(`Centinela v2 corriendo en http://0.0.0.0:${PORT}`);
+    console.log(`Centinela v3 corriendo en http://0.0.0.0:${PORT}`);
     console.log(`Dashboard de administración: http://localhost:${PORT}/`);
     console.log(`Login demo protegido:       http://localhost:${PORT}/demo`);
     console.log(`Endpoints de protección:    POST /evaluar, POST /registrar_intento`);
