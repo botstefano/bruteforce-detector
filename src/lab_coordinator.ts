@@ -129,7 +129,10 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
     if (!raw || typeof raw !== 'object') continue;
     const agent = raw as LabAgent;
     if (typeof agent.agentId !== 'string' || !/^[a-f0-9]{64}$/i.test(agent.egressIpHash || '')) continue;
+    // Give runners a 90-second reconnection window after coordinator restart.
+    // A live runner's next authenticated poll will restore its ready/running state.
     agent.status = 'offline';
+    agent.lastSeenAt = Date.now();
     agents.set(agent.agentId, { ...agent });
   }
   for (const raw of state.campaigns) {
