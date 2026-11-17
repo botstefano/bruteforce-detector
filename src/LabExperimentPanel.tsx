@@ -53,6 +53,7 @@ interface LabSnapshot {
   experiment: ExperimentPhaseState | null;
   agent_token_configured: boolean;
   protocol_revision?: number | null;
+  automation_progress?: Record<string, Record<string, { completed: number; target: number }>> | null;
   automation?: {
     enabled: boolean;
     status: 'running' | 'paused' | 'completed';
@@ -493,6 +494,23 @@ export function LabExperimentPanel() {
             </Pill>
           </div>
           <p className="text-xs text-slate-300">Protocolo actual: V{snapshot.protocol_revision ?? '—'}. Entrenamiento: 200 sesiones benignas; validación: 100 benignas y 30 por escenario de ataque; prueba final: 200 benignas y 50 rápidas, 50 de baja frecuencia y 30 distribuidas.</p>
+          {snapshot.automation_progress && (
+            <div className="mt-3 grid gap-2 md:grid-cols-3">
+              {Object.entries(snapshot.automation_progress).map(([phase, scenarios]) => (
+                <div key={phase} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-300">
+                    {phase === 'train' ? 'Entrenamiento' : phase === 'validation' ? 'Validación' : 'Prueba final'}
+                  </p>
+                  {Object.entries(scenarios).map(([scenarioId, progress]) => (
+                    <p key={scenarioId} className="flex justify-between gap-2 py-1 text-[11px] text-slate-400">
+                      <span>{SCENARIO_LABELS[scenarioId as ScenarioId]}</span>
+                      <span className="shrink-0 font-mono tabular-nums text-slate-200">{progress.completed}/{progress.target}</span>
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
           {snapshot.automation?.lastError && <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">{snapshot.automation.lastError}</p>}
           <div className="flex flex-wrap gap-2">
             <button type="button" disabled={busy || snapshot.protocol_revision !== 4 || snapshot.automation !== null && snapshot.automation !== undefined} onClick={() => void startAutomation()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">Configurar y empezar V4</button>
