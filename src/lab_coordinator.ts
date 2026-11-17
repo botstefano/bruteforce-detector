@@ -520,15 +520,19 @@ export function createLabCampaign(input: {
       const profile = input.scheduledByAutomation
         ? buildScenarioProfile(scenarioId, runSeed)
         : buildLegacyScenarioProfile(scenarioId);
-      const startAt = nextSessionStart;
+      let startAt = nextSessionStart;
       const sessionGapMs = randomBetween(seededRandom(runSeed ^ 0x9e3779b9), 8 * 60_000, 25 * 60_000);
       const plannedActiveDurationMs = profile.delaysMs.reduce((sum, delay) => sum + delay, 0) + profile.outcomes.length * 2_000;
-      nextSessionStart = startAt + plannedActiveDurationMs + sessionGapMs;
       const assignedAgents = scenarioId === 'attack_distributed'
         ? readyAgents.filter((agent, index, all) =>
             all.findIndex((candidate) => candidate.egressIpHash === agent.egressIpHash) === index
           ).slice(0, 4)
         : [readyAgents[nextSingleAgent++ % readyAgents.length]];
+      // Sessions cannot start until every assigned runner has completed its
+      // previously scheduled rest. For distributed runs this synchronizes
+      // all four origins to the latest available start time.
+      startAt = Math.max(startAt, ...assignedAgents.map((agent) => agent.nextJobAvailableAt || 0));
+      nextSessionStart = startAt + plannedActiveDurationMs + sessionGapMs;
       const runJobIds: string[] = [];
 
       for (const agent of assignedAgents) {
@@ -1183,7 +1187,7 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
           planned_inter_attempt_delays_ms: [...job.interAttemptDelaysMs],
           planned_session_gap_after_ms: job.sessionGapAfterMs,
           session_profile: { ...job.sessionProfile },
-          start_at: new Date(job.startAt).toISOString(),
+          start_at: new Date(Math.max(job.startAt, job.agentId ? agents.get(job.agentId)?.nextJobAvailableAt ?? 0 : 0)).toISOString(),
           deadline_at: job.deadlineAt !== null ? new Date(job.deadlineAt).toISOString() : null,
           started_at: job.startedAt ? new Date(job.startedAt).toISOString() : null,
           finished_at: job.finishedAt ? new Date(job.finishedAt).toISOString() : null,
