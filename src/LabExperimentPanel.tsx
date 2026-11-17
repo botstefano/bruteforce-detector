@@ -40,6 +40,7 @@ interface ExperimentPhaseState {
   id: string;
   trainEndMs: number;
   validationEndMs: number;
+  testEndMs: number | null;
   trainingFrozen: boolean;
   validationFrozen: boolean;
 }
@@ -311,6 +312,27 @@ export function LabExperimentPanel() {
     }
   };
 
+
+  const finishExperiment = async () => {
+    if (!snapshot?.experiment_id) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/experimentos/${encodeURIComponent(snapshot.experiment_id)}/finalizar`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      await readJson(response);
+      setNotice('Experimento finalizado. Ya puedes registrar un nuevo protocolo V4 independiente.');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo finalizar el experimento.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const campaignAction = async (campaignId: string, action: 'pause' | 'resume' | 'stop') => {
     setBusy(true);
     setError(null);
@@ -416,10 +438,18 @@ export function LabExperimentPanel() {
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950 p-3">
               <p className="text-[10px] uppercase text-slate-500">Test independiente</p>
-              <p className="mt-1 text-xs text-white">{snapshot.experiment.validationFrozen ? 'Habilitado al alcanzar el corte' : 'Bloqueado hasta congelar validación'}</p>
+              <p className="mt-1 text-xs text-white">{snapshot.experiment.testEndMs ? localDate(snapshot.experiment.testEndMs) : 'Sin corte final preregistrado'}</p>
               <Pill tone={snapshot.experiment.validationFrozen ? 'good' : 'bad'}>{snapshot.experiment.validationFrozen ? 'Preparado' : 'Bloqueado'}</Pill>
             </div>
           </div>
+          {snapshot.experiment.testEndMs !== null &&
+            Date.now() >= snapshot.experiment.testEndMs &&
+            snapshot.campaigns.every((campaign) => !['queued', 'running', 'paused'].includes(campaign.status)) && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-3">
+              <p className="text-[11px] text-slate-400">El corte final fue alcanzado y no hay campañas pendientes. Finaliza el experimento para habilitar la creación del siguiente protocolo.</p>
+              <button type="button" disabled={busy} onClick={() => void finishExperiment()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">Finalizar experimento</button>
+            </div>
+          )}
           {Date.now() >= snapshot.experiment.validationEndMs && snapshot.experiment.trainingFrozen && !snapshot.experiment.validationFrozen && (
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-[11px] text-amber-300">Revisa las métricas y etiquetas de validación. Al congelar, el sistema registrará el código y versión de configuración antes de permitir campañas de test.</p>
