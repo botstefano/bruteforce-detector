@@ -73,10 +73,13 @@ test('automation plan persists and only schedules benign activity during trainin
     accounts: ['ronan', 'andy', 'stefano'],
     targets: {
       train: { benign_mixed: 12 },
-      validation: { benign_mixed: 10, attack_rapid: 5, attack_low_frequency: 5, attack_distributed: 2 },
-      test: { benign_mixed: 20, attack_rapid: 10, attack_low_frequency: 10, attack_distributed: 4 },
+      validation: { benign_mixed: 10, attack_rapid: 5, attack_low_frequency: 5, attack_distributed: 0 },
+      test: { benign_mixed: 20, attack_rapid: 10, attack_low_frequency: 10, attack_distributed: 0 },
     },
   });
+
+  assert.equal(getLabAutomationPlan()?.targets.validation.attack_distributed, 0);
+  assert.equal(getLabAutomationPlan()?.targets.test.attack_distributed, 0);
 
   const next = getNextLabAutomationBatch('experiment-v4-test', 'train');
   assert.deepEqual(next && {
