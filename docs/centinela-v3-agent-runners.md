@@ -4,10 +4,10 @@ Este documento describe cómo registrar runners de laboratorio para **un único 
 
 ## Componentes
 
-- Detector/coordinador: `https://bruteforce-detector-2uv4.onrender.com`.
-- Portal de autenticación: `https://centinela-auth-lab.onrender.com`.
-- Los agentes consultan tareas al coordinador y envían solicitudes al portal `/agent/login`.
-- El portal valida la contraseña localmente y transmite al detector solamente usuario, resultado, IP verificada y metadatos de campaña/ejecución/agente/escenario.
+- Detector, coordinador y portal de autenticación de laboratorio: `https://bruteforce-detector-2uv4.onrender.com` (un único servicio Render).
+- Los agentes consultan tareas y envían solicitudes a `POST /api/lab/agent/auth` en el mismo servicio.
+- El endpoint valida token, tarea asignada, índice de intento, cuenta permitida, resultado esperado e IP de salida observada; después procesa y persiste el evento en el propio Centinela.
+- No se requiere ni se debe configurar un segundo portal Render para este flujo.
 - El detector almacena inicialmente `ground_truth_label=unknown`. Las etiquetas se aplican después de que la tarea completa, a partir del manifiesto independiente persistido en el experimento.
 
 ## Secretos requeridos
@@ -22,9 +22,9 @@ Este token es distinto de `CENTINELA_INGEST_TOKEN`, utilizado por el portal para
 
 Cada runner también requiere:
 - `CENTINELA_LAB_AGENT_ID`: identificador único y estable, por ejemplo `runner-a`.
-- `CENTINELA_LAB_AGENT_CREDENTIALS_JSON`: objeto JSON con las contraseñas de las tres cuentas del testbed. Deben ser las mismas que usa el portal, con los secretos copiados manualmente desde el gestor de contraseñas de Render; nunca se guardan en Git.
+- `CENTINELA_LAB_CREDENTIALS_JSON`: objeto JSON con las contraseñas de las tres cuentas del testbed. Deben ser las mismas que usa el portal, con los secretos copiados manualmente desde el gestor de contraseñas de Render; nunca se guardan en Git.
 - `CENTINELA_LAB_COORDINATOR_URL=https://bruteforce-detector-2uv4.onrender.com`.
-- `CENTINELA_LAB_PORTAL_URL=https://centinela-auth-lab.onrender.com`.
+- `CENTINELA_LAB_COORDINATOR_URL=https://bruteforce-detector-2uv4.onrender.com` (el runner usa este mismo origen para la captura HTTP).
 - `CENTINELA_LAB_INVALID_PASSWORD`: cadena aleatoria que no coincida con ninguna contraseña real del testbed. El runner añadirá un sufijo por intento.
 
 ## Ejecutar un runner
@@ -61,7 +61,7 @@ Render ofrece IP de salida dedicadas únicamente en planes Pro o superiores; la 
 - El escenario de baja frecuencia dura aproximadamente 9 minutos por ejecución.
 - Las campañas no pueden solaparse dentro del mismo experimento.
 - Detener una campaña no elimina los eventos ya capturados; los trabajos incompletos no se etiquetan automáticamente.
-- El coordinador mantiene las colas y estados de los runners en memoria de una única instancia. Un reinicio/despliegue pierde las tareas activas; el manifiesto ya almacenado en Supabase permanece. No desplegar durante una campaña.
+- El coordinador mantiene las colas y estados de los runners en memoria de una única instancia. Un reinicio/despliegue pierde las tareas activas; el manifiesto ya almacenado en Supabase permanece. No desplegar durante una campaña. Antes de una captura definitiva debe resolverse esta limitación o garantizarse que no habrá reinicios durante toda la campaña.
 - La interfaz muestra las IP solo como prefijos HMAC y los eventos que el detector persiste. El canal Socket.IO exige sesión administrativa.
 
 ## Verificación previa
