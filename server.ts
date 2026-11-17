@@ -45,6 +45,7 @@ import {
 
 import {
   LAB_SCENARIO_CATALOG,
+  activateLabCampaign,
   claimNextLabJob,
   completeLabJob,
   createLabCampaign,
@@ -672,6 +673,7 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
     }
     try {
       await appendLabCampaignManifest(activeExperiment.id, manifest);
+      activateLabCampaign(campaign.campaignId);
       await saveLabCoordinatorState(activeExperiment.id, () => serializeLabCoordinatorState(activeExperiment.id));
     } catch (error) {
       updateLabCampaign(campaign.campaignId, 'stop');
