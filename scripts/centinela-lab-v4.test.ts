@@ -51,6 +51,8 @@ test('benign sessions have variable, bounded and reproducible manifest parameter
     assert.ok(delays.every((delay) => delay >= 8_000 && delay <= 180_000));
     assert.equal(profile.profile_version, 2);
     assert.equal(profile.planned_attempts, attempts);
+    const restMs = Number(run.planned_session_gap_after_ms);
+    assert.ok(restMs >= 8 * 60_000 && restMs <= 25 * 60_000);
     assert.ok(seed > 0);
     seeds.add(seed);
   }
