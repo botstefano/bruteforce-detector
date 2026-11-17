@@ -108,6 +108,12 @@ export function LabExperimentPanel() {
   const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
   const [agentLogs, setAgentLogs] = useState<Array<{ agent_id: string; message: string; timestamp: string }>>([]);
   const [connected, setConnected] = useState(false);
+  const [protocolName, setProtocolName] = useState('centinela-auth-study-v3');
+  const [scenario, setScenario] = useState('automated-authentication-testbed');
+  const [description, setDescription] = useState('Evaluación experimental reproducible mediante agentes automatizados en el portal autorizado de autenticación HTTP.');
+  const [trainEndAt, setTrainEndAt] = useState('2026-11-20T17:00');
+  const [validationEndAt, setValidationEndAt] = useState('2026-11-22T17:00');
+  const [testEndAt, setTestEndAt] = useState('2026-11-23T17:00');
 
   const refresh = useCallback(async () => {
     try {
@@ -166,6 +172,47 @@ export function LabExperimentPanel() {
     setSelected((current) => current.includes(scenario)
       ? current.filter((item) => item !== scenario)
       : [...current, scenario]);
+  };
+
+  const createExperiment = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const trainMs = new Date(trainEndAt).getTime();
+      const validationMs = new Date(validationEndAt).getTime();
+      const testMs = new Date(testEndAt).getTime();
+      if (![trainMs, validationMs, testMs].every(Number.isFinite) || trainMs <= Date.now() || validationMs <= trainMs || testMs <= validationMs) {
+        throw new Error('Los cortes deben ser futuros y seguir el orden entrenamiento < validación < test.');
+      }
+      const response = await fetch('/api/experimentos', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          protocol_name: protocolName,
+          scenario,
+          description,
+          train_end_at: new Date(trainMs).toISOString(),
+          validation_end_at: new Date(validationMs).toISOString(),
+          test_end_at: new Date(testMs).toISOString(),
+          metadata: {
+            protocol_revision: 1,
+            generation_method: 'automated_http_agent',
+            actor_type: 'automated_agent',
+            testbed_scope: 'centinela-auth-lab-only',
+            phase_policy: 'train-benign-only_validation-freeze_before_test',
+          },
+        }),
+      });
+      const data = await readJson(response);
+      setNotice(`Experimento v3 creado: ${data.experiment?.id || 'registrado'}. Los cortes quedaron guardados en UTC.`);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo crear el experimento v3.');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const createCampaign = async () => {
@@ -264,6 +311,43 @@ export function LabExperimentPanel() {
 
       {error && <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-300">{error}</div>}
       {notice && <div role="status" className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">{notice}</div>}
+
+      {!snapshot?.experiment_id && (
+        <div className={card}>
+          <h3 className="text-sm font-bold text-white">Crear experimento Centinela v3</h3>
+          <p className="text-xs text-slate-400">Define los tres cortes temporales antes de crear campañas. Se guardarán como UTC; el horario de los campos corresponde al navegador.</p>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <label className="space-y-1 text-xs text-slate-300">
+              <span className="font-semibold">Nombre del protocolo</span>
+              <input value={protocolName} onChange={(event) => setProtocolName(event.target.value)} maxLength={120} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"/>
+            </label>
+            <label className="space-y-1 text-xs text-slate-300">
+              <span className="font-semibold">Escenario</span>
+              <input value={scenario} onChange={(event) => setScenario(event.target.value)} maxLength={120} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"/>
+            </label>
+            <label className="space-y-1 text-xs text-slate-300">
+              <span className="font-semibold">Fin de entrenamiento</span>
+              <input type="datetime-local" value={trainEndAt} onChange={(event) => setTrainEndAt(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"/>
+            </label>
+            <label className="space-y-1 text-xs text-slate-300">
+              <span className="font-semibold">Fin de validación</span>
+              <input type="datetime-local" value={validationEndAt} onChange={(event) => setValidationEndAt(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"/>
+            </label>
+            <label className="space-y-1 text-xs text-slate-300 md:col-span-2">
+              <span className="font-semibold">Fin del test y cierre de captura</span>
+              <input type="datetime-local" value={testEndAt} onChange={(event) => setTestEndAt(event.target.value)} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"/>
+            </label>
+          </div>
+          <label className="block space-y-1 text-xs text-slate-300">
+            <span className="font-semibold">Descripción y alcance</span>
+            <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} maxLength={1000} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"/>
+          </label>
+          <p className="text-[11px] text-amber-300">Fechas iniciales sugeridas: entrenamiento 20 nov. 17:00, validación 22 nov. 17:00 y test 23 nov. 17:00 (hora de Perú). Ajusta los cortes antes de crear; después no deben moverse al observar métricas.</p>
+          <button type="button" onClick={() => void createExperiment()} disabled={busy || !protocolName.trim() || !scenario.trim()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">
+            {busy ? 'Creando…' : 'Crear protocolo y habilitar laboratorio'}
+          </button>
+        </div>
+      )}
 
       {snapshot?.experiment && (
         <div className={card}>
