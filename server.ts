@@ -1058,9 +1058,9 @@ app.post('/api/lab/automation/start', requiereAdmin, async (req: Request, res: R
     const targets = req.body?.targets && typeof req.body.targets === 'object'
       ? req.body.targets as Record<string, Record<string, number>>
       : {
-          train: { benign_mixed: 100 },
-          validation: { benign_mixed: 20, attack_rapid: 20, attack_low_frequency: 15, attack_distributed: 0 },
-          test: { benign_mixed: 15, attack_rapid: 15, attack_low_frequency: 10, attack_distributed: 0 },
+          train: { benign_mixed: 55 },
+          validation: { benign_mixed: 8, attack_rapid: 8, attack_low_frequency: 7, attack_distributed: 0 },
+          test: { benign_mixed: 5, attack_rapid: 5, attack_low_frequency: 4, attack_distributed: 0 },
         };
     const plan = configureLabAutomation({
       experimentId: experiment.id,
