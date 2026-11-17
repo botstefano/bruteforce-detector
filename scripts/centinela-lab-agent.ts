@@ -32,7 +32,7 @@ const coordinatorUrl = requireOrigin('CENTINELA_LAB_COORDINATOR_URL', 'bruteforc
 const portalUrl = requireOrigin('CENTINELA_LAB_PORTAL_URL', 'centinela-auth-lab.onrender.com');
 const agentToken = requiredEnv('CENTINELA_LAB_AGENT_TOKEN');
 const agentId = requiredEnv('CENTINELA_LAB_AGENT_ID');
-const version = process.env.CENTINELA_LAB_AGENT_VERSION || 'centinela-v3-agent/1.0.0';
+const version = process.env.CENTINELA_LAB_AGENT_VERSION || 'centinela-v4-agent/2.0.0';
 const invalidPassword = process.env.CENTINELA_LAB_INVALID_PASSWORD || 'Centinela-lab-invalid-credential-DO-NOT-LOGIN';
 const credentials = parseCredentials(requiredEnv('CENTINELA_LAB_CREDENTIALS_JSON'));
 
