@@ -487,7 +487,7 @@ export function LabExperimentPanel() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-bold text-white">Recolección científica automática</h3>
-              <p className="mt-1 text-xs text-slate-400">El planificador crea lotes de hasta cinco sesiones, rota las cuentas de laboratorio, distribuye horarios, deja pausas aleatorias de 1–15 minutos entre sesiones y espera a que cada campaña termine antes de continuar.</p>
+              <p className="mt-1 text-xs text-slate-400">El planificador crea lotes de hasta cinco sesiones, rota las cuentas de laboratorio, distribuye horarios, deja pausas aleatorias de 8–25 minutos entre sesiones y espera a que cada campaña termine antes de continuar.</p>
             </div>
             <Pill tone={snapshot.automation?.enabled ? 'good' : snapshot.automation?.status === 'completed' ? 'good' : 'warning'}>
               {snapshot.automation?.enabled ? 'Automatización activa' : snapshot.automation?.status === 'completed' ? 'Objetivos completados' : 'Automatización detenida'}
