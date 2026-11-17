@@ -518,6 +518,7 @@ const server = http.createServer(async (req, res) => {
       credentials_configured: credentialDigests.size === EXPECTED_USERS.length,
       captcha_configured: true,
       centinela_configured: Boolean(CENTINELA_API_URL && CENTINELA_INGEST_TOKEN),
+      agent_token_configured: CENTINELA_LAB_AGENT_TOKEN.length >= 32,
       campaign_id: CAMPAIGN_ID,
       account_lockout_enabled: false,
       per_ip_limit_per_minute: MAX_ATTEMPTS_PER_IP
