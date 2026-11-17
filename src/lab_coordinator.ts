@@ -45,7 +45,7 @@ interface LabCampaign {
   campaignId: string;
   experimentId: string;
   createdAt: number;
-  status: 'queued' | 'running' | 'paused' | 'completed' | 'stopped';
+  status: 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped';
   targetAccount: string;
   scenarioIds: LabScenarioId[];
   repetitions: number;
@@ -117,7 +117,7 @@ function refreshCampaignStatus(campaign: LabCampaign): void {
   const campaignJobs = campaign.jobIds.map((id) => jobs.get(id)).filter((job): job is LabJob => Boolean(job));
   if (campaign.status === 'stopped') return;
   if (campaignJobs.length > 0 && campaignJobs.every((job) => ['completed', 'failed', 'cancelled'].includes(job.status))) {
-    campaign.status = campaignJobs.some((job) => job.status === 'failed') ? 'completed' : 'completed';
+    campaign.status = campaignJobs.some((job) => job.status === 'failed' || job.status === 'cancelled') ? 'failed' : 'completed';
   } else if (campaignJobs.some((job) => job.status === 'running' || job.status === 'assigned')) {
     campaign.status = 'running';
   } else if (campaignJobs.some((job) => job.status === 'paused' || job.pauseRequested)) {
@@ -196,6 +196,12 @@ export function createLabCampaign(input: {
   }
   if (scenarioIds.length === 0 || scenarioIds.length !== input.scenarioIds.length) {
     throw new Error('Selecciona uno o más escenarios válidos del catálogo experimental.');
+  }
+  const activeCampaign = [...campaigns.values()].find((campaign) =>
+    campaign.experimentId === input.experimentId && ['queued', 'running', 'paused'].includes(campaign.status)
+  );
+  if (activeCampaign) {
+    throw new Error(`La campaña ${activeCampaign.campaignId} todavía no ha finalizado. Complétala, páusala o detenla antes de iniciar otra.`);
   }
 
   const readyAgents = activeAgents(now).filter((agent) => agent.status === 'ready' && agent.currentJobId === null);
