@@ -72,7 +72,7 @@ const supabaseKey =
 const hashSecret = process.env.CENTINELA_HASH_SECRET?.trim() ?? '';
 let activeExperimentId: string | null = null;
 let activeExperimentMetadata: Record<string, unknown> = {};
-let activeSplitBoundaries: { trainEndMs: number; validationEndMs: number } | null = null;
+let activeSplitBoundaries: { trainEndMs: number; validationEndMs: number; testEndMs: number | null } | null = null;
 let activeTrainingFrozen = false;
 let activeValidationFrozen = false;
 
@@ -105,6 +105,7 @@ export function getActiveExperimentState() {
     id: activeExperimentId,
     trainEndMs: activeSplitBoundaries.trainEndMs,
     validationEndMs: activeSplitBoundaries.validationEndMs,
+    testEndMs: activeSplitBoundaries.testEndMs,
     trainingFrozen: activeTrainingFrozen,
     validationFrozen: activeValidationFrozen,
   };
@@ -338,8 +339,9 @@ export async function restoreActiveExperimentRecord() {
   activeValidationFrozen = metadata.validation_frozen === true;
   const trainEndMs = typeof metadata.train_end_at === 'string' ? Date.parse(metadata.train_end_at) : NaN;
   const validationEndMs = typeof metadata.validation_end_at === 'string' ? Date.parse(metadata.validation_end_at) : NaN;
+  const testEndMs = typeof metadata.test_end_at === 'string' ? Date.parse(metadata.test_end_at) : NaN;
   activeSplitBoundaries = Number.isFinite(trainEndMs) && Number.isFinite(validationEndMs) && validationEndMs > trainEndMs
-    ? { trainEndMs, validationEndMs }
+    ? { trainEndMs, validationEndMs, testEndMs: Number.isFinite(testEndMs) && testEndMs > validationEndMs ? testEndMs : null }
     : null;
   return data;
 }
@@ -349,6 +351,7 @@ export async function createExperimentRecord(input: {
   scenario: string;
   trainEndAt: string;
   validationEndAt: string;
+  testEndAt?: string;
   description?: string;
   detectorConfig?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -369,14 +372,25 @@ export async function createExperimentRecord(input: {
   if (!Number.isFinite(trainEndMs) || !Number.isFinite(validationEndMs) || trainEndMs <= Date.now() || validationEndMs <= trainEndMs) {
     throw new Error('Define train_end_at y validation_end_at como fechas ISO futuras, con validation_end_at posterior a train_end_at.');
   }
+  const testEndMs = input.testEndAt ? Date.parse(input.testEndAt) : NaN;
+  const requiresTestCutoff = input.protocolName.toLowerCase().includes('v3');
+  if (requiresTestCutoff && (!Number.isFinite(testEndMs) || testEndMs <= validationEndMs)) {
+    throw new Error('El protocolo v3 exige test_end_at en ISO futuro, posterior a validation_end_at.');
+  }
+  if (input.testEndAt && (!Number.isFinite(testEndMs) || testEndMs <= validationEndMs)) {
+    throw new Error('test_end_at debe ser una fecha ISO posterior a validation_end_at.');
+  }
   const trainEndAt = new Date(trainEndMs).toISOString();
   const validationEndAt = new Date(validationEndMs).toISOString();
+  const testEndAt = input.testEndAt ? new Date(testEndMs).toISOString() : null;
   const experimentMetadata = {
     ...(input.metadata ?? {}),
     train_end_at: trainEndAt,
     validation_end_at: validationEndAt,
+    ...(testEndAt ? { test_end_at: testEndAt } : {}),
     split_policy: 'temporal_by_event_timestamp_v1',
     training_frozen: false,
+    validation_frozen: false,
   };
   const { data, error } = await client
     .from('centinela_experiments')
@@ -395,7 +409,7 @@ export async function createExperimentRecord(input: {
   if (error) throw new Error(`No se pudo crear el experimento: ${error.message}`);
   activeExperimentId = data.id as string;
   activeExperimentMetadata = experimentMetadata;
-  activeSplitBoundaries = { trainEndMs, validationEndMs };
+  activeSplitBoundaries = { trainEndMs, validationEndMs, testEndMs: Number.isFinite(testEndMs) ? testEndMs : null };
   activeTrainingFrozen = false;
   activeValidationFrozen = false;
   return data;
