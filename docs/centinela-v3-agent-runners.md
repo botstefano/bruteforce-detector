@@ -25,7 +25,6 @@ Cada runner también requiere:
 - `CENTINELA_LAB_AGENT_ID`: identificador único y estable, por ejemplo `runner-a`.
 - `CENTINELA_LAB_CREDENTIALS_JSON`: objeto JSON con las contraseñas de las tres cuentas del testbed. Deben ser las mismas que usa el portal, con los secretos copiados manualmente desde el gestor de contraseñas de Render; nunca se guardan en Git.
 - `CENTINELA_LAB_COORDINATOR_URL=https://bruteforce-detector-2uv4.onrender.com`.
-- `CENTINELA_LAB_COORDINATOR_URL=https://bruteforce-detector-2uv4.onrender.com`.
 - `CENTINELA_LAB_PORTAL_URL=https://centinela-auth-lab.onrender.com`.
 - `CENTINELA_LAB_INVALID_PASSWORD`: cadena aleatoria que no coincida con ninguna contraseña real del testbed. El runner añadirá un sufijo por intento.
 
@@ -63,7 +62,15 @@ Render ofrece IP de salida dedicadas únicamente en planes Pro o superiores; la 
 - El escenario de baja frecuencia dura aproximadamente 9 minutos por ejecución.
 - Las campañas no pueden solaparse dentro del mismo experimento.
 - Detener una campaña no elimina los eventos ya capturados; los trabajos incompletos no se etiquetan automáticamente.
-- El coordinador persiste en `centinela_experiments.metadata.lab_coordinator_state` las campañas, tareas, progreso y `event_id` confirmados. Al reiniciar, restaura las tareas activas y las deja disponibles para que el mismo runner vuelva a registrarse y continúe. Cada intento usa una clave `request_id` determinista para que un reintento posterior a un timeout no duplique el evento. La migración que añade el índice único parcial de `request_id` está en la rama de desarrollo, pero aún debe aplicarse a Supabase antes del despliegue v3. Antes de una captura definitiva deben probarse reinicio, recuperación del coordinador, reanudación del mismo runner y replay idempotente; no desplegar durante una campaña.
+- El coordinador persiste en `centinela_experiments.metadata.lab_coordinator_state` las campañas, tareas, progreso y `event_id` confirmados. Al reiniciar, restaura las tareas activas y las deja disponibles para que el mismo runner vuelva a registrarse y continúe. Cada intento usa una clave `request_id` determinista para que un reintento posterior a un timeout no duplique el evento.
+- La migración `20261117162222_centinela_lab_agent_request_idempotency.sql` ya está aplicada en Supabase. Antes de aplicarla se verificó que la columna `request_id` existía y que no había valores no nulos; los 376 eventos históricos permanecieron intactos. La migración solo añadió un índice único parcial para valores no nulos y un comentario de columna; no reescribió datos.
+- Reversión DDL de esta migración (no restaura ni borra datos):
+  ```sql
+  drop index if exists public.idx_centinela_auth_events_request_id_unique;
+  comment on column public.centinela_auth_events.request_id is null;
+  ```
+- El proyecto Supabase está en Free y no tiene backups diarios automáticos. Esta migración aditiva se puede revertir con el DDL anterior; antes de cualquier migración futura que modifique datos o esquema de forma no trivial, exportar una copia lógica fuera de Supabase.
+- Antes de una captura definitiva deben probarse reinicio, recuperación del coordinador, reanudación del mismo runner y replay idempotente; no desplegar durante una campaña.
 - La interfaz muestra las IP solo como prefijos HMAC y los eventos que el detector persiste. El canal Socket.IO exige sesión administrativa.
 
 ## Operación en Render Free
