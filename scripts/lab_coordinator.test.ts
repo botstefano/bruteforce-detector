@@ -58,7 +58,8 @@ test('el manifiesto no se filtra al agente y el etiquetado exige eventos complet
     const jobId = String(task.job_id);
     const eventIds = [randomUUID(), randomUUID()];
     taskEvents.set(jobId, eventIds);
-    reportLabJobProgress(agentId, jobId, 2);
+    reportLabJobProgress(agentId, jobId, 1, eventIds[0]);
+    reportLabJobProgress(agentId, jobId, 2, eventIds[1]);
     completeLabJob({
       agentId,
       jobId,
@@ -87,7 +88,7 @@ test('una campaña que no completó todas las solicitudes no puede etiquetarse',
   assert.ok(task);
   const jobId = String(task.job_id);
   const eventIds = [randomUUID()];
-  reportLabJobProgress(agentId, jobId, 1);
+  reportLabJobProgress(agentId, jobId, 1, eventIds[0]);
   completeLabJob({
     agentId,
     jobId,
