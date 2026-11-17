@@ -823,26 +823,47 @@ async function persistLabAutomationState(experimentId: string): Promise<void> {
 async function tickLabAutomation(): Promise<void> {
   if (labAutomationTickRunning || labAutomationConfiguring) return;
   const plan = getLabAutomationPlan();
-  if (!plan?.enabled || plan.status !== 'running') return;
+  const experiment = getActiveExperimentState();
+  if (!experiment) return;
+  const schedulerEnabled = Boolean(plan?.enabled && plan.status === 'running');
   labAutomationTickRunning = true;
 
   try {
-    const experiment = getActiveExperimentState();
-    if (!experiment || experiment.id !== plan.experimentId) {
+    if (schedulerEnabled && plan?.experimentId !== experiment.id) {
       updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La recolección automática se pausó porque el experimento configurado ya no está activo.' });
       return;
     }
-    if (eventCapturePaused) {
-      updateLabAutomationStatus({ lastError: eventCapturePauseReason || 'Captura pausada por el estado del almacén.' });
-      await persistLabAutomationState(experiment.id);
-      return;
-    }
 
+    // Post-processing must not depend on whether new work is being scheduled.
+    // A paused plan still labels its already completed, preregistered campaigns.
     const metadataRecord = await getExperimentMetadata(experiment.id);
     let metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
     const protocolName = String(metadataRecord.protocol_name || '');
-    if (!(Number(metadata.protocol_revision) >= 4) && !/v4/i.test(protocolName)) {
-      updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La planificación automática solo puede activarse en un protocolo V4 nuevo. El experimento V3 existente no se modifica.' });
+    const isV4Protocol = Number(metadata.protocol_revision) >= 4 || /v4/i.test(protocolName);
+    if (!isV4Protocol) {
+      if (schedulerEnabled) {
+        updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La planificación automática solo puede activarse en un protocolo V4 nuevo. El experimento V3 existente no se modifica.' });
+        await persistLabAutomationState(experiment.id);
+      }
+      return;
+    }
+
+    const labelSnapshot = getLabSnapshot(experiment.id) as {
+      campaigns: Array<{ campaign_id: string; status: string; scheduled_by_automation?: boolean; labels_applied_at?: string | null }>;
+    };
+    for (const campaign of labelSnapshot.campaigns) {
+      if (campaign.scheduled_by_automation && campaign.status === 'completed' && !campaign.labels_applied_at) {
+        await labelLabCampaignFromManifest(campaign.campaign_id);
+        markLabCampaignLabeled(campaign.campaign_id);
+        await persistLabAutomationState(experiment.id);
+      }
+    }
+
+    // A paused plan may finish post-processing, but must never schedule a new batch.
+    if (!schedulerEnabled) return;
+
+    if (eventCapturePaused) {
+      updateLabAutomationStatus({ lastError: eventCapturePauseReason || 'Captura pausada por el estado del almacén.' });
       await persistLabAutomationState(experiment.id);
       return;
     }

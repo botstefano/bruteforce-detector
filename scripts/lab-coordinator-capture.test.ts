@@ -9,6 +9,9 @@ import {
   reportLabJobProgress,
   serializeLabCoordinatorState,
   restoreLabCoordinatorState,
+  expireStaleLabJobs,
+  heartbeatLabAgent,
+  updateLabCampaign,
   resetLabCoordinatorForTesting,
 } from '../src/lab_coordinator.js';
 
@@ -103,5 +106,78 @@ test('a runner resumes a partially completed task after coordinator state restor
   assert.equal(resumed.attempts_completed, 1);
   assert.deepEqual(resumed.event_ids, [eventId]);
   assert.equal(resumed.campaign_id, campaign.campaignId);
+  resetLabCoordinatorForTesting();
+});
+
+
+test('an explicitly paused job survives laptop sleep and resumes with its confirmed progress', () => {
+  resetLabCoordinatorForTesting();
+  const agentId = 'runner-sleep-resume-01';
+  const egress = 'd'.repeat(64);
+  registerLabAgent({ agentId, egressIpHash: egress, version: 'test' });
+
+  const { campaign } = createLabCampaign({
+    experimentId: 'experiment-sleep-resume',
+    targetAccount: 'ronan',
+    scenarioIds: ['benign_mixed'],
+    phase: 'train',
+  });
+  activateLabCampaign(campaign.campaignId);
+
+  const firstTask = claimNextLabJob(agentId);
+  assert.ok(firstTask);
+  const jobId = String(firstTask.job_id);
+  const firstEventId = '33333333-3333-4333-8333-333333333333';
+  reportLabJobProgress(agentId, jobId, 1, firstEventId);
+
+  // The pause may be requested just before Windows suspends the laptop,
+  // before the runner has had time to acknowledge it with a heartbeat.
+  updateLabCampaign(campaign.campaignId, 'pause');
+
+  // A Render restart must restore both the pending pause request and the
+  // original runner/job association from the persisted coordinator snapshot.
+  const checkpoint = serializeLabCoordinatorState('experiment-sleep-resume');
+  resetLabCoordinatorForTesting();
+  restoreLabCoordinatorState(checkpoint);
+  const restoredCampaigns = serializeLabCoordinatorState('experiment-sleep-resume').campaigns as Array<Record<string, unknown>>;
+  assert.equal(restoredCampaigns[0]?.status, 'paused');
+
+  const afterTenMinutes = Date.now() + 10 * 60_000;
+  assert.equal(expireStaleLabJobs(afterTenMinutes), 0);
+  assert.equal(expireStaleLabJobs(afterTenMinutes + 8 * 60 * 60_000), 0);
+
+  // Waking the same laptop re-registers the same runner and returns its
+  // original job, including the confirmed event checkpoint.
+  const registered = registerLabAgent({ agentId, egressIpHash: egress, version: 'test-resumed' });
+  assert.equal(registered.currentJobId, jobId);
+  const resumedTask = claimNextLabJob(agentId);
+  assert.ok(resumedTask);
+  assert.equal(resumedTask.job_id, jobId);
+  assert.equal(resumedTask.attempts_completed, 1);
+  assert.deepEqual(resumedTask.event_ids, [firstEventId]);
+
+  updateLabCampaign(campaign.campaignId, 'resume');
+  assert.equal(heartbeatLabAgent(agentId).command, 'continue');
+  const nextContext = getLabJobCaptureContext(agentId, jobId, 1);
+  assert.equal(nextContext.campaignId, campaign.campaignId);
+  assert.equal(nextContext.targetAccount, 'ronan');
+
+  resetLabCoordinatorForTesting();
+});
+
+test('an active job without an explicit pause still expires after runner loss', () => {
+  resetLabCoordinatorForTesting();
+  const agentId = 'runner-unexpected-loss-01';
+  registerLabAgent({ agentId, egressIpHash: 'e'.repeat(64), version: 'test' });
+  const { campaign } = createLabCampaign({
+    experimentId: 'experiment-unexpected-loss',
+    targetAccount: 'andy',
+    scenarioIds: ['benign_mixed'],
+    phase: 'train',
+  });
+  activateLabCampaign(campaign.campaignId);
+  assert.ok(claimNextLabJob(agentId));
+
+  assert.equal(expireStaleLabJobs(Date.now() + 10 * 60_000), 1);
   resetLabCoordinatorForTesting();
 });
