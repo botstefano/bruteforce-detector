@@ -877,6 +877,12 @@ async function tickLabAutomation(): Promise<void> {
       }
     }
 
+    const phaseEndAtMs = phase === 'train'
+      ? experiment.trainEndMs
+      : phase === 'validation'
+        ? experiment.validationEndMs
+        : experiment.testEndMs;
+
     const { campaign, manifest } = createLabCampaign({
       experimentId: experiment.id,
       targetAccount: batch.targetAccount,
@@ -884,14 +890,9 @@ async function tickLabAutomation(): Promise<void> {
       scenarioIds: [batch.scenarioId],
       repetitions: batch.repetitions,
       phase,
+      phaseEndAtMs,
       scheduledByAutomation: true,
     });
-
-    const phaseEndAtMs = phase === 'train'
-      ? experiment.trainEndMs
-      : phase === 'validation'
-        ? experiment.validationEndMs
-        : experiment.testEndMs;
     const plannedJobs = (getLabSnapshot(experiment.id).campaigns as Array<Record<string, unknown>>)
       .find((item) => item.campaign_id === campaign.campaignId)?.jobs as Array<Record<string, unknown>>;
     const finishByAgent = new Map<string, number>();
@@ -1029,6 +1030,7 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
       scenarioIds,
       repetitions,
       phase,
+      phaseEndAtMs,
     });
     if (phaseEndAtMs !== null) {
       const plannedJobs = (getLabSnapshot(activeExperiment.id).campaigns as Array<Record<string, unknown>>)
@@ -1037,13 +1039,12 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
       for (const job of [...plannedJobs].sort((a, b) => Date.parse(String(a.start_at)) - Date.parse(String(b.start_at)))) {
         const agentId = String(job.agent_id || '');
         const plannedStart = Date.parse(String(job.start_at));
-        const scenario = LAB_SCENARIO_CATALOG[String(job.scenario_id) as keyof typeof LAB_SCENARIO_CATALOG];
         const effectiveStart = Math.max(plannedStart, finishByAgent.get(agentId) || plannedStart);
         const attempts = Number(job.attempts_planned || 0);
         const plannedDelays = Array.isArray(job.planned_inter_attempt_delays_ms)
           ? (job.planned_inter_attempt_delays_ms as unknown[]).filter((value): value is number => typeof value === 'number')
           : [];
-        const estimatedFinish = effectiveStart + (attempts * 330_000) +
+        const estimatedFinish = effectiveStart + (attempts * 366_000) +
           plannedDelays.reduce((sum, delay) => sum + delay, 0);
         finishByAgent.set(agentId, estimatedFinish);
       }
