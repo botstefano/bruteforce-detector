@@ -46,6 +46,7 @@ import {
   createLabCampaign,
   getLabCampaignForLabeling,
   getLabJobControl,
+  getLabJobCaptureContext,
   getLabSnapshot,
   heartbeatLabAgent,
   registerLabAgent,
@@ -799,6 +800,51 @@ app.post('/api/lab/agent/heartbeat', requiereAgenteLab, (req: Request, res: Resp
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo actualizar el heartbeat.';
     return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/lab/agent/auth', requiereAgenteLab, async (req: Request, res: Response) => {
+  try {
+    const agentId = String(req.headers['x-centinela-agent-id'] || '').trim();
+    const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
+    const attemptIndex = Number(req.body?.attempt_index);
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!agentId || !jobId || !username || !password) {
+      return res.status(400).json({ error: 'Faltan los datos de tarea o autenticación.' });
+    }
+    const context = getLabJobCaptureContext(agentId, jobId, attemptIndex);
+    if (username !== context.targetAccount) {
+      return res.status(403).json({ error: 'La cuenta no coincide con la cuenta de laboratorio asignada.' });
+    }
+    const sourceIp = ipVerificadaDesdeEdge(req);
+    const observedIpHash = getAnalyticsIdentifiers(sourceIp, agentId).ipKey;
+    if (observedIpHash !== context.egressIpHash) {
+      return res.status(403).json({ error: 'La IP de salida observada no coincide con la registrada para este agente.' });
+    }
+    const successful = CREDENCIALES_VALIDAS[username] === password;
+    if (successful !== context.expectedSuccess) {
+      return res.status(409).json({ error: 'El resultado de autenticación no coincide con el resultado previsto en la tarea; no se registró el evento.' });
+    }
+    const event = await procesarIntentoCapturado(sourceIp, username, successful, 'automated_lab_agent', {
+      campaign_id: context.campaignId,
+      run_id: context.runId,
+      agent_id: agentId,
+      scenario_id: context.scenarioId,
+      actor_type: context.scenarioId === 'benign_mixed' ? 'benign_agent' : 'attack_agent',
+      generation_method: 'automated_http_agent',
+      job_id: jobId,
+      attempt_index: attemptIndex,
+    });
+    return res.status(successful ? 200 : 401).json({
+      event_recorded: true,
+      event_id: event.event_id,
+      auth_success: successful,
+      persisted: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo capturar el intento del agente.';
+    return res.status(503).json({ error: message, event_recorded: false, persisted: false });
   }
 });
 
