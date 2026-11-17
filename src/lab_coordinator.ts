@@ -189,7 +189,10 @@ export function createLabCampaign(input: {
 }): { campaign: LabCampaign; manifest: Record<string, unknown> } {
   const now = Date.now();
   const scenarioIds = [...new Set(input.scenarioIds.filter(isScenarioId))];
-  const repetitions = Math.max(1, Math.min(5, Math.floor(input.repetitions ?? 1)));
+  const repetitions = input.repetitions ?? 1;
+  if (!Number.isInteger(repetitions) || repetitions < 1 || repetitions > 5) {
+    throw new Error('repetitions debe ser un entero entre 1 y 5.');
+  }
   if (!input.experimentId) throw new Error('Se requiere un experimento activo.');
   if (!/^(ronan|andy|stefano)$/.test(input.targetAccount)) {
     throw new Error('La cuenta objetivo debe ser una cuenta de laboratorio autorizada.');
