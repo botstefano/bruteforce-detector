@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  activateLabCampaign,
   claimNextLabJob,
   createLabCampaign,
   getLabJobCaptureContext,
@@ -24,6 +25,7 @@ test('capture context is bound to the assigned agent and exact next attempt', ()
     scenarioIds: ['benign_mixed'],
     phase: 'train',
   });
+  activateLabCampaign(campaign.campaignId);
   const job = claimNextLabJob('runner-test-01');
   assert.ok(job);
   const jobId = String(job.job_id);
@@ -56,6 +58,7 @@ test('a runner resumes a partially completed task after coordinator state restor
     scenarioIds: ['benign_mixed'],
     phase: 'train',
   });
+  activateLabCampaign(campaign.campaignId);
   const firstJob = claimNextLabJob('runner-resume-01');
   assert.ok(firstJob);
   const jobId = String(firstJob.job_id);
