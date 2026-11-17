@@ -803,51 +803,6 @@ app.post('/api/lab/agent/heartbeat', requiereAgenteLab, (req: Request, res: Resp
   }
 });
 
-app.post('/api/lab/agent/auth', requiereAgenteLab, async (req: Request, res: Response) => {
-  try {
-    const agentId = String(req.headers['x-centinela-agent-id'] || '').trim();
-    const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
-    const attemptIndex = Number(req.body?.attempt_index);
-    const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
-    const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (!agentId || !jobId || !username || !password) {
-      return res.status(400).json({ error: 'Faltan los datos de tarea o autenticación.' });
-    }
-    const context = getLabJobCaptureContext(agentId, jobId, attemptIndex);
-    if (username !== context.targetAccount) {
-      return res.status(403).json({ error: 'La cuenta no coincide con la cuenta de laboratorio asignada.' });
-    }
-    const sourceIp = ipVerificadaDesdeEdge(req);
-    const observedIpHash = getAnalyticsIdentifiers(sourceIp, agentId).ipKey;
-    if (observedIpHash !== context.egressIpHash) {
-      return res.status(403).json({ error: 'La IP de salida observada no coincide con la registrada para este agente.' });
-    }
-    const successful = CREDENCIALES_VALIDAS[username] === password;
-    if (successful !== context.expectedSuccess) {
-      return res.status(409).json({ error: 'El resultado de autenticación no coincide con el resultado previsto en la tarea; no se registró el evento.' });
-    }
-    const event = await procesarIntentoCapturado(sourceIp, username, successful, 'automated_lab_agent', {
-      campaign_id: context.campaignId,
-      run_id: context.runId,
-      agent_id: agentId,
-      scenario_id: context.scenarioId,
-      actor_type: context.scenarioId === 'benign_mixed' ? 'benign_agent' : 'attack_agent',
-      generation_method: 'automated_http_agent',
-      job_id: jobId,
-      attempt_index: attemptIndex,
-    });
-    return res.status(successful ? 200 : 401).json({
-      event_recorded: true,
-      event_id: event.event_id,
-      auth_success: successful,
-      persisted: true,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'No se pudo capturar el intento del agente.';
-    return res.status(503).json({ error: message, event_recorded: false, persisted: false });
-  }
-});
-
 app.post('/api/lab/agent/progress', requiereAgenteLab, (req: Request, res: Response) => {
   try {
     const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
@@ -936,6 +891,8 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
   const scenarioId = typeof data.scenario_id === 'string' ? data.scenario_id.trim() : '';
   const actorType = typeof data.actor_type === 'string' ? data.actor_type.trim() : '';
   const generationMethod = typeof data.generation_method === 'string' ? data.generation_method.trim() : '';
+  const jobId = typeof data.job_id === 'string' ? data.job_id.trim() : '';
+  const attemptIndex = Number(data.attempt_index);
   if (campaignId.length > 120) return res.status(400).json({ error: 'campaign_id no puede superar 120 caracteres.' });
   if (runId && !/^[a-f0-9-]{36}$/i.test(runId)) return res.status(400).json({ error: 'run_id no es válido.' });
   if (agentId && !/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(agentId)) return res.status(400).json({ error: 'agent_id no es válido.' });
@@ -944,9 +901,11 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
   }
   if (actorType && !['benign_agent', 'attack_agent'].includes(actorType)) return res.status(400).json({ error: 'actor_type no es válido.' });
   if (generationMethod && generationMethod !== 'automated_http_agent') return res.status(400).json({ error: 'generation_method no está permitido.' });
-  if (Boolean(runId || agentId || scenarioId || actorType || generationMethod) &&
-      !(campaignId && runId && agentId && scenarioId && actorType && generationMethod)) {
-    return res.status(400).json({ error: 'La procedencia del agente requiere campaign_id, run_id, agent_id, scenario_id, actor_type y generation_method.' });
+  const hasLabMetadata = Boolean(runId || agentId || scenarioId || actorType || generationMethod || jobId || data.attempt_index !== undefined);
+  if (hasLabMetadata &&
+      !(campaignId && runId && agentId && scenarioId && actorType && generationMethod && jobId &&
+        Number.isInteger(attemptIndex) && attemptIndex >= 0)) {
+    return res.status(400).json({ error: 'La procedencia del agente requiere campaign_id, run_id, agent_id, scenario_id, actor_type, generation_method, job_id y attempt_index.' });
   }
   if (!usuario || usuario.length > 254 || typeof data.exitoso !== 'boolean') {
     return res.status(400).json({ error: 'Se requiere usuario válido y exitoso booleano.' });
@@ -959,6 +918,17 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
     // La IP del cuerpo solo se acepta en este endpoint porque ya se validó el token
     // de servicio a servicio; nunca se acepta de clientes públicos.
     const ip = reportedIp || ipDelCliente(req);
+    if (hasLabMetadata) {
+      const context = getLabJobCaptureContext(agentId, jobId, attemptIndex);
+      const expectedActor = context.scenarioId === 'benign_mixed' ? 'benign_agent' : 'attack_agent';
+      const observedIpHash = getAnalyticsIdentifiers(ip, agentId).ipKey;
+      if (context.campaignId !== campaignId || context.runId !== runId ||
+          context.scenarioId !== scenarioId || context.targetAccount !== usuario ||
+          actorType !== expectedActor || generationMethod !== 'automated_http_agent' ||
+          data.exitoso !== context.expectedSuccess || observedIpHash !== context.egressIpHash) {
+        return res.status(403).json({ error: 'La solicitud no coincide con el manifiesto, tarea o IP observada del agente.' });
+      }
+    }
     const evento = await procesarIntentoCapturado(
       ip,
       usuario,
@@ -971,6 +941,7 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
         ...(scenarioId ? { scenario_id: scenarioId } : {}),
         ...(actorType ? { actor_type: actorType } : {}),
         ...(generationMethod ? { generation_method: generationMethod } : {}),
+        ...(jobId ? { job_id: jobId, attempt_index: attemptIndex } : {}),
       } : {}
     );
     return res.json({
