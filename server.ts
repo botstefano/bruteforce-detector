@@ -530,6 +530,30 @@ async function procesarIntentoCapturado(
   return evento;
 }
 
+const labCaptureInFlight = new Map<string, ReturnType<typeof procesarIntentoCapturado>>();
+
+async function procesarIntentoCapturadoIdempotente(
+  requestId: string,
+  ip: string,
+  usuario: string,
+  exitoso: boolean,
+  origen: string,
+  metadata: Record<string, unknown>,
+) {
+  const pending = labCaptureInFlight.get(requestId);
+  if (pending) return pending;
+
+  const operation = procesarIntentoCapturado(ip, usuario, exitoso, origen, metadata);
+  labCaptureInFlight.set(requestId, operation);
+  try {
+    return await operation;
+  } finally {
+    if (labCaptureInFlight.get(requestId) === operation) {
+      labCaptureInFlight.delete(requestId);
+    }
+  }
+}
+
 // Los generadores históricos se deshabilitan permanentemente en v3.
 // El conjunto empírico solo puede recibir solicitudes que atraviesen el portal de laboratorio
 // o una integración de autenticación explícitamente autorizada.
@@ -976,11 +1000,13 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'La IP informada por el backend no es válida.' });
   }
 
+  let labRequestId: string | null = null;
   try {
     // La IP del cuerpo solo se acepta en este endpoint porque ya se validó el token
     // de servicio a servicio; nunca se acepta de clientes públicos.
     const ip = reportedIp || ipDelCliente(req);
     if (hasLabMetadata) {
+      labRequestId = labAttemptRequestId(jobId, attemptIndex);
       const context = getLabJobCaptureContext(agentId, jobId, attemptIndex);
       const expectedActor = context.scenarioId === 'benign_mixed' ? 'benign_agent' : 'attack_agent';
       const observedIpHash = getAnalyticsIdentifiers(ip, agentId).ipKey;
@@ -993,8 +1019,7 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
 
       // Solo se admite replay idempotente después de validar nuevamente la tarea y
       // la IP de red del agente; conocer el request_id no concede acceso al evento.
-      const requestId = labAttemptRequestId(jobId, attemptIndex);
-      const existing = await findObservedLabAttempt(requestId);
+      const existing = await findObservedLabAttempt(labRequestId);
       if (existing) {
         const existingMetadata = existing.metadata ?? {};
         if (existing.experiment_id !== getActiveExperimentId() ||
@@ -1017,21 +1042,22 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
         });
       }
     }
-    const evento = await procesarIntentoCapturado(
-      ip,
-      usuario,
-      data.exitoso,
-      'integracion_autenticacion',
-      campaignId ? {
-        campaign_id: campaignId,
-        ...(runId ? { run_id: runId } : {}),
-        ...(agentId ? { agent_id: agentId } : {}),
-        ...(scenarioId ? { scenario_id: scenarioId } : {}),
-        ...(actorType ? { actor_type: actorType } : {}),
-        ...(generationMethod ? { generation_method: generationMethod } : {}),
-        ...(jobId ? { job_id: jobId, attempt_index: attemptIndex } : {}),
-      } : {}
-    );
+    const eventMetadata = campaignId ? {
+      campaign_id: campaignId,
+      ...(runId ? { run_id: runId } : {}),
+      ...(agentId ? { agent_id: agentId } : {}),
+      ...(scenarioId ? { scenario_id: scenarioId } : {}),
+      ...(actorType ? { actor_type: actorType } : {}),
+      ...(generationMethod ? { generation_method: generationMethod } : {}),
+      ...(jobId ? { job_id: jobId, attempt_index: attemptIndex } : {}),
+    } : {};
+    const evento = hasLabMetadata && labRequestId
+      ? await procesarIntentoCapturadoIdempotente(
+          labRequestId, ip, usuario, data.exitoso, 'integracion_autenticacion', eventMetadata
+        )
+      : await procesarIntentoCapturado(
+          ip, usuario, data.exitoso, 'integracion_autenticacion', eventMetadata
+        );
     return res.json({
       event_id: evento.event_id,
       alerta: evento.bloqueado_ahora,
