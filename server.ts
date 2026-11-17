@@ -206,9 +206,22 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 // Helper de extracción de IP
 function ipDelCliente(req: Request, _dataOverride?: { ip?: string }): string {
-  // Express resuelve req.ip usando solo la cantidad de proxies de confianza configurada.
-  // Nunca se acepta una IP enviada dentro del cuerpo de una petición.
+  // Cloudflare/Render documenta CF-Connecting-IP como la IP de origen
+  // y CF-Ray como identificador añadido por el edge. Para otros endpoints,
+  // se conserva el fallback de Express según la cadena de proxies configurada.
+  const cloudflareIp = String(req.headers['cf-connecting-ip'] || '').trim();
+  const cloudflareRay = String(req.headers['cf-ray'] || '').trim();
+  if (cloudflareIp && cloudflareRay && isIP(cloudflareIp) !== 0) return cloudflareIp;
   return req.ip || req.socket.remoteAddress || 'unknown';
+}
+
+function ipVerificadaDesdeEdge(req: Request): string {
+  const cloudflareIp = String(req.headers['cf-connecting-ip'] || '').trim();
+  const cloudflareRay = String(req.headers['cf-ray'] || '').trim();
+  if (!cloudflareIp || !cloudflareRay || isIP(cloudflareIp) === 0) {
+    throw new Error('No se recibió una IP y un identificador CF-Ray verificables desde el edge de Render/Cloudflare.');
+  }
+  return cloudflareIp;
 }
 
 function safeStringEqual(candidate: string, expected: string): boolean {
@@ -665,8 +678,13 @@ app.post('/api/lab/agent/register', requiereAgenteLab, (req: Request, res: Respo
   try {
     const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
     const version = typeof req.body?.version === 'string' ? req.body.version.slice(0, 80) : 'unknown';
-    const sourceIp = ipDelCliente(req);
-    if (isIP(sourceIp) === 0) return res.status(400).json({ error: 'No se pudo verificar la IP de salida del agente.' });
+    let sourceIp: string;
+    try {
+      sourceIp = ipVerificadaDesdeEdge(req);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'IP de runner no verificada.';
+      return res.status(400).json({ error: message });
+    }
     const identifiers = getAnalyticsIdentifiers(sourceIp, agentId || 'invalid-agent');
     const agent = registerLabAgent({ agentId, egressIpHash: identifiers.ipKey, version });
     io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
