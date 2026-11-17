@@ -20,6 +20,7 @@ import {
   abortExperimentRecord,
   appendLabCampaignManifest,
   getExperimentMetadata,
+  persistLabCollectionPlan,
   calculateObservedMetrics,
   checkSupabaseConnection,
   createExperimentRecord,
@@ -49,6 +50,7 @@ import {
   configureLabAutomation,
   getLabAutomationPlan,
   getNextLabAutomationBatch,
+  resumeLabAutomation,
   isLabAutomationPhaseComplete,
   completeLabAutomation,
   markLabCampaignLabeled,
@@ -660,6 +662,7 @@ app.get('/api/lab/state', requiereAdmin, async (_req: Request, res: Response) =>
 
 
 let labAutomationTickRunning = false;
+let labAutomationConfiguring = false;
 
 
 async function labelLabCampaignFromManifest(campaignId: string): Promise<{ labeled: number; alreadyLabeled: number }> {
@@ -795,7 +798,7 @@ async function persistLabAutomationState(experimentId: string): Promise<void> {
 }
 
 async function tickLabAutomation(): Promise<void> {
-  if (labAutomationTickRunning) return;
+  if (labAutomationTickRunning || labAutomationConfiguring) return;
   const plan = getLabAutomationPlan();
   if (!plan?.enabled || plan.status !== 'running') return;
   labAutomationTickRunning = true;
@@ -1009,13 +1012,18 @@ async function tickLabAutomation(): Promise<void> {
 
 
 app.post('/api/lab/automation/start', requiereAdmin, async (req: Request, res: Response) => {
+  if (labAutomationConfiguring) return res.status(409).json({ error: 'Ya se está preregistrando un plan de recolección.' });
+  labAutomationConfiguring = true;
   try {
     const experiment = getActiveExperimentState();
     if (!experiment) return res.status(409).json({ error: 'No hay un experimento activo.' });
     const metadataRecord = await getExperimentMetadata(experiment.id);
     const metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
     if (!(Number(metadata.protocol_revision) >= 4) && !/v4/i.test(String(metadataRecord.protocol_name || ''))) {
-      return res.status(409).json({ error: 'La recolección automática requiere crear un protocolo V4 nuevo. El experimento V3 actual permanece intacto.' });
+      return res.status(409).json({ error: 'La recolección automática requiere crear un protocolo V4 nuevo. El experimento V3 existente permanece intacto.' });
+    }
+    if (metadata.collection_plan) {
+      return res.status(409).json({ error: 'Las cuotas V4 ya están preregistradas. Usa reanudar; no se permite volver a configurar el plan.' });
     }
     if (CENTINELA_LAB_AGENT_TOKEN.length < 32 || !eventStoreStatus().configured) {
       return res.status(503).json({ error: 'El token de agentes y el almacenamiento persistente deben estar configurados.' });
@@ -1033,12 +1041,41 @@ app.post('/api/lab/automation/start', requiereAdmin, async (req: Request, res: R
       accounts: Array.isArray(req.body?.accounts) ? req.body.accounts : ['ronan', 'andy', 'stefano'],
       targets,
     });
-    await persistLabAutomationState(experiment.id);
+    try {
+      await persistLabCollectionPlan(
+        experiment.id,
+        plan,
+        serializeLabCoordinatorState(experiment.id),
+      );
+    } catch (persistError) {
+      stopLabAutomation();
+      throw persistError;
+    }
     io.emit('lab_campaign_update', getLabSnapshot(experiment.id));
     void tickLabAutomation();
     return res.status(201).json({ status: 'running', plan });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'No se pudo activar la recolección automática.';
+    const message = error instanceof Error ? error.message : 'No se pudo iniciar la recolección automática.';
+    return res.status(400).json({ error: message });
+  } finally {
+    labAutomationConfiguring = false;
+  }
+});
+
+app.post('/api/lab/automation/resume', requiereAdmin, async (_req: Request, res: Response) => {
+  try {
+    const experimentId = getActiveExperimentId();
+    if (!experimentId) return res.status(409).json({ error: 'No hay un experimento activo.' });
+    const metadataRecord = await getExperimentMetadata(experimentId);
+    const metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    if (!metadata.collection_plan) return res.status(409).json({ error: 'No existe un plan V4 preregistrado para reanudar.' });
+    const plan = resumeLabAutomation(experimentId);
+    await persistLabAutomationState(experimentId);
+    io.emit('lab_campaign_update', getLabSnapshot(experimentId));
+    void tickLabAutomation();
+    return res.json({ status: 'running', plan });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo reanudar la recolección automática.';
     return res.status(400).json({ error: message });
   }
 });
