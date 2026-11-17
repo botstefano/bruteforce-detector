@@ -1,0 +1,25 @@
+name: Centinela lab-auth v3 validation
+
+on:
+  push:
+    branches:
+      - feature/lab-auth-v3-agent-ingest
+    paths:
+      - "lab-auth/**"
+      - ".github/workflows/lab-auth-v3-check.yml"
+  workflow_dispatch:
+
+jobs:
+  portal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate portal JavaScript syntax
+        run: node --check lab-auth/server.js
+      - name: Build portal container
+        run: docker build -f lab-auth/Dockerfile -t centinela-lab-auth-v3-check ./lab-auth
