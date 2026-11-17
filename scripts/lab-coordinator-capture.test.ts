@@ -133,6 +133,15 @@ test('an explicitly paused job survives laptop sleep and resumes with its confir
   // The pause may be requested just before Windows suspends the laptop,
   // before the runner has had time to acknowledge it with a heartbeat.
   updateLabCampaign(campaign.campaignId, 'pause');
+
+  // A Render restart must restore both the pending pause request and the
+  // original runner/job association from the persisted coordinator snapshot.
+  const checkpoint = serializeLabCoordinatorState('experiment-sleep-resume');
+  resetLabCoordinatorForTesting();
+  restoreLabCoordinatorState(checkpoint);
+  const restoredCampaigns = serializeLabCoordinatorState('experiment-sleep-resume').campaigns as Array<Record<string, unknown>>;
+  assert.equal(restoredCampaigns[0]?.status, 'paused');
+
   const afterTenMinutes = Date.now() + 10 * 60_000;
   assert.equal(expireStaleLabJobs(afterTenMinutes), 0);
   assert.equal(expireStaleLabJobs(afterTenMinutes + 8 * 60 * 60_000), 0);
