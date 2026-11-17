@@ -27,6 +27,7 @@ test('benign sessions have variable, bounded and reproducible manifest parameter
   const { manifest } = createLabCampaign({
     experimentId: 'experiment-v4-test',
     targetAccount: 'ronan',
+    targetAccounts: ['ronan', 'andy', 'stefano'],
     scenarioIds: ['benign_mixed'],
     phase: 'train',
     repetitions: 5,
@@ -54,6 +55,7 @@ test('benign sessions have variable, bounded and reproducible manifest parameter
 
   assert.equal(seeds.size, runs.length);
   assert.notEqual(runs[0].planned_start_at, runs[1].planned_start_at);
+  assert.deepEqual(runs.map((run) => run.target_account), ['ronan', 'andy', 'stefano', 'ronan', 'andy']);
   assert.match(String(manifest.note), /no sesiones humanas espontáneas/);
 });
 
