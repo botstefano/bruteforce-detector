@@ -708,6 +708,17 @@ export function configureLabAutomation(input: {
   return { ...labAutomationPlan, accounts: [...accounts], targets: structuredClone(targets) };
 }
 
+
+export function discardUnpersistedLabAutomationPlan(experimentId: string): boolean {
+  if (!labAutomationPlan || labAutomationPlan.experimentId !== experimentId) return false;
+  const hasAutomaticCampaign = [...campaigns.values()].some(
+    (campaign) => campaign.experimentId === experimentId && campaign.scheduledByAutomation
+  );
+  if (hasAutomaticCampaign) return false;
+  labAutomationPlan = null;
+  return true;
+}
+
 export function stopLabAutomation(): LabAutomationPlan | null {
   if (!labAutomationPlan) return null;
   labAutomationPlan = { ...labAutomationPlan, enabled: false, status: 'paused', updatedAt: new Date().toISOString() };
