@@ -108,18 +108,19 @@ function authenticate(username, password) {
 }
 
 function clientIpFromRender(req) {
-  const forwarded = req.headers["x-forwarded-for"];
-  const chain = Array.isArray(forwarded) ? forwarded.join(",") : String(forwarded || "");
-  const firstAddress = chain.split(",")[0]?.trim() || "";
-
-  if (firstAddress && isIP(firstAddress)) return firstAddress;
+  // Render confirma que el tráfico público pasa por Cloudflare y que se reenvía CF-Ray.
+  // Cloudflare recomienda CF-Connecting-IP frente a parsear X-Forwarded-For,
+  // cuyo elemento más a la izquierda puede haber sido suministrado por el cliente.
+  const cloudflareIp = String(req.headers["cf-connecting-ip"] || "").trim();
+  const cloudflareRay = String(req.headers["cf-ray"] || "").trim();
+  if (cloudflareIp && isIP(cloudflareIp) !== 0 && cloudflareRay) return cloudflareIp;
 
   if (!IS_PRODUCTION) {
     const localIp = req.socket.remoteAddress || "127.0.0.1";
     return localIp.startsWith("::ffff:") ? localIp.slice(7) : localIp;
   }
 
-  throw new Error("No se pudo verificar la IP de origen proporcionada por Render.");
+  throw new Error("No se recibió CF-Connecting-IP y CF-Ray verificables desde el borde de Render/Cloudflare; no se aceptará X-Forwarded-For sin verificar.");
 }
 
 function consumeRateLimit(ip) {
