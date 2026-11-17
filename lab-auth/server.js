@@ -515,6 +515,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, {
       status: "ok",
       service: "centinela-auth-lab",
+      detector_host: new URL(CENTINELA_API_URL).hostname,
       credentials_configured: credentialDigests.size === EXPECTED_USERS.length,
       captcha_configured: true,
       centinela_configured: Boolean(CENTINELA_API_URL && CENTINELA_INGEST_TOKEN),
@@ -746,6 +747,7 @@ server.keepAliveTimeout = 5_000;
 
 server.listen(PORT, "0.0.0.0", () => {
   console.log("Centinela Auth Lab escuchando en el puerto " + PORT);
+  console.log("Host configurado del detector:", new URL(CENTINELA_API_URL).hostname);
   console.log("Cuentas de laboratorio cargadas:", EXPECTED_USERS.join(", "));
   console.log("Campaña de captura:", CAMPAIGN_ID);
   console.log("Bloqueo por cuenta desactivado; CAPTCHA y límite por IP activos.");
