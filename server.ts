@@ -179,6 +179,13 @@ async function entrenarModeloDesdeCapturasBenignas(restaurarModeloCongelado = fa
   if (restaurarModeloCongelado) {
     if (!experiment.trainingFrozen) throw new Error('No existe un modelo congelado para restaurar.');
   } else {
+    const protocol = await getExperimentMetadata(experiment.id);
+    const protocolMetadata = (protocol.metadata ?? {}) as Record<string, unknown>;
+    if (Number(protocolMetadata.protocol_revision) >= 4 || /v4/i.test(String(protocol.protocol_name || ''))) {
+      if (!protocolMetadata.collection_plan || !isLabAutomationPhaseComplete(experiment.id, 'train')) {
+        throw new Error('V4 no permite congelar el baseline manualmente: deben completarse y etiquetarse las cuotas benignas preregistradas.');
+      }
+    }
     if (experiment.trainingFrozen) {
       throw new Error('El modelo ya está congelado para este experimento. Crea un experimento nuevo para reentrenar.');
     }
@@ -1210,7 +1217,14 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
 
 app.post('/api/experimentos/:experimentId/congelar_validacion', requiereAdmin, async (req: Request, res: Response) => {
   try {
-    const result = await freezeActiveExperimentValidation(singleRouteParam(req.params.experimentId));
+    const experimentId = singleRouteParam(req.params.experimentId);
+    const protocol = await getExperimentMetadata(experimentId);
+    const protocolMetadata = (protocol.metadata ?? {}) as Record<string, unknown>;
+    if ((Number(protocolMetadata.protocol_revision) >= 4 || /v4/i.test(String(protocol.protocol_name || ''))) &&
+        (!protocolMetadata.collection_plan || !isLabAutomationPhaseComplete(experimentId, 'validation'))) {
+      return res.status(409).json({ error: 'V4 solo congela la validación cuando todas las cuotas preregistradas están completas y etiquetadas mediante sus manifiestos auditados.' });
+    }
+    const result = await freezeActiveExperimentValidation(experimentId);
     return res.json({
       status: 'validation_frozen',
       validation: (result.metadata as Record<string, unknown>)?.validation_frozen === true,
