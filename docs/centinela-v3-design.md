@@ -1,6 +1,6 @@
 # Centinela v3 — Diseño de laboratorio automatizado
 
-**Estado:** diseño y auditoría inicial; no desplegado.  
+**Estado:** implementación inicial en rama aislada; despliegue del detector y captura piloto aún bloqueados por CI, migración idempotente pendiente y conectividad del portal→detector (HTTP 502 en warm-up).  
 **Rama:** `feature/centinela-v3-automated-lab`  
 **Base:** `fix/supabase-event-audit` en el commit `c8ea113984327fb0405f17902c8f41773e82de31`.  
 **Fecha de inicio:** 2026-11-17.  
@@ -11,6 +11,14 @@
 Construir una evaluación experimental reproducible de un detector híbrido de fuerza bruta en eventos de autenticación HTTP. La investigación comparará reglas y detección de anomalías ante sesiones benignas, errores legítimos, ataques controlados desde un origen, ataques distribuidos y patrones de baja frecuencia.
 
 Los agentes automatizados producirán solicitudes dirigidas exclusivamente al portal de laboratorio autorizado. Son **eventos HTTP realmente recibidos y procesados por la aplicación**, pero el comportamiento generador es automatizado y controlado. No se describirán como ataques espontáneos de Internet ni como actividad humana.
+
+### Arquitectura de despliegue
+
+- **Detector/coordinador:** `https://bruteforce-detector-2uv4.onrender.com`.
+- **Portal autenticador del testbed:** `https://centinela-auth-lab.onrender.com`.
+- El runner consulta tareas al detector y realiza solicitudes HTTP al portal. El portal valida la contraseña localmente y remite solo el resultado de autenticación, la IP observada en el edge y la procedencia al detector.
+- El detector valida token, tarea, agente, cuenta, resultado, campaña y HMAC de la IP antes de aceptar y persistir el evento.
+- Son dos servicios de la arquitectura experimental, además del servicio histórico v2. Ninguno de los dos servicios v3 ha sido cambiado de rama desde su integración actual; el detector continúa en la rama base hasta pasar validación.
 
 ### Pregunta principal
 
@@ -86,6 +94,8 @@ Cada ejecución y evento deberá poder vincularse con:
 
 Los manifiestos independientes de cada campaña definirán cuentas objetivo, runners autorizados, intervalo temporal, patrón, número esperado de solicitudes y etiqueta. Se mantendrá un recuento de eventos capturados, no capturados, duplicados y `unknown`.
 
+El coordinador guarda su cola, estado de agentes, asignación de tareas y progreso confirmado en `centinela_experiments.metadata.lab_coordinator_state`. Cada intento tiene un `request_id` determinista derivado de `job_id` e índice de intento; los reintentos tras un timeout consultan el evento previo y recuperan el mismo `event_id`. La migración que añade el índice único parcial de `request_id` está en la rama, pero debe aplicarse y verificarse en Supabase antes de desplegar v3.
+
 **Semántica importante:** que una solicitud sea HTTP real y se procese por el portal no significa que el comportamiento sea espontáneo o humano. El dataset describirá explícitamente generación automatizada. No se falsificará la procedencia mediante el campo `is_simulated`; se añadirán campos explícitos de actor y método de generación y se documentará el significado de ambos.
 
 ## 5. Protocolo experimental
@@ -140,6 +150,10 @@ La vista en vivo distinguirá claramente **verdad de referencia** (manifiesto) y
 - Verificación de que las IP mostradas son las observadas realmente, no las declaradas por el cliente.
 - Verificación de que el canal en vivo requiere sesión admin y no expone IP/usuario sin seudonimizar.
 - Prueba de parada, límites de tasa, reanudación segura y recuperación ante caída de Supabase.
+- Prueba de reinicio del detector con una tarea parcialmente completada y replay idempotente sin duplicar eventos.
+- Migración `request_id` aplicada; índice único parcial verificado y asesores Supabase revisados.
+- Verificar portal→detector sin HTTP 502 en warm-up.
+- CI verde para TypeScript, pruebas Node, build Vite y pruebas Python.
 - Comprobación de que train/validation/test y campañas se mantienen separados.
 - No activar generación de tráfico durante una prueba de build ni contra objetivos no autorizados.
 
@@ -147,8 +161,8 @@ La vista en vivo distinguirá claramente **verdad de referencia** (manifiesto) y
 
 1. Completar auditoría del servidor, componentes, esquema y evaluador Python.
 2. Añadir migración compatible para metadatos de actor/escenario/ejecución y su política RLS.
-3. Implementar coordinador y manifiestos inmutables de campañas.
-4. Implementar runner de agentes restringido a host autorizado y que use la IP de red real.
+3. Implementar coordinador, persistencia y recuperación de tareas, manifiestos inmutables e idempotencia de intentos.
+4. Implementar el endpoint autenticado del portal y runners restringidos a los dos dominios autorizados, que usen la IP de red real.
 5. Incorporar el monitor en vivo a la interfaz existente y reducir el polling a reconciliación de respaldo.
 6. Revisar características y detector; separar claramente salidas Node y modelos canónicos offline.
 7. Automatizar exportación y evaluación estadística.
