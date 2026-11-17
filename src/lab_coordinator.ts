@@ -660,13 +660,20 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
   const counts = new Map<LabScenarioId, { completed: number; failed: number }>();
   for (const scenarioId of Object.keys(phaseTargets) as LabScenarioId[]) counts.set(scenarioId, { completed: 0, failed: 0 });
   for (const campaign of phaseCampaigns) {
+    const runs = new Map<string, LabJob[]>();
     for (const jobId of campaign.jobIds) {
       const job = jobs.get(jobId);
       if (!job) continue;
-      const count = counts.get(job.scenarioId);
+      const runJobs = runs.get(job.runId) ?? [];
+      runJobs.push(job);
+      runs.set(job.runId, runJobs);
+    }
+    for (const runJobs of runs.values()) {
+      const scenarioId = runJobs[0]?.scenarioId;
+      const count = scenarioId ? counts.get(scenarioId) : undefined;
       if (!count) continue;
-      if (job.status === 'completed') count.completed += 1;
-      if (job.status === 'failed' || job.status === 'cancelled') count.failed += 1;
+      if (runJobs.every((job) => job.status === 'completed')) count.completed += 1;
+      if (runJobs.some((job) => job.status === 'failed' || job.status === 'cancelled')) count.failed += 1;
     }
   }
 
