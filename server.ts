@@ -674,13 +674,37 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
     throw new Error('No se encontró el manifiesto independiente persistido para esta campaña.');
   }
 
-  const labelByRun = new Map<string, { label: 'benign' | 'attack'; scenarioId: string }>();
+  const requireV4Fields = Number(savedManifest.generation_profile_version) >= 2;
+  const labelByRun = new Map<string, {
+    label: 'benign' | 'attack';
+    scenarioId: string;
+    actorType: string;
+    targetAccount: string;
+    plannedAgentIds: string[];
+    plannedOutcomes: boolean[] | null;
+  }>();
   for (const run of savedManifest.scenarios as Record<string, unknown>[]) {
-    if (typeof run.run_id === 'string' &&
-        (run.expected_label === 'benign' || run.expected_label === 'attack') &&
-        typeof run.scenario_id === 'string') {
-      labelByRun.set(run.run_id, { label: run.expected_label, scenarioId: run.scenario_id });
+    if (typeof run.run_id !== 'string' ||
+        (run.expected_label !== 'benign' && run.expected_label !== 'attack') ||
+        typeof run.scenario_id !== 'string') continue;
+    const plannedAgentIds = Array.isArray(run.planned_agent_ids)
+      ? run.planned_agent_ids.filter((value): value is string => typeof value === 'string')
+      : [];
+    const plannedOutcomes = Array.isArray(run.planned_outcomes) &&
+      run.planned_outcomes.every((value) => typeof value === 'boolean')
+      ? run.planned_outcomes as boolean[]
+      : null;
+    if (requireV4Fields && (!plannedOutcomes || !plannedAgentIds.length || typeof run.target_account !== 'string')) {
+      throw new Error(`El manifiesto V4 de la ejecución ${run.run_id} no contiene la secuencia, cuenta u orígenes planificados.`);
     }
+    labelByRun.set(run.run_id, {
+      label: run.expected_label,
+      scenarioId: run.scenario_id,
+      actorType: String(run.actor_type || ''),
+      targetAccount: String(run.target_account || ''),
+      plannedAgentIds,
+      plannedOutcomes,
+    });
   }
 
   const observed = await fetchObservedEvents(campaign.experimentId);
@@ -694,14 +718,47 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
     if (!expected || expected.label !== job.expectedLabel || expected.scenarioId !== job.scenarioId) {
       throw new Error(`El manifiesto no coincide con la tarea ${job.jobId}; se detuvo el etiquetado.`);
     }
+    if (job.agentId && expected.plannedAgentIds.length && !expected.plannedAgentIds.includes(job.agentId)) {
+      throw new Error(`El agente ${job.agentId} no figura como origen planificado para la ejecución ${job.runId}.`);
+    }
+    if (expected.targetAccount && expected.targetAccount !== job.targetAccount) {
+      throw new Error(`La cuenta objetivo de la tarea ${job.jobId} no coincide con el manifiesto.`);
+    }
+    if (requireV4Fields && (!expected.plannedOutcomes || expected.plannedOutcomes.length !== job.attemptsPlanned)) {
+      throw new Error(`La secuencia prevista de intentos no coincide con la tarea ${job.jobId}.`);
+    }
+
     for (const eventId of job.eventIds) {
       const event = byId.get(eventId);
       if (!event || event.experiment_id !== campaign.experimentId || event.campaign_id !== campaignId) {
         throw new Error(`El evento ${eventId} no pertenece a la campaña y experimento esperados.`);
       }
+      if (event.is_simulated || event.dataset_split !== campaign.phase) {
+        throw new Error(`El evento ${eventId} es simulado o quedó fuera de la fase temporal de su campaña.`);
+      }
       const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
-      if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId) {
-        throw new Error(`La procedencia del evento ${eventId} no coincide con su manifiesto.`);
+      if (eventMetadata.run_id !== job.runId ||
+          eventMetadata.scenario_id !== job.scenarioId ||
+          eventMetadata.agent_id !== job.agentId ||
+          eventMetadata.job_id !== job.jobId ||
+          eventMetadata.actor_type !== expected.actorType ||
+          eventMetadata.generation_method !== 'automated_http_agent') {
+        throw new Error(`La procedencia de agente, tarea o escenario del evento ${eventId} no coincide con su manifiesto.`);
+      }
+      if (event.source_ip_hash !== job.egressIpHash) {
+        throw new Error(`La IP de salida observada del evento ${eventId} no coincide con el origen registrado del agente.`);
+      }
+      const expectedUserHash = getAnalyticsIdentifiers('', job.targetAccount).userKey;
+      if (event.user_key_hash !== expectedUserHash) {
+        throw new Error(`La cuenta observada del evento ${eventId} no coincide con la cuenta planificada.`);
+      }
+      const attemptIndex = Number(eventMetadata.attempt_index);
+      if (!Number.isInteger(attemptIndex) || attemptIndex < 0 || attemptIndex >= job.attemptsPlanned ||
+          event.request_id !== labAttemptRequestId(job.jobId, attemptIndex)) {
+        throw new Error(`El índice o la clave idempotente del evento ${eventId} no coincide con la tarea.`);
+      }
+      if (expected.plannedOutcomes && event.auth_success !== expected.plannedOutcomes[attemptIndex]) {
+        throw new Error(`El resultado de autenticación del evento ${eventId} no coincide con la secuencia preregistrada.`);
       }
       if (event.ground_truth_label === expected.label) {
         alreadyLabeled++;
