@@ -672,16 +672,22 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
   if (!savedManifest || !Array.isArray(savedManifest.scenarios)) {
     throw new Error('No se encontró el manifiesto independiente persistido para esta campaña.');
   }
+
   const labelByRun = new Map<string, { label: 'benign' | 'attack'; scenarioId: string }>();
   for (const run of savedManifest.scenarios as Record<string, unknown>[]) {
-    if (typeof run.run_id === 'string' && (run.expected_label === 'benign' || run.expected_label === 'attack')) {
-      labelByRun.set(run.run_id, { label: run.expected_label, scenarioId: String(run.scenario_id || 'unknown') });
+    if (typeof run.run_id === 'string' &&
+        (run.expected_label === 'benign' || run.expected_label === 'attack') &&
+        typeof run.scenario_id === 'string') {
+      labelByRun.set(run.run_id, { label: run.expected_label, scenarioId: run.scenario_id });
     }
   }
+
   const observed = await fetchObservedEvents(campaign.experimentId);
   const byId = new Map(observed.map((event) => [event.event_id, event]));
-  let labeled = 0;
+  const toLabel: Array<{ eventId: string; label: 'benign' | 'attack'; runId: string; scenarioId: string }> = [];
   let alreadyLabeled = 0;
+
+  // Validate the complete campaign before writing any ground-truth label.
   for (const job of jobs) {
     const expected = labelByRun.get(job.runId);
     if (!expected || expected.label !== job.expectedLabel || expected.scenarioId !== job.scenarioId) {
@@ -693,13 +699,8 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
         throw new Error(`El evento ${eventId} no pertenece a la campaña y experimento esperados.`);
       }
       const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
-      if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId ||
-          eventMetadata.agent_id !== (job as unknown as { agentId?: string }).agentId) {
-        // agent_id is checked against the captured campaign metadata below by the coordinator's
-        // job/event binding; run and scenario are the independent label keys.
-        if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId) {
-          throw new Error(`La procedencia del evento ${eventId} no coincide con su manifiesto.`);
-        }
+      if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId) {
+        throw new Error(`La procedencia del evento ${eventId} no coincide con su manifiesto.`);
       }
       if (event.ground_truth_label === expected.label) {
         alreadyLabeled++;
@@ -708,15 +709,20 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
       if (event.ground_truth_label !== 'unknown') {
         throw new Error(`El evento ${eventId} ya tiene una etiqueta distinta; requiere revisión manual.`);
       }
-      await labelObservedEvent({
-        eventId,
-        label: expected.label,
-        method: 'authorized_automated_campaign_manifest_v1',
-        rationale: `Evento de la campaña autorizada ${campaignId}, ejecución ${job.runId}, escenario ${expected.scenarioId}; etiqueta derivada del manifiesto independiente preregistrado, no de las alertas de Centinela.`,
-        labeledBy: 'centinela-v4-lab-coordinator',
-      });
-      labeled++;
+      toLabel.push({ eventId, label: expected.label, runId: job.runId, scenarioId: expected.scenarioId });
     }
+  }
+
+  let labeled = 0;
+  for (const item of toLabel) {
+    await labelObservedEvent({
+      eventId: item.eventId,
+      label: item.label,
+      method: 'authorized_automated_campaign_manifest_v1',
+      rationale: `Evento de la campaña autorizada ${campaignId}, ejecución ${item.runId}, escenario ${item.scenarioId}; etiqueta derivada del manifiesto independiente preregistrado, no de las alertas de Centinela.`,
+      labeledBy: 'centinela-v4-lab-coordinator',
+    });
+    labeled++;
   }
   return { labeled, alreadyLabeled };
 }
