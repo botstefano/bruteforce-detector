@@ -15,6 +15,7 @@ const CENTINELA_API_URL = (() => {
   return value;
 })();
 const CENTINELA_INGEST_TOKEN = (process.env.CENTINELA_INGEST_TOKEN || "").trim();
+const CENTINELA_LAB_AGENT_TOKEN = (process.env.CENTINELA_LAB_AGENT_TOKEN || "").trim();
 const CAMPAIGN_ID = (() => {
   const value = (process.env.LAB_CAMPAIGN_ID || "laboratorio-web-auth-v2").trim();
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{2,119}$/.test(value)) {
@@ -96,6 +97,21 @@ function safeEqualDigest(left, right) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
+function safeEqualString(left, right) {
+  const a = Buffer.from(left, "utf8");
+  const b = Buffer.from(right, "utf8");
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function validLabAgentRequest(req) {
+  if (CENTINELA_LAB_AGENT_TOKEN.length < 32) return false;
+  const authorization = String(req.headers.authorization || "");
+  const token = authorization.toLowerCase().startsWith("bearer ")
+    ? authorization.slice(7).trim()
+    : "";
+  return safeEqualString(token, CENTINELA_LAB_AGENT_TOKEN);
+}
+
 function authenticate(username, password) {
   const expected = credentialDigests.get(username) || dummyDigest;
   const supplied = sha256(password);
@@ -104,18 +120,19 @@ function authenticate(username, password) {
 }
 
 function clientIpFromRender(req) {
-  const forwarded = req.headers["x-forwarded-for"];
-  const chain = Array.isArray(forwarded) ? forwarded.join(",") : String(forwarded || "");
-  const firstAddress = chain.split(",")[0]?.trim() || "";
-
-  if (firstAddress && isIP(firstAddress)) return firstAddress;
+  // Render recibe el tráfico a través de Cloudflare. CF-Connecting-IP es
+  // establecido por el edge; no confiar en el primer valor de X-Forwarded-For,
+  // que puede contener texto aportado por el cliente.
+  const cloudflareIp = String(req.headers["cf-connecting-ip"] || "").trim();
+  const cloudflareRay = String(req.headers["cf-ray"] || "").trim();
+  if (cloudflareIp && cloudflareRay && isIP(cloudflareIp) !== 0) return cloudflareIp;
 
   if (!IS_PRODUCTION) {
     const localIp = req.socket.remoteAddress || "127.0.0.1";
     return localIp.startsWith("::ffff:") ? localIp.slice(7) : localIp;
   }
 
-  throw new Error("No se pudo verificar la IP de origen proporcionada por Render.");
+  throw new Error("No se pudo verificar la IP de origen mediante el edge de Render/Cloudflare.");
 }
 
 function consumeRateLimit(ip) {
@@ -428,11 +445,26 @@ function primeCentinelaWarmup() {
   });
 }
 
-async function sendEventToCentinela(username, authenticated, ip) {
+async function sendEventToCentinela(username, authenticated, ip, labMetadata = null) {
   await ensureCentinelaReady();
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 90_000);
+  const eventPayload = {
+    usuario: username,
+    exitoso: authenticated,
+    ip,
+    campaign_id: labMetadata?.campaign_id || CAMPAIGN_ID,
+    ...(labMetadata ? {
+      run_id: labMetadata.run_id,
+      agent_id: labMetadata.agent_id,
+      scenario_id: labMetadata.scenario_id,
+      actor_type: labMetadata.actor_type,
+      generation_method: "automated_http_agent",
+      job_id: labMetadata.job_id,
+      attempt_index: labMetadata.attempt_index
+    } : {})
+  };
 
   try {
     const response = await fetch(CENTINELA_API_URL + "/registrar_intento", {
@@ -442,12 +474,7 @@ async function sendEventToCentinela(username, authenticated, ip) {
         "Content-Type": "application/json",
         "Accept": "application/json"
       },
-      body: JSON.stringify({
-        usuario: username,
-        exitoso: authenticated,
-        ip,
-        campaign_id: CAMPAIGN_ID
-      }),
+      body: JSON.stringify(eventPayload),
       signal: controller.signal
     });
 
@@ -542,6 +569,78 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && pathname === "/favicon.ico") {
     res.writeHead(204);
     return res.end();
+  }
+
+  if (req.method === "POST" && pathname === "/agent/login") {
+    if (!validLabAgentRequest(req)) {
+      return sendJson(res, 401, { error: "Agente de laboratorio no autorizado.", event_recorded: false });
+    }
+
+    let data;
+    try {
+      data = await readJsonBody(req);
+    } catch (error) {
+      return sendJson(res, error.statusCode || 400, { error: error.message, event_recorded: false });
+    }
+
+    const username = typeof data.username === "string" ? data.username.trim().toLowerCase() : "";
+    const password = typeof data.password === "string" ? data.password : "";
+    const agentId = String(req.headers["x-centinela-agent-id"] || "").trim();
+    const jobId = typeof data.job_id === "string" ? data.job_id.trim() : "";
+    const campaignId = typeof data.campaign_id === "string" ? data.campaign_id.trim() : "";
+    const runId = typeof data.run_id === "string" ? data.run_id.trim() : "";
+    const scenarioId = typeof data.scenario_id === "string" ? data.scenario_id.trim() : "";
+    const attemptIndex = Number(data.attempt_index);
+
+    if (!EXPECTED_USERS.includes(username) || password.length < 1 || password.length > 256 ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/.test(agentId) ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{2,119}$/.test(campaignId) ||
+        !/^[a-f0-9-]{36}$/i.test(runId) ||
+        !/^[a-f0-9-]{36}$/i.test(jobId) ||
+        !["benign_mixed", "attack_rapid", "attack_low_frequency", "attack_distributed"].includes(scenarioId) ||
+        !Number.isInteger(attemptIndex) || attemptIndex < 0 || attemptIndex > 11) {
+      return sendJson(res, 400, { error: "Metadatos o credenciales del agente no válidos.", event_recorded: false });
+    }
+
+    let ip;
+    try {
+      ip = clientIpFromRender(req);
+    } catch (error) {
+      return sendJson(res, 503, { error: error.message, event_recorded: false });
+    }
+
+    const rate = consumeRateLimit(ip);
+    if (!rate.allowed) {
+      res.setHeader("Retry-After", String(rate.retryAfter));
+      return sendJson(res, 429, { error: "Se alcanzó el límite temporal de solicitudes de esta IP.", event_recorded: false });
+    }
+
+    const authenticated = authenticate(username, password);
+    const actorType = scenarioId === "benign_mixed" ? "benign_agent" : "attack_agent";
+    try {
+      const event = await sendEventToCentinela(username, authenticated, ip, {
+        campaign_id: campaignId,
+        run_id: runId,
+        agent_id: agentId,
+        scenario_id: scenarioId,
+        actor_type: actorType,
+        job_id: jobId,
+        attempt_index: attemptIndex
+      });
+      return sendJson(res, authenticated ? 200 : 401, {
+        authenticated,
+        event_recorded: true,
+        event_id: event.event_id,
+        message: "Centinela recibió y persistió el evento del agente."
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Error de integración desconocido.";
+      console.error("No se pudo entregar el evento del agente a Centinela:", detail);
+      return sendJson(res, 503, {
+        error: "Centinela no confirmó el almacenamiento del evento. No se ha registrado el intento.",
+        event_recorded: false
+      });
+    }
   }
 
   if (req.method === "POST" && pathname === "/login") {
