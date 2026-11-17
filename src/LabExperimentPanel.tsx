@@ -33,6 +33,8 @@ interface LabCampaign {
   scenario_ids: ScenarioId[];
   repetitions: number;
   phase: 'train' | 'validation' | 'test';
+  scheduled_by_automation?: boolean;
+  labels_applied_at?: string | null;
   jobs: LabJob[];
 }
 
@@ -604,16 +606,23 @@ export function LabExperimentPanel() {
       <div className={card}>
         <h3 className="text-sm font-bold text-white">Campañas y ejecuciones</h3>
         {(snapshot?.campaigns.length ?? 0) === 0 ? (
-          <p className="text-sm text-slate-400">Aún no hay campañas v3 para el experimento activo.</p>
+          <p className="text-sm text-slate-400">Aún no hay campañas para el experimento activo.</p>
         ) : snapshot?.campaigns.map((campaign) => (
           <div key={campaign.campaign_id} className="rounded-xl border border-slate-800 bg-slate-950 p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div><p className="text-xs font-bold text-white">{campaign.campaign_id}</p><p className="mt-1 text-[11px] text-slate-500">Fase: {campaign.phase} · Cuenta: {campaign.target_account} · Repeticiones: {campaign.repetitions}</p></div>
               <div className="flex flex-wrap gap-2 items-center">
                 <Pill tone={campaign.status === 'completed' ? 'good' : campaign.status === 'stopped' || campaign.status === 'failed' ? 'bad' : campaign.status === 'paused' ? 'warning' : 'neutral'}>{campaign.status}</Pill>
+                {campaign.scheduled_by_automation && (
+                  <Pill tone={campaign.labels_applied_at ? 'good' : 'warning'}>
+                    {campaign.labels_applied_at ? 'Etiquetado automático auditado' : 'Etiquetado pendiente'}
+                  </Pill>
+                )}
                 <button type="button" disabled={busy || ['completed', 'failed', 'stopped'].includes(campaign.status)} onClick={() => void campaignAction(campaign.campaign_id, campaign.status === 'paused' ? 'resume' : 'pause')} className="rounded-lg border border-slate-700 px-3 py-2 text-[11px] text-slate-200 disabled:opacity-40">{campaign.status === 'paused' ? 'Reanudar' : 'Pausar'}</button>
                 <button type="button" disabled={busy || ['completed', 'stopped'].includes(campaign.status)} onClick={() => void campaignAction(campaign.campaign_id, 'stop')} className="rounded-lg border border-rose-500/30 px-3 py-2 text-[11px] text-rose-300 disabled:opacity-40">Detener</button>
-                <button type="button" disabled={busy || campaign.status !== 'completed'} onClick={() => void labelCampaign(campaign.campaign_id)} className="rounded-lg border border-emerald-500/30 px-3 py-2 text-[11px] text-emerald-300 disabled:opacity-40">Etiquetar desde manifiesto</button>
+                {!campaign.scheduled_by_automation && (
+                  <button type="button" disabled={busy || campaign.status !== 'completed'} onClick={() => void labelCampaign(campaign.campaign_id)} className="rounded-lg border border-emerald-500/30 px-3 py-2 text-[11px] text-emerald-300 disabled:opacity-40">Etiquetar desde manifiesto</button>
+                )}
               </div>
             </div>
             <div className="overflow-x-auto">
