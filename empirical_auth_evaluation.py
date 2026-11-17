@@ -45,8 +45,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import OneClassSVM
 
 
-FEATURE_SCHEMA = "centinela-auth-features-v2"
-FEATURE_COUNT = 5
+FEATURE_SCHEMA_COUNTS = {
+    "centinela-auth-features-v2": 5,
+    "centinela-auth-features-v3": 4,
+}
+FEATURE_WINDOW_SECONDS = 120.0
 WINDOW_SECONDS = 120.0
 
 
@@ -64,7 +67,7 @@ def parse_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
-def parse_features(value: Any) -> np.ndarray:
+def parse_features(value: Any, expected_count: int) -> np.ndarray:
     """Parse the Postgres float8[] CSV representation, e.g. {1,2,3,4,5}."""
     if isinstance(value, (list, tuple, np.ndarray)):
         raw = list(value)
@@ -76,8 +79,8 @@ def parse_features(value: Any) -> np.ndarray:
             text = text[1:-1]
         raw = [part.strip().strip('"') for part in text.split(",") if part.strip()]
     vector = np.asarray([float(item) for item in raw], dtype=np.float64)
-    if vector.shape != (FEATURE_COUNT,) or not np.isfinite(vector).all():
-        raise ValueError(f"Vector de características inválido: se esperaban {FEATURE_COUNT} números finitos.")
+    if vector.shape != (expected_count,) or not np.isfinite(vector).all():
+        raise ValueError(f"Vector de características inválido: se esperaban {expected_count} números finitos.")
     return vector
 
 
@@ -130,13 +133,17 @@ def build_benign_training_baseline(rows: list[dict[str, Any]]) -> np.ndarray:
             interval_mean = float(np.mean(intervals))
             interval_std = float(np.std(intervals, ddof=0))
 
-        vectors.append([
+        vector = [
             float(len(timestamps)),
             float(unique_users),
             js_round_two(interval_mean),
             js_round_two(interval_std),
-            float(row["_timestamp"].hour),
-        ])
+        ]
+        # v2 retains the historical UTC-hour feature for reproducibility.
+        # v3 deliberately omits hour-of-day to avoid midnight/day-boundary drift.
+        if int(row["_feature_count"]) == 5:
+            vector.append(float(row["_timestamp"].hour))
+        vectors.append(vector)
 
     return np.asarray(vectors, dtype=np.float64)
 
@@ -245,18 +252,26 @@ def load_capture_csv(path: Path) -> list[dict[str, Any]]:
     if len(experiment_ids) > 1:
         raise ValueError("El CSV mezcla varios experiment_id. Exporta un experimento cada vez.")
 
+    schemas = {row.get("feature_schema_version", "") for row in rows}
+    if len(schemas) != 1:
+        raise ValueError("El CSV mezcla esquemas de características. Exporta y evalúa un solo esquema por experimento.")
+    feature_schema = next(iter(schemas))
+    feature_count = FEATURE_SCHEMA_COUNTS.get(feature_schema)
+    if feature_count is None:
+        raise ValueError(
+            f"Esquema de características no soportado: {feature_schema!r}. "
+            f"Esquemas admitidos: {', '.join(sorted(FEATURE_SCHEMA_COUNTS))}."
+        )
+
     for row in rows:
-        if row["feature_schema_version"] != FEATURE_SCHEMA:
-            raise ValueError(
-                f"Se encontró {row['feature_schema_version']!r}; se requiere {FEATURE_SCHEMA!r}. "
-                "Reinicia la captura con la versión actual del detector."
-            )
         if row["dataset_split"] not in {"train", "validation", "test"}:
             raise ValueError("Hay eventos sin división temporal asignada. No se pueden usar en este protocolo.")
         if row["ground_truth_label"] not in {"unknown", "benign", "attack"}:
             raise ValueError("Se encontró una etiqueta de referencia desconocida.")
         row["_timestamp"] = parse_timestamp(row["occurred_at"])
-        row["_features"] = parse_features(row["features"])
+        row["_feature_count"] = feature_count
+        row["_feature_schema"] = feature_schema
+        row["_features"] = parse_features(row["features"], feature_count)
     return rows
 
 
@@ -423,14 +438,16 @@ def main() -> int:
         "study": "centinela_observed_authentication_events",
         "data_source": "Authentication requests captured by Centinela and persisted in Supabase",
         "synthetic_rows_allowed": False,
-        "feature_schema": FEATURE_SCHEMA,
-        "feature_names": [
-            "failed_attempts_in_120s",
-            "distinct_user_keys_in_120s",
-            "mean_interarrival_seconds",
-            "std_interarrival_seconds",
-            "utc_hour",
-        ],
+        "feature_schema": rows[0]["_feature_schema"],
+        "feature_names": (
+            [
+                "failed_attempts_in_120s",
+                "distinct_user_keys_in_120s",
+                "mean_interarrival_seconds",
+                "std_interarrival_seconds",
+            ]
+            + (["utc_hour"] if rows[0]["_feature_schema"] == "centinela-auth-features-v2" else [])
+        ),
         "experiment_ids": experiment_ids,
         "code_versions": code_versions,
         "config_versions": config_versions,
