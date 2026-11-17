@@ -1096,6 +1096,43 @@ export function getLabCampaignForLabeling(campaignId: string): {
   return { campaign: { ...campaign }, jobs: normalizedJobs };
 }
 
+
+export function getLabAutomationProgress(experimentId: string): Record<string, Record<string, { completed: number; target: number }>> | null {
+  const plan = labAutomationPlan;
+  if (!plan || plan.experimentId !== experimentId) return null;
+
+  const result: Record<string, Record<string, { completed: number; target: number }>> = {};
+  for (const phase of ['train', 'validation', 'test'] as const) {
+    result[phase] = {};
+    const targets = plan.targets[phase] ?? {};
+    const phaseCampaigns = [...campaigns.values()].filter(
+      (campaign) => campaign.experimentId === experimentId &&
+        campaign.phase === phase && campaign.scheduledByAutomation &&
+        campaign.status === 'completed' && Boolean(campaign.labelsAppliedAt)
+    );
+    for (const [scenarioId, target] of Object.entries(targets) as Array<[LabScenarioId, number]>) {
+      const runIds = new Set<string>();
+      for (const campaign of phaseCampaigns) {
+        const byRun = new Map<string, LabJob[]>();
+        for (const jobId of campaign.jobIds) {
+          const job = jobs.get(jobId);
+          if (!job || job.scenarioId !== scenarioId) continue;
+          const runJobs = byRun.get(job.runId) ?? [];
+          runJobs.push(job);
+          byRun.set(job.runId, runJobs);
+        }
+        for (const [runId, runJobs] of byRun) {
+          if (runJobs.length > 0 && runJobs.every((job) =>
+            job.status === 'completed' && job.attemptsCompleted === job.outcomes.length
+          )) runIds.add(runId);
+        }
+      }
+      result[phase][scenarioId] = { completed: Math.min(runIds.size, target), target };
+    }
+  }
+  return result;
+}
+
 export function getLabSnapshot(experimentId?: string | null): Record<string, unknown> {
   const now = Date.now();
   const agentList = [...agents.values()].map((agent) => ({
@@ -1147,6 +1184,7 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
     generated_at: new Date(now).toISOString(),
     agent_stale_after_ms: AGENT_STALE_MS,
     automation: getLabAutomationPlan(),
+    automation_progress: experimentId ? getLabAutomationProgress(experimentId) : null,
     agents: agentList,
     campaigns: campaignList,
     scenarios: Object.entries(LAB_SCENARIO_CATALOG).map(([id, value]) => ({
