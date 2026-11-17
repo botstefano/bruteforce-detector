@@ -30,6 +30,7 @@ test('el escenario distribuido exige cuatro salidas de red independientes', () =
     experimentId: unique(),
     targetAccount: 'ronan',
     scenarioIds: ['attack_distributed'],
+    phase: 'validation',
   }), /necesita cuatro agentes activos con IP de salida independientes/);
 });
 
@@ -41,6 +42,7 @@ test('el manifiesto no se filtra al agente y el etiquetado exige eventos complet
     experimentId,
     targetAccount: 'ronan',
     scenarioIds: ['attack_distributed'],
+    phase: 'validation',
   });
 
   const taskEvents = new Map<string, string[]>();
@@ -76,6 +78,7 @@ test('una campaña que no completó todas las solicitudes no puede etiquetarse',
     experimentId: unique(),
     targetAccount: 'andy',
     scenarioIds: ['benign_mixed'],
+    phase: 'train',
   });
   const task = claimNextLabJob(agentId);
   assert.ok(task);
@@ -99,6 +102,7 @@ test('no acepta repeticiones fuera del rango preregistrado', () => {
     experimentId: unique(),
     targetAccount: 'stefano',
     scenarioIds: ['benign_mixed'],
+    phase: 'train',
     repetitions: 0,
   }), /repetitions debe ser un entero entre 1 y 5/);
 });
