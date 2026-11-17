@@ -109,7 +109,14 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
     if (!raw || typeof raw !== 'object') continue;
     const campaign = raw as LabCampaign;
     if (typeof campaign.campaignId !== 'string' || typeof campaign.experimentId !== 'string' || !Array.isArray(campaign.jobIds)) continue;
-    campaigns.set(campaign.campaignId, { ...campaign, jobIds: [...campaign.jobIds], scenarioIds: [...campaign.scenarioIds] });
+    // Any coordinator snapshot is written only after the independent manifest is
+    // persisted, so a restart can safely re-enable job claiming.
+    campaigns.set(campaign.campaignId, {
+      ...campaign,
+      manifestPersisted: true,
+      jobIds: [...campaign.jobIds],
+      scenarioIds: [...campaign.scenarioIds],
+    });
   }
   for (const raw of state.jobs) {
     if (!raw || typeof raw !== 'object') continue;
