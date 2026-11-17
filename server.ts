@@ -439,6 +439,13 @@ async function procesarIntentoCapturado(
   if (eventCapturePaused) {
     throw new Error(eventCapturePauseReason || 'La captura está detenida por un fallo de persistencia. Inicia un nuevo experimento tras recuperar Supabase.');
   }
+  const experimentState = getActiveExperimentState();
+  if (experimentState && Date.now() >= experimentState.validationEndMs && !experimentState.validationFrozen) {
+    throw new Error('La captura del test está bloqueada hasta congelar la configuración después de la validación.');
+  }
+  if (experimentState?.testEndMs && Date.now() >= experimentState.testEndMs) {
+    throw new Error('Se alcanzó el corte final preregistrado del experimento; no se aceptan nuevos eventos.');
+  }
   if (isIP(ip) === 0) throw new Error('No se pudo determinar una IP de origen válida y confiable.');
   const { ipKey, userKey } = getAnalyticsIdentifiers(ip, usuario);
   const evento = procesarIntento(ip, usuario, exitoso, 0, origen, 0, true, ipKey, userKey);
@@ -597,7 +604,10 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
       ? activeExperiment.trainEndMs
       : phase === 'validation'
         ? activeExperiment.validationEndMs
-        : null;
+        : activeExperiment.testEndMs;
+    if (phase === 'test' && !phaseEndAtMs) {
+      return res.status(409).json({ error: 'El experimento no tiene un corte final test_end_at preregistrado.' });
+    }
     const { campaign, manifest } = createLabCampaign({
       experimentId: activeExperiment.id,
       targetAccount,
@@ -1350,11 +1360,15 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
   const scenario = typeof data.scenario === 'string' ? data.scenario.trim() : '';
   const trainEndAt = typeof data.train_end_at === 'string' ? data.train_end_at.trim() : '';
   const validationEndAt = typeof data.validation_end_at === 'string' ? data.validation_end_at.trim() : '';
+  const testEndAt = typeof data.test_end_at === 'string' ? data.test_end_at.trim() : '';
   if (!protocolName || !scenario || !trainEndAt || !validationEndAt) {
     return res.status(400).json({ error: 'Se requieren protocol_name, scenario, train_end_at y validation_end_at (fechas ISO). El periodo posterior a validation_end_at se reserva para prueba.' });
   }
   if (!Number.isFinite(Date.parse(trainEndAt)) || !Number.isFinite(Date.parse(validationEndAt)) || Date.parse(trainEndAt) <= Date.now() || Date.parse(validationEndAt) <= Date.parse(trainEndAt)) {
     return res.status(400).json({ error: 'Usa fechas ISO futuras: train_end_at debe ser posterior a ahora y validation_end_at posterior a train_end_at.' });
+  }
+  if (protocolName.toLowerCase().includes('v3') && (!testEndAt || !Number.isFinite(Date.parse(testEndAt)) || Date.parse(testEndAt) <= Date.parse(validationEndAt))) {
+    return res.status(400).json({ error: 'El protocolo v3 requiere test_end_at, posterior al corte de validación y expresado en ISO.' });
   }
   try {
     const experiment = await createExperimentRecord({
@@ -1362,6 +1376,7 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
       scenario,
       trainEndAt,
       validationEndAt,
+      testEndAt: testEndAt || undefined,
       description: typeof data.description === 'string' ? data.description : undefined,
       detectorConfig: {
         fast_rule: '5 failures / 60 seconds',
