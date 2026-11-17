@@ -11,6 +11,9 @@ interface LabJob {
   target_account: 'ronan' | 'andy' | 'stefano';
   start_at: string;
   interval_ms: number;
+  inter_attempt_delays_ms?: number[];
+  session_profile?: Record<string, unknown>;
+  seed?: number;
   outcomes: boolean[];
   max_attempts: number;
   attempts_completed?: number;
@@ -163,9 +166,15 @@ async function executeJob(job: LabJob): Promise<void> {
     if (!Array.isArray(job.outcomes) || job.outcomes.length === 0 || job.outcomes.length > 12 || job.max_attempts !== job.outcomes.length) {
       throw new Error('La tarea supera los límites de intentos permitidos.');
     }
-    if (job.interval_ms < 1_000 || job.interval_ms > 120_000) throw new Error('El intervalo de la tarea está fuera del rango permitido.');
+    const delays = Array.isArray(job.inter_attempt_delays_ms)
+      ? job.inter_attempt_delays_ms
+      : Array.from({ length: Math.max(0, job.outcomes.length - 1) }, () => job.interval_ms);
+    if (delays.length !== job.outcomes.length - 1 ||
+        delays.some((delay) => !Number.isInteger(delay) || delay < 1_000 || delay > 180_000)) {
+      throw new Error('La secuencia de pausas de la sesión no es válida o no coincide con el número de intentos.');
+    }
 
-    await log(`Tarea ${job.job_id.slice(0, 8)} iniciada: ${job.scenario_id}, ${job.outcomes.length} intentos.`);
+    await log(`Sesión ${job.job_id.slice(0, 8)} iniciada: ${job.scenario_id}, ${job.outcomes.length} intentos, perfil ${String(job.session_profile?.profile_id || 'legacy')}.`);
     let command = await waitUntilAndCheck(job);
     if (command === 'cancel') finalStatus = 'cancelled';
 
@@ -222,7 +231,8 @@ async function executeJob(job: LabJob): Promise<void> {
       }
 
       if (index < job.outcomes.length - 1) {
-        const endAt = Date.now() + job.interval_ms;
+        const delayMs = delays[index];
+        const endAt = Date.now() + delayMs;
         while (Date.now() < endAt) {
           command = await checkCommand(job.job_id);
           if (command !== 'continue') break;
