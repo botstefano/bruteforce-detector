@@ -49,6 +49,14 @@ interface LabSnapshot {
   experiment_id: string | null;
   experiment: ExperimentPhaseState | null;
   agent_token_configured: boolean;
+  protocol_revision?: number | null;
+  automation?: {
+    enabled: boolean;
+    status: 'running' | 'paused' | 'completed';
+    batchSize: number;
+    lastError: string | null;
+    targets: Record<string, Record<string, number>>;
+  } | null;
   agents: LabAgent[];
   campaigns: LabCampaign[];
   scenarios: Array<{ scenario_id: ScenarioId; label: string; description: string; required_agents: number }>;
@@ -108,12 +116,12 @@ export function LabExperimentPanel() {
   const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
   const [agentLogs, setAgentLogs] = useState<Array<{ agent_id: string; message: string; timestamp: string }>>([]);
   const [connected, setConnected] = useState(false);
-  const [protocolName, setProtocolName] = useState('centinela-auth-study-v3');
-  const [scenario, setScenario] = useState('automated-authentication-testbed');
+  const [protocolName, setProtocolName] = useState('centinela-auth-study-v4');
+  const [scenario, setScenario] = useState('automated-authentication-testbed-v4');
   const [description, setDescription] = useState('Evaluación experimental reproducible mediante agentes automatizados en el portal autorizado de autenticación HTTP.');
-  const [trainEndAt, setTrainEndAt] = useState('2026-11-20T17:00');
-  const [validationEndAt, setValidationEndAt] = useState('2026-11-22T17:00');
-  const [testEndAt, setTestEndAt] = useState('2026-11-23T17:00');
+  const [trainEndAt, setTrainEndAt] = useState('2026-12-01T17:00');
+  const [validationEndAt, setValidationEndAt] = useState('2026-12-08T17:00');
+  const [testEndAt, setTestEndAt] = useState('2026-12-15T17:00');
 
   const refresh = useCallback(async () => {
     try {
@@ -197,7 +205,10 @@ export function LabExperimentPanel() {
           validation_end_at: new Date(validationMs).toISOString(),
           test_end_at: new Date(testMs).toISOString(),
           metadata: {
-            protocol_revision: 1,
+            protocol_revision: 4,
+            collection_design: 'variable_reproducible_sessions_with_phase_scheduler_v1',
+            generation_profile_version: 2,
+            independent_campaign_manifest: true,
             generation_method: 'automated_http_agent',
             actor_type: 'automated_agent',
             testbed_scope: 'centinela-auth-lab-only',
@@ -206,7 +217,7 @@ export function LabExperimentPanel() {
         }),
       });
       const data = await readJson(response);
-      setNotice(`Experimento v3 creado: ${data.experiment?.id || 'registrado'}. Los cortes quedaron guardados en UTC.`);
+      setNotice(`Experimento V4 creado: ${data.experiment?.id || 'registrado'}. Los cortes quedaron guardados en UTC.`);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo crear el experimento v3.');
@@ -235,6 +246,46 @@ export function LabExperimentPanel() {
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo crear la campaña.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+
+  const startAutomation = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch('/api/lab/automation/start', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch_size: 5, accounts: ['ronan', 'andy', 'stefano'] }),
+      });
+      const data = await readJson(response);
+      setNotice('Recolección automática activada. El coordinador programará lotes variables y guardará el manifiesto antes de habilitar cada lote.');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo iniciar la recolección automática.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stopAutomation = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await readJson(await fetch('/api/lab/automation/stop', {
+        method: 'POST',
+        credentials: 'same-origin',
+      }));
+      setNotice('La planificación automática se pausó. La campaña actualmente en ejecución no se cancela.');
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo pausar la recolección automática.');
     } finally {
       setBusy(false);
     }
@@ -303,8 +354,8 @@ export function LabExperimentPanel() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-white">Laboratorio automatizado v3</h2>
-          <p className="mt-1 text-xs text-slate-400">Coordinación de agentes, campañas HTTP y procedencia experimental.</p>
+          <h2 className="text-lg font-bold text-white">Laboratorio experimental Centinela V4</h2>
+          <p className="mt-1 text-xs text-slate-400">Sesiones variables reproducibles, campañas HTTP y recolección automática por fases.</p>
         </div>
         <Pill tone={connected ? 'good' : 'warning'}>{connected ? 'Socket conectado' : 'Conexión en recuperación'}</Pill>
       </div>
@@ -314,8 +365,8 @@ export function LabExperimentPanel() {
 
       {!snapshot?.experiment_id && (
         <div className={card}>
-          <h3 className="text-sm font-bold text-white">Crear experimento Centinela v3</h3>
-          <p className="text-xs text-slate-400">Define los tres cortes temporales antes de crear campañas. Se guardarán como UTC; el horario de los campos corresponde al navegador.</p>
+          <h3 className="text-sm font-bold text-white">Crear experimento Centinela V4</h3>
+          <p className="text-xs text-slate-400">Define y preregistra los tres cortes temporales. Las fechas se guardarán en UTC; el horario de los campos corresponde al navegador.</p>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="space-y-1 text-xs text-slate-300">
               <span className="font-semibold">Nombre del protocolo</span>
@@ -342,7 +393,7 @@ export function LabExperimentPanel() {
             <span className="font-semibold">Descripción y alcance</span>
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} maxLength={1000} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"/>
           </label>
-          <p className="text-[11px] text-amber-300">Fechas iniciales sugeridas: entrenamiento 20 nov. 17:00, validación 22 nov. 17:00 y test 23 nov. 17:00 (hora de Perú). Ajusta los cortes antes de crear; después no deben moverse al observar métricas.</p>
+          <p className="text-[11px] text-amber-300">Fechas iniciales V4: entrenamiento 1 dic., validación 8 dic. y test 15 dic. de 2026, a las 17:00 (hora de Perú). Verifica que sean futuras antes de crear; después no se deben mover.</p>
           <button type="button" onClick={() => void createExperiment()} disabled={busy || !protocolName.trim() || !scenario.trim()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">
             {busy ? 'Creando…' : 'Crear protocolo y habilitar laboratorio'}
           </button>
@@ -375,6 +426,28 @@ export function LabExperimentPanel() {
               <button type="button" disabled={busy} onClick={() => void freezeValidation()} className="rounded-xl bg-amber-600 px-4 py-3 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-40">Congelar configuración de validación</button>
             </div>
           )}
+        </div>
+      )}
+
+
+      {snapshot?.experiment && (
+        <div className={card}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-white">Recolección científica automática</h3>
+              <p className="mt-1 text-xs text-slate-400">El planificador crea lotes de hasta cinco sesiones, rota las cuentas de laboratorio, distribuye horarios y espera a que cada campaña termine antes de continuar.</p>
+            </div>
+            <Pill tone={snapshot.automation?.enabled ? 'good' : snapshot.automation?.status === 'completed' ? 'good' : 'warning'}>
+              {snapshot.automation?.enabled ? 'Automatización activa' : snapshot.automation?.status === 'completed' ? 'Objetivos completados' : 'Automatización detenida'}
+            </Pill>
+          </div>
+          <p className="text-xs text-slate-300">Protocolo actual: V{snapshot.protocol_revision ?? '—'}. Entrenamiento: 200 sesiones benignas; validación: 100 benignas y 30 por escenario de ataque; prueba final: 200 benignas y 50 rápidas, 50 de baja frecuencia y 30 distribuidas.</p>
+          {snapshot.automation?.lastError && <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">{snapshot.automation.lastError}</p>}
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={busy || snapshot.protocol_revision !== 4 || snapshot.automation?.enabled === true} onClick={() => void startAutomation()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">Iniciar recolección automática V4</button>
+            <button type="button" disabled={busy || snapshot.automation?.enabled !== true} onClick={() => void stopAutomation()} className="rounded-xl border border-rose-500/30 px-4 py-3 text-xs font-bold text-rose-300 disabled:opacity-40">Pausar planificación</button>
+          </div>
+          {snapshot.protocol_revision !== 4 && <p className="text-[11px] text-amber-300">El experimento V3 activo no se modificará. Finalízalo o ciérralo formalmente y crea un protocolo V4 para habilitar este planificador.</p>}
         </div>
       )}
 
