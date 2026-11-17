@@ -49,7 +49,7 @@ create table if not exists public.centinela_auth_events (
   alerta_lof boolean not null default false,
   score_ml double precision,
   features double precision[] not null,
-  feature_schema_version text not null default 'centinela-auth-features-v2',
+  feature_schema_version text not null default 'centinela-auth-features-v3',
   latency_rules_ms double precision,
   latency_ml_ms double precision,
   latency_total_ms double precision,
@@ -57,7 +57,7 @@ create table if not exists public.centinela_auth_events (
   config_version text,
   metadata jsonb not null default '{}'::jsonb,
   check (score_ml is null or (score_ml >= 0 and score_ml <= 1)),
-  check (cardinality(features) = 5),
+  check (cardinality(features) in (4, 5)),
   check (latency_rules_ms is null or latency_rules_ms >= 0),
   check (latency_ml_ms is null or latency_ml_ms >= 0),
   check (latency_total_ms is null or latency_total_ms >= 0)
@@ -67,9 +67,9 @@ create table if not exists public.centinela_auth_events (
 alter table public.centinela_auth_events
   add column if not exists features double precision[];
 alter table public.centinela_auth_events
-  add column if not exists feature_schema_version text not null default 'centinela-auth-features-v2';
+  add column if not exists feature_schema_version text not null default 'centinela-auth-features-v3';
 alter table public.centinela_auth_events
-  alter column feature_schema_version set default 'centinela-auth-features-v2';
+  alter column feature_schema_version set default 'centinela-auth-features-v3';
 alter table public.centinela_auth_events
   add column if not exists campaign_id text;
 
