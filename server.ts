@@ -49,6 +49,9 @@ import {
   configureLabAutomation,
   getLabAutomationPlan,
   getNextLabAutomationBatch,
+  isLabAutomationPhaseComplete,
+  completeLabAutomation,
+  markLabCampaignLabeled,
   stopLabAutomation,
   updateLabAutomationStatus,
   claimNextLabJob,
@@ -657,6 +660,67 @@ app.get('/api/lab/state', requiereAdmin, async (_req: Request, res: Response) =>
 
 let labAutomationTickRunning = false;
 
+
+async function labelLabCampaignFromManifest(campaignId: string): Promise<{ labeled: number; alreadyLabeled: number }> {
+  const { campaign, jobs } = getLabCampaignForLabeling(campaignId);
+  const experiment = await getExperimentMetadata(campaign.experimentId);
+  const metadata = (experiment.metadata ?? {}) as Record<string, unknown>;
+  const manifests = Array.isArray(metadata.lab_campaign_manifests)
+    ? metadata.lab_campaign_manifests as Record<string, unknown>[]
+    : [];
+  const savedManifest = manifests.find((item) => item.campaign_id === campaignId);
+  if (!savedManifest || !Array.isArray(savedManifest.scenarios)) {
+    throw new Error('No se encontró el manifiesto independiente persistido para esta campaña.');
+  }
+  const labelByRun = new Map<string, { label: 'benign' | 'attack'; scenarioId: string }>();
+  for (const run of savedManifest.scenarios as Record<string, unknown>[]) {
+    if (typeof run.run_id === 'string' && (run.expected_label === 'benign' || run.expected_label === 'attack')) {
+      labelByRun.set(run.run_id, { label: run.expected_label, scenarioId: String(run.scenario_id || 'unknown') });
+    }
+  }
+  const observed = await fetchObservedEvents(campaign.experimentId);
+  const byId = new Map(observed.map((event) => [event.event_id, event]));
+  let labeled = 0;
+  let alreadyLabeled = 0;
+  for (const job of jobs) {
+    const expected = labelByRun.get(job.runId);
+    if (!expected || expected.label !== job.expectedLabel || expected.scenarioId !== job.scenarioId) {
+      throw new Error(`El manifiesto no coincide con la tarea ${job.jobId}; se detuvo el etiquetado.`);
+    }
+    for (const eventId of job.eventIds) {
+      const event = byId.get(eventId);
+      if (!event || event.experiment_id !== campaign.experimentId || event.campaign_id !== campaignId) {
+        throw new Error(`El evento ${eventId} no pertenece a la campaña y experimento esperados.`);
+      }
+      const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
+      if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId ||
+          eventMetadata.agent_id !== (job as unknown as { agentId?: string }).agentId) {
+        // agent_id is checked against the captured campaign metadata below by the coordinator's
+        // job/event binding; run and scenario are the independent label keys.
+        if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId) {
+          throw new Error(`La procedencia del evento ${eventId} no coincide con su manifiesto.`);
+        }
+      }
+      if (event.ground_truth_label === expected.label) {
+        alreadyLabeled++;
+        continue;
+      }
+      if (event.ground_truth_label !== 'unknown') {
+        throw new Error(`El evento ${eventId} ya tiene una etiqueta distinta; requiere revisión manual.`);
+      }
+      await labelObservedEvent({
+        eventId,
+        label: expected.label,
+        method: 'authorized_automated_campaign_manifest_v1',
+        rationale: `Evento de la campaña autorizada ${campaignId}, ejecución ${job.runId}, escenario ${expected.scenarioId}; etiqueta derivada del manifiesto independiente preregistrado, no de las alertas de Centinela.`,
+        labeledBy: 'centinela-v4-lab-coordinator',
+      });
+      labeled++;
+    }
+  }
+  return { labeled, alreadyLabeled };
+}
+
 async function persistLabAutomationState(experimentId: string): Promise<void> {
   await saveLabCoordinatorState(experimentId, () => serializeLabCoordinatorState(experimentId));
   io.emit('lab_campaign_update', getLabSnapshot(experimentId));
@@ -680,25 +744,96 @@ async function tickLabAutomation(): Promise<void> {
       return;
     }
 
-    const now = Date.now();
-    let phase: 'train' | 'validation' | 'test';
-    if (now < experiment.trainEndMs) phase = 'train';
-    else if (now < experiment.validationEndMs) phase = 'validation';
-    else if (experiment.testEndMs && now < experiment.testEndMs) phase = 'test';
-    else {
-      updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'Se alcanzó el corte temporal del experimento; la automatización se detuvo sin mover las fechas preregistradas.' });
-      await persistLabAutomationState(experiment.id);
-      return;
-    }
-
     const metadataRecord = await getExperimentMetadata(experiment.id);
-    const metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    let metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
     const protocolName = String(metadataRecord.protocol_name || '');
     if (!(Number(metadata.protocol_revision) >= 4) && !/v4/i.test(protocolName)) {
       updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La planificación automática solo puede activarse en un protocolo V4 nuevo. El experimento V3 existente no se modifica.' });
       await persistLabAutomationState(experiment.id);
       return;
     }
+
+    let snapshot = getLabSnapshot(experiment.id) as {
+      agents: Array<{ agent_id: string; egress_ip_hash_prefix: string; status: string }>;
+      campaigns: Array<{ campaign_id: string; status: string; scheduled_by_automation?: boolean; labels_applied_at?: string | null }>;
+    };
+
+    // Automatic labeling is part of collection, not a manual operator step.
+    // Only completed campaigns created by this plan are eligible.
+    for (const campaign of snapshot.campaigns) {
+      if (campaign.scheduled_by_automation && campaign.status === 'completed' && !campaign.labels_applied_at) {
+        await labelLabCampaignFromManifest(campaign.campaign_id);
+        markLabCampaignLabeled(campaign.campaign_id);
+        await persistLabAutomationState(experiment.id);
+      }
+    }
+
+    const now = Date.now();
+    let phase: 'train' | 'validation' | 'test' =
+      now < experiment.trainEndMs ? 'train' :
+      now < experiment.validationEndMs ? 'validation' : 'test';
+
+    // Freeze the benign-only baseline automatically at the training cutoff,
+    // but only if the preregistered training session target was completed and labeled.
+    if (now >= experiment.trainEndMs && metadata.training_frozen !== true) {
+      if (!isLabAutomationPhaseComplete(experiment.id, 'train')) {
+        updateLabAutomationStatus({
+          enabled: false,
+          status: 'paused',
+          lastError: 'No se congeló el entrenamiento: no se alcanzó la cuota de sesiones benignas antes del corte preregistrado. No se moverán las fechas.',
+        });
+        await persistLabAutomationState(experiment.id);
+        return;
+      }
+      if (now >= experiment.validationEndMs) {
+        updateLabAutomationStatus({
+          enabled: false,
+          status: 'paused',
+          lastError: 'No se pudo entrenar dentro del intervalo preregistrado entre train_end_at y validation_end_at.',
+        });
+        await persistLabAutomationState(experiment.id);
+        return;
+      }
+      await entrenarModeloDesdeCapturasBenignas();
+      const updated = await getExperimentMetadata(experiment.id);
+      metadata = (updated.metadata ?? {}) as Record<string, unknown>;
+      console.log('Baseline V4 entrenado y congelado automáticamente con eventos benignos etiquetados.');
+    }
+
+    // Validation is closed automatically only after its quotas are complete.
+    if (now >= experiment.validationEndMs && metadata.validation_frozen !== true) {
+      if (metadata.training_frozen !== true || !isLabAutomationPhaseComplete(experiment.id, 'validation')) {
+        updateLabAutomationStatus({
+          enabled: false,
+          status: 'paused',
+          lastError: 'No se congeló la validación: falta congelar el baseline o completar y etiquetar todas las cuotas de validación antes del corte.',
+        });
+        await persistLabAutomationState(experiment.id);
+        return;
+      }
+      await freezeActiveExperimentValidation(experiment.id);
+      const updated = await getExperimentMetadata(experiment.id);
+      metadata = (updated.metadata ?? {}) as Record<string, unknown>;
+      console.log('Configuración V4 de validación congelada automáticamente.');
+    }
+
+    // Test cutoff is final: never schedule work beyond it, and mark the plan
+    // complete only if every independent test target was met and labeled.
+    if (experiment.testEndMs && now >= experiment.testEndMs) {
+      if (metadata.training_frozen === true && metadata.validation_frozen === true &&
+          isLabAutomationPhaseComplete(experiment.id, 'test')) {
+        completeLabAutomation();
+      } else {
+        updateLabAutomationStatus({
+          enabled: false,
+          status: 'paused',
+          lastError: 'Se alcanzó test_end_at sin completar todas las cuotas del test independiente; los límites temporales se conservaron.',
+        });
+      }
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
     if (phase !== 'train' && metadata.training_frozen !== true) {
       updateLabAutomationStatus({ lastError: 'En espera: el baseline benigno debe entrenarse y congelarse antes de iniciar validación.' });
       await persistLabAutomationState(experiment.id);
@@ -710,13 +845,10 @@ async function tickLabAutomation(): Promise<void> {
       return;
     }
 
-    const currentSnapshot = getLabSnapshot(experiment.id) as {
-      agents: Array<{ agent_id: string; egress_ip_hash_prefix: string; status: string }>;
-      campaigns: Array<{ status: string }>;
-    };
-    if (currentSnapshot.campaigns.some((campaign) => ['queued', 'running', 'paused'].includes(campaign.status))) return;
+    snapshot = getLabSnapshot(experiment.id) as typeof snapshot;
+    if (snapshot.campaigns.some((campaign) => ['queued', 'running', 'paused'].includes(campaign.status))) return;
 
-    const readyAgents = currentSnapshot.agents.filter((agent) => agent.status === 'ready');
+    const readyAgents = snapshot.agents.filter((agent) => agent.status === 'ready');
     if (!readyAgents.length) {
       updateLabAutomationStatus({ lastError: 'En espera: no hay agentes locales conectados y disponibles.' });
       await persistLabAutomationState(experiment.id);
@@ -725,6 +857,8 @@ async function tickLabAutomation(): Promise<void> {
 
     const batch = getNextLabAutomationBatch(experiment.id, phase);
     if (!batch) {
+      // Reaching the target early is valid; wait for the phase cutoff so that
+      // the temporal protocol, not operator clicks, decides the transition.
       await persistLabAutomationState(experiment.id);
       return;
     }
@@ -762,7 +896,7 @@ async function tickLabAutomation(): Promise<void> {
         ? (job.planned_inter_attempt_delays_ms as unknown[]).filter((value): value is number => typeof value === 'number')
         : [];
       const effectiveStart = Math.max(plannedStart, finishByAgent.get(agentId) || plannedStart);
-      finishByAgent.set(agentId, effectiveStart + (attempts * 330_000) + plannedDelays.reduce((sum, delay) => sum + delay, 0));
+      finishByAgent.set(agentId, effectiveStart + (attempts * 360_000) + plannedDelays.reduce((sum, delay) => sum + delay, 0));
     }
     const latestFinish = Math.max(...finishByAgent.values());
     if (!Number.isFinite(latestFinish) || !phaseEndAtMs || latestFinish >= phaseEndAtMs) {
@@ -972,58 +1106,16 @@ app.post('/api/lab/campaigns/:campaignId/:action', requiereAdmin, async (req: Re
 app.post('/api/lab/campaigns/:campaignId/label', requiereAdmin, async (req: Request, res: Response) => {
   try {
     const campaignId = singleRouteParam(req.params.campaignId);
-    const { campaign, jobs } = getLabCampaignForLabeling(campaignId);
-    const experiment = await getExperimentMetadata(campaign.experimentId);
-    const metadata = (experiment.metadata ?? {}) as Record<string, unknown>;
-    const manifests = Array.isArray(metadata.lab_campaign_manifests)
-      ? metadata.lab_campaign_manifests as Record<string, unknown>[]
-      : [];
-    const savedManifest = manifests.find((item) => item.campaign_id === campaignId);
-    if (!savedManifest || !Array.isArray(savedManifest.scenarios)) {
-      throw new Error('No se encontró el manifiesto independiente persistido para esta campaña.');
-    }
-    const labelByRun = new Map<string, { label: 'benign' | 'attack'; scenarioId: string }>();
-    for (const run of savedManifest.scenarios as Record<string, unknown>[]) {
-      if (typeof run.run_id === 'string' && (run.expected_label === 'benign' || run.expected_label === 'attack')) {
-        labelByRun.set(run.run_id, { label: run.expected_label, scenarioId: String(run.scenario_id || 'unknown') });
-      }
-    }
-    const observed = await fetchObservedEvents(campaign.experimentId);
-    const byId = new Map(observed.map((event) => [event.event_id, event]));
-    let labeled = 0;
-    let alreadyLabeled = 0;
-    for (const job of jobs) {
-      const expected = labelByRun.get(job.runId);
-      if (!expected || expected.label !== job.expectedLabel) {
-        throw new Error(`El manifiesto no coincide con la tarea ${job.jobId}; se detuvo el etiquetado.`);
-      }
-      for (const eventId of job.eventIds) {
-        const event = byId.get(eventId);
-        if (!event || event.experiment_id !== campaign.experimentId || event.campaign_id !== campaignId) {
-          throw new Error(`El evento ${eventId} no pertenece a la campaña y experimento esperados.`);
-        }
-        const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
-        if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId) {
-          throw new Error(`La procedencia del evento ${eventId} no coincide con su manifiesto.`);
-        }
-        if (event.ground_truth_label === expected.label) {
-          alreadyLabeled++;
-          continue;
-        }
-        if (event.ground_truth_label !== 'unknown') {
-          throw new Error(`El evento ${eventId} ya tiene una etiqueta distinta; requiere revisión manual.`);
-        }
-        await labelObservedEvent({
-          eventId,
-          label: expected.label,
-          method: 'authorized_automated_campaign_manifest_v1',
-          rationale: `Evento de la campaña autorizada ${campaignId}, ejecución ${job.runId}, escenario ${expected.scenarioId}; etiqueta derivada del manifiesto independiente preregistrado, no de las alertas de Centinela.`,
-          labeledBy: 'centinela-v3-lab-coordinator',
-        });
-        labeled++;
-      }
-    }
-    return res.json({ status: 'ok', campaign_id: campaignId, labeled, already_labeled: alreadyLabeled });
+    const result = await labelLabCampaignFromManifest(campaignId);
+    const { campaign } = getLabCampaignForLabeling(campaignId);
+    markLabCampaignLabeled(campaignId);
+    await saveLabCoordinatorState(campaign.experimentId, () => serializeLabCoordinatorState(campaign.experimentId));
+    return res.json({
+      status: 'ok',
+      campaign_id: campaignId,
+      labeled: result.labeled,
+      already_labeled: result.alreadyLabeled,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudieron etiquetar los eventos de la campaña.';
     return res.status(400).json({ error: message });
