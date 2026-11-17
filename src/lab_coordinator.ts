@@ -67,6 +67,60 @@ export function resetLabCoordinatorForTesting(): void {
   campaigns.clear();
 }
 
+export function serializeLabCoordinatorState(experimentId?: string | null): Record<string, unknown> {
+  const selectedCampaigns = [...campaigns.values()].filter((campaign) =>
+    !experimentId || campaign.experimentId === experimentId
+  );
+  const campaignIds = new Set(selectedCampaigns.map((campaign) => campaign.campaignId));
+  const selectedJobs = [...jobs.values()].filter((job) => campaignIds.has(job.campaignId));
+  const selectedAgentIds = new Set(selectedJobs.map((job) => job.agentId).filter((id): id is string => Boolean(id)));
+  const selectedAgents = [...agents.values()].filter((agent) =>
+    !experimentId || selectedAgentIds.has(agent.agentId)
+  );
+  return {
+    version: 1,
+    saved_at: new Date().toISOString(),
+    agents: selectedAgents.map((agent) => ({ ...agent })),
+    campaigns: selectedCampaigns.map((campaign) => ({ ...campaign, jobIds: [...campaign.jobIds], scenarioIds: [...campaign.scenarioIds] })),
+    jobs: selectedJobs.map((job) => ({ ...job, outcomes: [...job.outcomes], summary: { ...job.summary } })),
+  };
+}
+
+export function restoreLabCoordinatorState(value: unknown): { agents: number; campaigns: number; jobs: number } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('El estado persistido del laboratorio no tiene un formato válido.');
+  }
+  const state = value as Record<string, unknown>;
+  if (state.version !== 1 || !Array.isArray(state.agents) || !Array.isArray(state.campaigns) || !Array.isArray(state.jobs)) {
+    throw new Error('La versión del estado persistido del laboratorio no es compatible.');
+  }
+  resetLabCoordinatorForTesting();
+
+  for (const raw of state.agents) {
+    if (!raw || typeof raw !== 'object') continue;
+    const agent = raw as LabAgent;
+    if (typeof agent.agentId !== 'string' || !/^[a-f0-9]{64}$/i.test(agent.egressIpHash || '')) continue;
+    agent.status = 'offline';
+    agent.lastSeenAt = 0;
+    agents.set(agent.agentId, { ...agent });
+  }
+  for (const raw of state.campaigns) {
+    if (!raw || typeof raw !== 'object') continue;
+    const campaign = raw as LabCampaign;
+    if (typeof campaign.campaignId !== 'string' || typeof campaign.experimentId !== 'string' || !Array.isArray(campaign.jobIds)) continue;
+    campaigns.set(campaign.campaignId, { ...campaign, jobIds: [...campaign.jobIds], scenarioIds: [...campaign.scenarioIds] });
+  }
+  for (const raw of state.jobs) {
+    if (!raw || typeof raw !== 'object') continue;
+    const job = raw as LabJob;
+    if (typeof job.jobId !== 'string' || typeof job.campaignId !== 'string' || !Array.isArray(job.outcomes)) continue;
+    if (job.status === 'running' || job.status === 'assigned') job.status = 'assigned';
+    jobs.set(job.jobId, { ...job, outcomes: [...job.outcomes], summary: { ...(job.summary ?? {}) } });
+  }
+  for (const campaign of campaigns.values()) refreshCampaignStatus(campaign);
+  return { agents: agents.size, campaigns: campaigns.size, jobs: jobs.size };
+}
+
 
 export const LAB_SCENARIO_CATALOG: Record<LabScenarioId, {
   label: string;
@@ -334,11 +388,42 @@ export function createLabCampaign(input: {
   return { campaign: { ...campaign }, manifest: campaign.manifest };
 }
 
+function serializeJobForAgent(job: LabJob, agentId: string): Record<string, unknown> {
+  const eventIds = Array.isArray(job.summary.event_ids)
+    ? (job.summary.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
+    : [];
+  return {
+    job_id: job.jobId,
+    campaign_id: job.campaignId,
+    run_id: job.runId,
+    scenario_id: job.scenarioId,
+    agent_id: agentId,
+    target_account: job.targetAccount,
+    start_at: new Date(job.startAt).toISOString(),
+    interval_ms: job.intervalMs,
+    outcomes: [...job.outcomes],
+    max_attempts: job.outcomes.length,
+    attempts_completed: job.attemptsCompleted,
+    event_ids: eventIds,
+  };
+}
+
 export function claimNextLabJob(agentId: string): Record<string, unknown> | null {
   const agent = agents.get(agentId);
   if (!agent) throw new Error('Agente no registrado.');
   agent.lastSeenAt = Date.now();
-  if (agent.currentJobId) return null;
+
+  // A runner that reconnects after a detector restart resumes its existing task.
+  if (agent.currentJobId) {
+    const activeJob = jobs.get(agent.currentJobId);
+    if (activeJob && activeJob.agentId === agentId &&
+        ['assigned', 'running', 'paused'].includes(activeJob.status)) {
+      if (activeJob.status === 'assigned') activeJob.status = 'running';
+      agent.status = activeJob.status === 'paused' ? 'paused' : 'running';
+      return serializeJobForAgent(activeJob, agentId);
+    }
+    agent.currentJobId = null;
+  }
 
   const job = [...jobs.values()].find((candidate) =>
     candidate.status === 'queued' &&
@@ -358,64 +443,31 @@ export function claimNextLabJob(agentId: string): Record<string, unknown> | null
 
   job.agentId = agentId;
   job.status = 'assigned';
-  job.startedAt = Date.now();
+  job.startedAt = job.startedAt ?? Date.now();
   agent.currentJobId = job.jobId;
   agent.status = 'running';
   const campaign = campaigns.get(job.campaignId);
   if (campaign) campaign.status = 'running';
 
   // No se devuelve expectedLabel ni ningún otro campo de verdad de referencia.
-  return {
-    job_id: job.jobId,
-    campaign_id: job.campaignId,
-    run_id: job.runId,
-    scenario_id: job.scenarioId,
-    agent_id: agentId,
-    target_account: job.targetAccount,
-    start_at: new Date(job.startAt).toISOString(),
-    interval_ms: job.intervalMs,
-    outcomes: [...job.outcomes],
-    max_attempts: job.outcomes.length,
-  };
+  return serializeJobForAgent(job, agentId);
 }
 
-export function getLabJobCaptureContext(agentId: string, jobId: string, attemptIndex: number): {
-  campaignId: string;
-  runId: string;
-  scenarioId: LabScenarioId;
-  targetAccount: string;
-  expectedSuccess: boolean;
-  egressIpHash: string;
-} {
-  const job = jobs.get(jobId);
-  const agent = agents.get(agentId);
-  if (!job || !agent || job.agentId !== agentId || agent.currentJobId !== jobId) {
-    throw new Error('La tarea no está asignada al agente autenticado.');
-  }
-  if (!['assigned', 'running'].includes(job.status)) {
-    throw new Error('La tarea no está activa para capturar eventos.');
-  }
-  if (!Number.isInteger(attemptIndex) || attemptIndex !== job.attemptsCompleted ||
-      attemptIndex < 0 || attemptIndex >= job.outcomes.length) {
-    throw new Error('El índice de intento no coincide con el progreso confirmado de la tarea.');
-  }
-  return {
-    campaignId: job.campaignId,
-    runId: job.runId,
-    scenarioId: job.scenarioId,
-    targetAccount: job.targetAccount,
-    expectedSuccess: job.outcomes[attemptIndex],
-    egressIpHash: agent.egressIpHash,
-  };
-}
-
-export function reportLabJobProgress(agentId: string, jobId: string, attemptsCompleted: number): void {
+export function reportLabJobProgress(agentId: string, jobId: string, attemptsCompleted: number, eventId: string): void {
   const job = jobs.get(jobId);
   if (!job || job.agentId !== agentId) throw new Error('La tarea no pertenece a este agente.');
-  if (!Number.isInteger(attemptsCompleted) || attemptsCompleted < job.attemptsCompleted || attemptsCompleted > job.outcomes.length) {
-    throw new Error('El progreso informado no es válido.');
+  if (!/^[a-f0-9-]{36}$/i.test(eventId)) throw new Error('El identificador del evento confirmado no es válido.');
+  const currentIds = Array.isArray(job.summary.event_ids)
+    ? (job.summary.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
+    : [];
+  if (attemptsCompleted === job.attemptsCompleted && currentIds.includes(eventId)) return;
+  if (!Number.isInteger(attemptsCompleted) || attemptsCompleted !== job.attemptsCompleted + 1 ||
+      attemptsCompleted > job.outcomes.length) {
+    throw new Error('El progreso informado no corresponde al siguiente intento confirmado.');
   }
+  if (currentIds.includes(eventId)) throw new Error('El evento ya está asociado a otro avance de la tarea.');
   job.attemptsCompleted = attemptsCompleted;
+  job.summary = { ...job.summary, event_ids: [...currentIds, eventId] };
   const agent = agents.get(agentId);
   if (agent) agent.lastSeenAt = Date.now();
 }
