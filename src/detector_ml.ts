@@ -8,8 +8,9 @@
  *   3. Local Outlier Factor (LOF / K-Nearest Neighbors para densidad local)
  *   4. Ensamble por Votación Ponderada (Consenso de Modelos ML)
  *
- * Vector de características (5 dimensiones):
- *   [num_intentos, num_usuarios_distintos, intervalo_promedio, intervalo_std, hora_del_dia]
+ * Vector de características v3 (4 dimensiones):
+ *   [num_intentos_fallidos, num_usuarios_distintos, intervalo_promedio, intervalo_std]
+ * La hora UTC absoluta se excluye para evitar desplazamientos artificiales entre días.
  */
 
 export interface VeredictoModeloIndividual {
@@ -373,14 +374,11 @@ export class DetectorML {
       intervaloStd = Math.sqrt(variance);
     }
 
-    const hora = new Date(ahora * 1000).getUTCHours();
-
     return [
       numIntentos,
       numUsuarios,
       Math.round(intervaloPromedio * 100) / 100,
       Math.round(intervaloStd * 100) / 100,
-      hora,
     ];
   }
 
