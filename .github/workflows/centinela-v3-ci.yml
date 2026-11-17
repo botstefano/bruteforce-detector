@@ -31,3 +31,15 @@ jobs:
         run: npm test
       - name: Production build
         run: npm run build
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-empirical.txt
+      - name: Install empirical evaluation dependencies
+        run: python -m pip install -r requirements-empirical.txt
+      - name: Validate offline evaluator syntax
+        run: python -m py_compile empirical_auth_evaluation.py
+      - name: Empirical feature schema tests
+        run: python -m unittest discover -s tests -v
