@@ -673,6 +673,9 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
     }
     try {
       await appendLabCampaignManifest(activeExperiment.id, manifest);
+      // First persist the queue while it is still unavailable to runners. Only after
+      // Supabase confirms the state do we activate the campaign for job claiming.
+      await saveLabCoordinatorState(activeExperiment.id, () => serializeLabCoordinatorState(activeExperiment.id));
       activateLabCampaign(campaign.campaignId);
       await saveLabCoordinatorState(activeExperiment.id, () => serializeLabCoordinatorState(activeExperiment.id));
     } catch (error) {
