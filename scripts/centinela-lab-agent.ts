@@ -23,7 +23,7 @@ interface AgentCredentials {
 
 const REQUIRED_USERS = ['ronan', 'andy', 'stefano'] as const;
 const coordinatorUrl = requireOrigin('CENTINELA_LAB_COORDINATOR_URL', 'bruteforce-detector-2uv4.onrender.com');
-const portalUrl = requireOrigin('CENTINELA_LAB_PORTAL_URL', 'centinela-auth-lab.onrender.com');
+const portalUrl = coordinatorUrl;
 const agentToken = requiredEnv('CENTINELA_LAB_AGENT_TOKEN');
 const agentId = requiredEnv('CENTINELA_LAB_AGENT_ID');
 const version = process.env.CENTINELA_LAB_AGENT_VERSION || 'centinela-v3-agent/1.0.0';
@@ -185,7 +185,7 @@ async function executeJob(job: LabJob): Promise<void> {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 25_000);
       try {
-        const response = await fetch(portalUrl + '/agent/login', {
+        const response = await fetch(portalUrl + '/api/lab/agent/auth', {
           method: 'POST',
           redirect: 'error',
           headers: {
@@ -197,12 +197,12 @@ async function executeJob(job: LabJob): Promise<void> {
             'X-Centinela-Agent-Id': agentId,
             'X-Centinela-Scenario-Id': job.scenario_id,
           },
-          body: JSON.stringify({ username: job.target_account, password }),
+          body: JSON.stringify({ job_id: job.job_id, attempt_index: index, username: job.target_account, password }),
           signal: controller.signal,
         });
         const payload = await response.json().catch(() => ({}));
         httpStatuses.push(response.status);
-        if ((response.status !== 200 && response.status !== 401) || payload.event_recorded !== true || typeof payload.event_id !== 'string') {
+        if ((expectedAuthSuccess ? response.status !== 200 : response.status !== 401) || payload.event_recorded !== true || typeof payload.event_id !== 'string') {
           throw new Error(`El portal no confirmó el evento (HTTP ${response.status}); se detiene la tarea para no producir datos incompletos.`);
         }
         eventIds.push(payload.event_id);
