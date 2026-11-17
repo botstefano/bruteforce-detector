@@ -52,6 +52,7 @@ interface LabCampaign {
   repetitions: number;
   phase: ExperimentPhase;
   jobIds: string[];
+  manifestPersisted: boolean;
   manifest: Record<string, unknown>;
 }
 
@@ -372,6 +373,7 @@ export function createLabCampaign(input: {
     repetitions,
     phase: input.phase,
     jobIds,
+    manifestPersisted: false,
     manifest: {
       protocol: 'centinela-auth-study-v3',
       campaign_id: campaignId,
@@ -408,6 +410,13 @@ function serializeJobForAgent(job: LabJob, agentId: string): Record<string, unkn
   };
 }
 
+export function activateLabCampaign(campaignId: string): LabCampaign {
+  const campaign = campaigns.get(campaignId);
+  if (!campaign) throw new Error('Campaña no encontrada.');
+  campaign.manifestPersisted = true;
+  return { ...campaign };
+}
+
 export function claimNextLabJob(agentId: string): Record<string, unknown> | null {
   const agent = agents.get(agentId);
   if (!agent) throw new Error('Agente no registrado.');
@@ -427,6 +436,7 @@ export function claimNextLabJob(agentId: string): Record<string, unknown> | null
 
   const job = [...jobs.values()].find((candidate) =>
     candidate.status === 'queued' &&
+    campaigns.get(candidate.campaignId)?.manifestPersisted === true &&
     (candidate.agentId === null || candidate.agentId === agentId) &&
     (!candidate.agentId || candidate.agentId === agentId)
   );
@@ -615,6 +625,7 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
         scenario_ids: campaign.scenarioIds,
         repetitions: campaign.repetitions,
         phase: campaign.phase,
+        manifest_persisted: campaign.manifestPersisted,
         jobs: campaignJobs.map((job) => ({
           job_id: job.jobId,
           run_id: job.runId,
