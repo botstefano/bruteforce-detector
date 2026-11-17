@@ -1005,6 +1005,21 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
     // La IP del cuerpo solo se acepta en este endpoint porque ya se validó el token
     // de servicio a servicio; nunca se acepta de clientes públicos.
     const ip = reportedIp || ipDelCliente(req);
+    if (!hasLabMetadata) {
+      const activeExperimentId = getActiveExperimentId();
+      if (activeExperimentId) {
+        const activeExperiment = await getExperimentMetadata(activeExperimentId);
+        const protocolName = typeof activeExperiment.protocol_name === 'string'
+          ? activeExperiment.protocol_name.toLowerCase()
+          : '';
+        if (protocolName.includes('v3')) {
+          return res.status(409).json({
+            error: 'El protocolo v3 solo acepta eventos de agentes autenticados con manifiesto de campaña. Los logins manuales o integraciones sin procedencia completa se rechazan.',
+            persisted: false,
+          });
+        }
+      }
+    }
     if (hasLabMetadata) {
       labRequestId = labAttemptRequestId(jobId, attemptIndex);
       const context = getLabJobCaptureContext(agentId, jobId, attemptIndex);
