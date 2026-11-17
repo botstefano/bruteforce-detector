@@ -36,6 +36,8 @@ import {
   getAnalyticsIdentifiers,
   loadLabCoordinatorState,
   saveLabCoordinatorState,
+  labAttemptRequestId,
+  findObservedLabAttempt,
   getActiveExperimentId,
   getActiveExperimentState,
   type CapturedAuthEvent,
@@ -479,6 +481,12 @@ async function procesarIntentoCapturado(
   (evento as typeof evento & { metadata: Record<string, unknown>; campaign_id: string | null }).metadata = metadata;
   (evento as typeof evento & { campaign_id: string | null }).campaign_id =
     typeof metadata.campaign_id === 'string' ? metadata.campaign_id : null;
+  if (typeof metadata.job_id === 'string' && Number.isInteger(metadata.attempt_index)) {
+    (evento as typeof evento & { request_id?: string }).request_id = labAttemptRequestId(
+      metadata.job_id,
+      Number(metadata.attempt_index),
+    );
+  }
   try {
     await persistObservedEvent(evento as CapturedAuthEvent);
   } catch (error) {
@@ -968,6 +976,30 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
     // de servicio a servicio; nunca se acepta de clientes públicos.
     const ip = reportedIp || ipDelCliente(req);
     if (hasLabMetadata) {
+      const requestId = labAttemptRequestId(jobId, attemptIndex);
+      const existing = await findObservedLabAttempt(requestId);
+      if (existing) {
+        const expectedActor = scenarioId === 'benign_mixed' ? 'benign_agent' : 'attack_agent';
+        const existingMetadata = existing.metadata ?? {};
+        if (existing.experiment_id !== getActiveExperimentId() ||
+            existing.campaign_id !== campaignId ||
+            existing.auth_success !== data.exitoso ||
+            existingMetadata.run_id !== runId ||
+            existingMetadata.agent_id !== agentId ||
+            existingMetadata.scenario_id !== scenarioId ||
+            existingMetadata.actor_type !== expectedActor) {
+          return res.status(409).json({ error: 'La clave idempotente ya existe con una procedencia incompatible.', persisted: false });
+        }
+        return res.status(existing.auth_success ? 200 : 401).json({
+          event_id: existing.event_id,
+          alerta: false,
+          alerta_reglas: false,
+          alerta_ml: false,
+          bloqueado_ahora: false,
+          persisted: true,
+          duplicate_replay: true,
+        });
+      }
       const context = getLabJobCaptureContext(agentId, jobId, attemptIndex);
       const expectedActor = context.scenarioId === 'benign_mixed' ? 'benign_agent' : 'attack_agent';
       const observedIpHash = getAnalyticsIdentifiers(ip, agentId).ipKey;
