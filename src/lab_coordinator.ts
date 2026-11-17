@@ -92,10 +92,9 @@ export function serializeLabCoordinatorState(experimentId?: string | null): Reco
   );
   const campaignIds = new Set(selectedCampaigns.map((campaign) => campaign.campaignId));
   const selectedJobs = [...jobs.values()].filter((job) => campaignIds.has(job.campaignId));
-  const selectedAgentIds = new Set(selectedJobs.map((job) => job.agentId).filter((id): id is string => Boolean(id)));
-  const selectedAgents = [...agents.values()].filter((agent) =>
-    !experimentId || selectedAgentIds.has(agent.agentId)
-  );
+  // Persist every registered runner, including idle runners. After a service
+  // restart their next authenticated poll can safely move them from offline to ready.
+  const selectedAgents = [...agents.values()];
   return {
     version: 2,
     saved_at: new Date().toISOString(),
@@ -396,6 +395,7 @@ export function heartbeatLabAgent(agentId: string): {
 export function createLabCampaign(input: {
   experimentId: string;
   targetAccount: string;
+  targetAccounts?: string[];
   scenarioIds: unknown[];
   phase: ExperimentPhase;
   repetitions?: number;
@@ -408,8 +408,9 @@ export function createLabCampaign(input: {
     throw new Error('repetitions debe ser un entero entre 1 y 5.');
   }
   if (!input.experimentId) throw new Error('Se requiere un experimento activo.');
-  if (!/^(ronan|andy|stefano)$/.test(input.targetAccount)) {
-    throw new Error('La cuenta objetivo debe ser una cuenta de laboratorio autorizada.');
+  const targetAccounts = input.targetAccounts?.length ? input.targetAccounts : [input.targetAccount];
+  if (!targetAccounts.length || targetAccounts.some((account) => !/^(ronan|andy|stefano)$/.test(account))) {
+    throw new Error('Las cuentas objetivo deben ser cuentas de laboratorio autorizadas.');
   }
   if (scenarioIds.length === 0 || scenarioIds.length !== input.scenarioIds.length) {
     throw new Error('Selecciona uno o más escenarios válidos del catálogo experimental.');
@@ -453,6 +454,7 @@ export function createLabCampaign(input: {
   for (const scenarioId of orderedScenarioIds) {
     const definition = LAB_SCENARIO_CATALOG[scenarioId];
     for (let repetition = 1; repetition <= repetitions; repetition += 1) {
+      const runTargetAccount = targetAccounts[(repetition - 1) % targetAccounts.length];
       const runId = randomUUID();
       const runSeed = Number.parseInt(randomUUID().replace(/-/g, '').slice(0, 8), 16) >>> 0;
       const profile = buildScenarioProfile(scenarioId, runSeed);
@@ -475,7 +477,7 @@ export function createLabCampaign(input: {
           runId,
           scenarioId,
           agentId: agent.agentId,
-          targetAccount: input.targetAccount,
+          targetAccount: runTargetAccount,
           startAt,
           intervalMs: profile.delaysMs.length ? Math.round(profile.delaysMs.reduce((sum, delay) => sum + delay, 0) / profile.delaysMs.length) : 0,
           interAttemptDelaysMs: [...profile.delaysMs],
@@ -506,7 +508,7 @@ export function createLabCampaign(input: {
         expected_label: definition.expectedLabel,
         actor_type: definition.actorType,
         generation_method: 'automated_http_agent',
-        target_account: input.targetAccount,
+        target_account: runTargetAccount,
         required_independent_egress_ips: definition.requiredAgents,
         planned_agent_ids: assignedAgents.map((agent) => agent.agentId),
         planned_start_at: new Date(startAt).toISOString(),
@@ -527,7 +529,7 @@ export function createLabCampaign(input: {
     experimentId: input.experimentId,
     createdAt: now,
     status: 'queued',
-    targetAccount: input.targetAccount,
+    targetAccount: targetAccounts[0],
     scenarioIds,
     repetitions,
     phase: input.phase,
@@ -659,6 +661,7 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
   scenarioId: LabScenarioId;
   repetitions: number;
   targetAccount: string;
+  targetAccounts: string[];
   completed: number;
   target: number;
 } | null {
@@ -700,11 +703,13 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
       return null;
     }
     const remaining = target - count.completed;
-    const account = plan.accounts[(count.completed + count.failed) % plan.accounts.length];
+    const startAccountIndex = (count.completed + count.failed) % plan.accounts.length;
+    const orderedAccounts = plan.accounts.map((_, index) => plan.accounts[(startAccountIndex + index) % plan.accounts.length]);
     return {
       scenarioId,
       repetitions: Math.min(plan.batchSize, remaining),
-      targetAccount: account,
+      targetAccount: orderedAccounts[0],
+      targetAccounts: orderedAccounts,
       completed: count.completed,
       target,
     };
@@ -789,7 +794,10 @@ export function claimNextLabJob(agentId: string): Record<string, unknown> | null
     (candidate.agentId === null || candidate.agentId === agentId) &&
     (!candidate.agentId || candidate.agentId === agentId)
   );
-  if (!job) return null;
+  if (!job) {
+    if (agent.status === 'offline' || agent.status === 'error') agent.status = 'ready';
+    return null;
+  }
 
   if (job.scenarioId === 'attack_distributed') {
     const matching = [...agents.values()].filter((item) =>
