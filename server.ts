@@ -55,6 +55,7 @@ import {
   completeLabAutomation,
   markLabCampaignLabeled,
   stopLabAutomation,
+  discardUnpersistedLabAutomationPlan,
   updateLabAutomationStatus,
   claimNextLabJob,
   completeLabJob,
@@ -1072,7 +1073,16 @@ app.post('/api/lab/automation/start', requiereAdmin, async (req: Request, res: R
         serializeLabCoordinatorState(experiment.id),
       );
     } catch (persistError) {
-      stopLabAutomation();
+      // If the write did not commit, release the in-memory draft so setup can be
+      // retried. If the response was lost after commit, preserve the immutable plan.
+      try {
+        const latest = await getExperimentMetadata(experiment.id);
+        const latestMetadata = (latest.metadata ?? {}) as Record<string, unknown>;
+        if (!latestMetadata.collection_plan) discardUnpersistedLabAutomationPlan(experiment.id);
+      } catch {
+        // Do not discard when commit state cannot be established.
+        stopLabAutomation();
+      }
       throw persistError;
     }
     io.emit('lab_campaign_update', getLabSnapshot(experiment.id));
