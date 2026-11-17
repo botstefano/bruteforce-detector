@@ -18,6 +18,8 @@ import { isIP } from 'node:net';
 
 import {
   abortExperimentRecord,
+  appendLabCampaignManifest,
+  getExperimentMetadata,
   calculateObservedMetrics,
   checkSupabaseConnection,
   createExperimentRecord,
@@ -35,6 +37,19 @@ import {
   getActiveExperimentState,
   type CapturedAuthEvent,
 } from './src/supabase_events.js';
+
+import {
+  claimNextLabJob,
+  completeLabJob,
+  createLabCampaign,
+  getLabCampaignForLabeling,
+  getLabJobControl,
+  getLabSnapshot,
+  heartbeatLabAgent,
+  registerLabAgent,
+  reportLabJobProgress,
+  updateLabCampaign,
+} from './src/lab_coordinator.js';
 
 import { db } from './src/database.js';
 import { DetectorReglas } from './src/detector_reglas.js';
@@ -95,6 +110,7 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const DURACION_BLOQUEO_SEGUNDOS = parseInt(process.env.DURACION_BLOQUEO_SEGUNDOS || '300', 10);
 const DASHBOARD_PASSWORD = (process.env.DASHBOARD_PASSWORD || '').trim();
 const CENTINELA_INGEST_TOKEN = (process.env.CENTINELA_INGEST_TOKEN || '').trim();
+const CENTINELA_LAB_AGENT_TOKEN = (process.env.CENTINELA_LAB_AGENT_TOKEN || '').trim();
 const TRUST_PROXY_HOPS = Math.max(0, parseInt(process.env.TRUST_PROXY_HOPS || '0', 10));
 const SESSION_SECRET = (process.env.SECRET_KEY || '').trim();
 
@@ -298,6 +314,21 @@ function validarTokenIngesta(req: Request): boolean {
   return safeStringEqual(token, CENTINELA_INGEST_TOKEN);
 }
 
+function validarTokenAgenteLab(req: Request): boolean {
+  if (CENTINELA_LAB_AGENT_TOKEN.length < 32) return false;
+  const auth = req.headers.authorization || '';
+  const token = auth.toLowerCase().startsWith('bearer ') ? auth.slice(7).trim() : '';
+  return safeStringEqual(token, CENTINELA_LAB_AGENT_TOKEN);
+}
+
+function requiereAgenteLab(req: Request, res: Response, next: NextFunction) {
+  if (CENTINELA_LAB_AGENT_TOKEN.length < 32) {
+    return res.status(503).json({ error: 'La autenticación de agentes experimentales no está configurada.' });
+  }
+  if (!validarTokenAgenteLab(req)) return res.status(401).json({ error: 'Agente no autorizado.' });
+  return next();
+}
+
 function ipAleatoria(): string {
   return [
     Math.floor(Math.random() * 254) + 1,
@@ -408,7 +439,36 @@ async function procesarIntentoCapturado(
     eventCapturePauseReason = 'Persistencia en Supabase falló. La captura permanece detenida hasta verificar el almacenamiento e iniciar un experimento nuevo.';
     throw new Error(eventCapturePauseReason);
   }
-  io.emit('nuevo_evento', evento);
+  const safeLiveEvent = {
+    id: evento.id,
+    event_id: evento.event_id,
+    timestamp: evento.timestamp,
+    ip: ipKey.slice(0, 12),
+    usuario: userKey.slice(0, 12),
+    source_ip_hash_prefix: ipKey.slice(0, 12),
+    user_key_hash_prefix: userKey.slice(0, 12),
+    exitoso: evento.exitoso,
+    alerta_reglas: evento.alerta_reglas,
+    razon_reglas: evento.razon_reglas,
+    alerta_ml: evento.alerta_ml,
+    score_ml: evento.score_ml,
+    features: evento.features,
+    modelos_ml: evento.modelos_ml,
+    origen: evento.origen,
+    bloqueado_ahora: evento.bloqueado_ahora,
+    latency_rules_ms: evento.latency_rules_ms,
+    latency_ml_ms: evento.latency_ml_ms,
+    latency_total_ms: evento.latency_total_ms,
+    campaign_id: evento.campaign_id ?? null,
+    metadata: {
+      agent_id: metadata.agent_id ?? null,
+      run_id: metadata.run_id ?? null,
+      scenario_id: metadata.scenario_id ?? null,
+      actor_type: metadata.actor_type ?? null,
+      generation_method: metadata.generation_method ?? null,
+    },
+  };
+  io.emit('nuevo_evento', safeLiveEvent);
   return evento;
 }
 
