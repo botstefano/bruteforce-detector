@@ -34,6 +34,8 @@ import {
   freezeActiveExperimentTraining,
   freezeActiveExperimentValidation,
   getAnalyticsIdentifiers,
+  loadLabCoordinatorState,
+  saveLabCoordinatorState,
   getActiveExperimentId,
   getActiveExperimentState,
   type CapturedAuthEvent,
@@ -53,6 +55,8 @@ import {
   reportLabJobProgress,
   updateLabCampaign,
   verifyLabAgentOrigin,
+  serializeLabCoordinatorState,
+  restoreLabCoordinatorState,
 } from './src/lab_coordinator.js';
 
 import { db } from './src/database.js';
@@ -660,6 +664,7 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
     }
     try {
       await appendLabCampaignManifest(activeExperiment.id, manifest);
+      await saveLabCoordinatorState(activeExperiment.id, () => serializeLabCoordinatorState(activeExperiment.id));
     } catch (error) {
       updateLabCampaign(campaign.campaignId, 'stop');
       throw error;
@@ -690,7 +695,7 @@ app.post('/api/experimentos/:experimentId/congelar_validacion', requiereAdmin, a
   }
 });
 
-app.post('/api/lab/campaigns/:campaignId/:action', requiereAdmin, (req: Request, res: Response) => {
+app.post('/api/lab/campaigns/:campaignId/:action', requiereAdmin, async (req: Request, res: Response) => {
   const action = singleRouteParam(req.params.action);
   if (!['pause', 'resume', 'stop'].includes(action)) {
     return res.status(400).json({ error: 'Acción no válida. Usa pause, resume o stop.' });
@@ -701,6 +706,7 @@ app.post('/api/lab/campaigns/:campaignId/:action', requiereAdmin, (req: Request,
       action as 'pause' | 'resume' | 'stop'
     );
     const state = getLabSnapshot(campaign.experimentId);
+    await saveLabCoordinatorState(campaign.experimentId, () => serializeLabCoordinatorState(campaign.experimentId));
     io.emit('lab_campaign_update', state);
     return res.json({ campaign_id: campaign.campaignId, status: campaign.status, state });
   } catch (error) {
@@ -770,7 +776,7 @@ app.post('/api/lab/campaigns/:campaignId/label', requiereAdmin, async (req: Requ
   }
 });
 
-app.post('/api/lab/agent/register', requiereAgenteLab, (req: Request, res: Response) => {
+app.post('/api/lab/agent/register', requiereAgenteLab, async (req: Request, res: Response) => {
   try {
     const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
     const headerAgentId = String(req.headers['x-centinela-agent-id'] || '').trim();
@@ -785,6 +791,8 @@ app.post('/api/lab/agent/register', requiereAgenteLab, (req: Request, res: Respo
     }
     const identifiers = getAnalyticsIdentifiers(sourceIp, agentId || 'invalid-agent');
     const agent = registerLabAgent({ agentId, egressIpHash: identifiers.ipKey, version });
+    const activeExperimentId = getActiveExperimentId();
+    if (activeExperimentId) await saveLabCoordinatorState(activeExperimentId, () => serializeLabCoordinatorState(activeExperimentId));
     io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
     return res.status(201).json({
       agent_id: agent.agentId,
@@ -799,12 +807,17 @@ app.post('/api/lab/agent/register', requiereAgenteLab, (req: Request, res: Respo
   }
 });
 
-app.get('/api/lab/agent/jobs/next', requiereAgenteLab, (req: Request, res: Response) => {
+app.get('/api/lab/agent/jobs/next', requiereAgenteLab, async (req: Request, res: Response) => {
   try {
     const agentId = String(req.headers['x-centinela-agent-id'] || '').trim();
     if (!agentId) return res.status(400).json({ error: 'Falta X-Centinela-Agent-Id.' });
     if (!validarIdentidadAgente(req, res, agentId)) return;
     const job = claimNextLabJob(agentId);
+    if (job) {
+      const activeExperimentId = getActiveExperimentId();
+      if (!activeExperimentId) return res.status(409).json({ error: 'No hay un experimento activo para este trabajo.' });
+      await saveLabCoordinatorState(activeExperimentId, () => serializeLabCoordinatorState(activeExperimentId));
+    }
     if (!job) return res.json({ job: null, status: 'idle' });
     io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
     return res.json({ job, status: 'assigned' });
@@ -829,12 +842,16 @@ app.post('/api/lab/agent/heartbeat', requiereAgenteLab, (req: Request, res: Resp
   }
 });
 
-app.post('/api/lab/agent/progress', requiereAgenteLab, (req: Request, res: Response) => {
+app.post('/api/lab/agent/progress', requiereAgenteLab, async (req: Request, res: Response) => {
   try {
     const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
     const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
     if (!validarIdentidadAgente(req, res, agentId)) return;
-    reportLabJobProgress(agentId, jobId, Number(req.body?.attempts_completed));
+    const eventId = typeof req.body?.event_id === 'string' ? req.body.event_id.trim() : '';
+    reportLabJobProgress(agentId, jobId, Number(req.body?.attempts_completed), eventId);
+    const activeExperimentId = getActiveExperimentId();
+    if (!activeExperimentId) return res.status(409).json({ error: 'No hay un experimento activo.' });
+    await saveLabCoordinatorState(activeExperimentId, () => serializeLabCoordinatorState(activeExperimentId));
     io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
     return res.json({ status: 'ok' });
   } catch (error) {
@@ -843,7 +860,7 @@ app.post('/api/lab/agent/progress', requiereAgenteLab, (req: Request, res: Respo
   }
 });
 
-app.post('/api/lab/agent/complete', requiereAgenteLab, (req: Request, res: Response) => {
+app.post('/api/lab/agent/complete', requiereAgenteLab, async (req: Request, res: Response) => {
   try {
     const agentId = typeof req.body?.agent_id === 'string' ? req.body.agent_id.trim() : '';
     const jobId = typeof req.body?.job_id === 'string' ? req.body.job_id.trim() : '';
@@ -868,6 +885,9 @@ app.post('/api/lab/agent/complete', requiereAgenteLab, (req: Request, res: Respo
       attemptsCompleted: Number(req.body?.attempts_completed),
       summary,
     });
+    const activeExperimentId = getActiveExperimentId();
+    if (!activeExperimentId) return res.status(409).json({ error: 'No hay un experimento activo.' });
+    await saveLabCoordinatorState(activeExperimentId, () => serializeLabCoordinatorState(activeExperimentId));
     io.emit('lab_agent_update', getLabSnapshot(getActiveExperimentId()));
     io.emit('lab_campaign_update', getLabSnapshot(getActiveExperimentId()));
     return res.json({ status: job.status, job_id: job.jobId });
@@ -2571,6 +2591,13 @@ async function startServer() {
     try {
       const activeExperiment = await restoreActiveExperimentRecord();
       if (activeExperiment) {
+        const savedCoordinatorState = await loadLabCoordinatorState(activeExperiment.id);
+        if (savedCoordinatorState) {
+          const restoredLab = restoreLabCoordinatorState(savedCoordinatorState);
+          console.log('Estado del laboratorio restaurado desde Supabase:', restoredLab);
+        } else {
+          console.log('No hay campañas persistidas para este experimento; el coordinador inicia vacío.');
+        }
         console.log('Experimento activo restaurado:', activeExperiment);
         if (getActiveExperimentState()?.trainingFrozen) {
           await entrenarModeloDesdeCapturasBenignas(true);
