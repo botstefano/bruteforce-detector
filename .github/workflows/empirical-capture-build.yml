@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/supabase-event-audit
+      - feature/centinela-v3-automated-lab
   pull_request:
     branches:
       - master
