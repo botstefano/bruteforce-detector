@@ -68,6 +68,8 @@ interface LabCampaign {
   jobIds: string[];
   manifestPersisted: boolean;
   manifest: Record<string, unknown>;
+  scheduledByAutomation: boolean;
+  labelsAppliedAt: string | null;
 }
 
 const agents = new Map<string, LabAgent>();
@@ -142,6 +144,8 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
       manifestPersisted: true,
       jobIds: [...campaign.jobIds],
       scenarioIds: [...campaign.scenarioIds],
+      scheduledByAutomation: campaign.scheduledByAutomation === true,
+      labelsAppliedAt: typeof campaign.labelsAppliedAt === 'string' ? campaign.labelsAppliedAt : null,
     });
   }
   for (const raw of state.jobs) {
@@ -524,6 +528,8 @@ export function createLabCampaign(input: {
     phase: input.phase,
     jobIds,
     manifestPersisted: false,
+    scheduledByAutomation: input.scheduledByAutomation === true,
+    labelsAppliedAt: null,
     manifest: {
       protocol: input.scheduledByAutomation ? 'centinela-auth-study-v4-empirical' : 'centinela-auth-study-v3-compatible',
       campaign_id: campaignId,
@@ -655,7 +661,8 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
   if (!plan || !plan.enabled || plan.status !== 'running' || plan.experimentId !== experimentId) return null;
   const phaseTargets = plan.targets[phase] ?? {};
   const phaseCampaigns = [...campaigns.values()].filter(
-    (campaign) => campaign.experimentId === experimentId && campaign.phase === phase
+    (campaign) => campaign.experimentId === experimentId &&
+      campaign.phase === phase && campaign.scheduledByAutomation
   );
   const counts = new Map<LabScenarioId, { completed: number; failed: number }>();
   for (const scenarioId of Object.keys(phaseTargets) as LabScenarioId[]) counts.set(scenarioId, { completed: 0, failed: 0 });
@@ -697,8 +704,54 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
       target,
     };
   }
-  updateLabAutomationStatus({ status: 'completed', enabled: false, lastError: null });
   return null;
+}
+
+export function isLabAutomationPhaseComplete(experimentId: string, phase: ExperimentPhase): boolean {
+  const plan = labAutomationPlan;
+  if (!plan || plan.experimentId !== experimentId) return false;
+  const targets = plan.targets[phase] ?? {};
+  for (const [scenarioId, target] of Object.entries(targets) as Array<[LabScenarioId, number]>) {
+    let completed = 0;
+    const phaseCampaigns = [...campaigns.values()].filter(
+      (campaign) => campaign.experimentId === experimentId &&
+        campaign.phase === phase && campaign.scheduledByAutomation
+    );
+    for (const campaign of phaseCampaigns) {
+      const runs = new Map<string, LabJob[]>();
+      for (const jobId of campaign.jobIds) {
+        const job = jobs.get(jobId);
+        if (!job || job.scenarioId !== scenarioId) continue;
+        const runJobs = runs.get(job.runId) ?? [];
+        runJobs.push(job);
+        runs.set(job.runId, runJobs);
+      }
+      for (const runJobs of runs.values()) {
+        if (runJobs.length > 0 && runJobs.every((job) => job.status === 'completed')) completed += 1;
+      }
+    }
+    if (completed < target) return false;
+  }
+  return true;
+}
+
+export function completeLabAutomation(): LabAutomationPlan | null {
+  if (!labAutomationPlan) return null;
+  labAutomationPlan = {
+    ...labAutomationPlan,
+    enabled: false,
+    status: 'completed',
+    lastError: null,
+    updatedAt: new Date().toISOString(),
+  };
+  return { ...labAutomationPlan, accounts: [...labAutomationPlan.accounts], targets: structuredClone(labAutomationPlan.targets) };
+}
+
+export function markLabCampaignLabeled(campaignId: string): LabCampaign {
+  const campaign = campaigns.get(campaignId);
+  if (!campaign) throw new Error('Campaña no encontrada.');
+  campaign.labelsAppliedAt = campaign.labelsAppliedAt ?? new Date().toISOString();
+  return { ...campaign };
 }
 
 export function activateLabCampaign(campaignId: string): LabCampaign {
@@ -917,6 +970,8 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
         repetitions: campaign.repetitions,
         phase: campaign.phase,
         manifest_persisted: campaign.manifestPersisted,
+        scheduled_by_automation: campaign.scheduledByAutomation,
+        labels_applied_at: campaign.labelsAppliedAt,
         jobs: campaignJobs.map((job) => ({
           job_id: job.jobId,
           run_id: job.runId,
