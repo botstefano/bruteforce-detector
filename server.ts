@@ -1147,7 +1147,7 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
       return res.status(503).json({ error: 'Configura CENTINELA_LAB_AGENT_TOKEN antes de crear campañas.' });
     }
     const activeExperiment = getActiveExperimentState();
-    if (!activeExperiment) return res.status(409).json({ error: 'Crea primero el experimento temporal v3.' });
+    if (!activeExperiment) return res.status(409).json({ error: 'Crea primero un experimento temporal activo.' });
     if (eventCapturePaused) return res.status(503).json({ error: eventCapturePauseReason || 'La captura está pausada.' });
     const now = Date.now();
     const phase = now < activeExperiment.trainEndMs
