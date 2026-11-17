@@ -971,6 +971,9 @@ export function getLabCampaignForLabeling(campaignId: string): {
     jobId: string;
     runId: string;
     scenarioId: LabScenarioId;
+    agentId: string;
+    targetAccount: string;
+    egressIpHash: string;
     expectedLabel: 'benign' | 'attack';
     status: JobStatus;
     attemptsCompleted: number;
@@ -988,6 +991,9 @@ export function getLabCampaignForLabeling(campaignId: string): {
     jobId: job.jobId,
     runId: job.runId,
     scenarioId: job.scenarioId,
+    agentId: job.agentId || '',
+    targetAccount: job.targetAccount,
+    egressIpHash: job.agentId ? agents.get(job.agentId)?.egressIpHash || '' : '',
     expectedLabel: job.expectedLabel,
     status: job.status,
     attemptsCompleted: job.attemptsCompleted,
@@ -996,7 +1002,8 @@ export function getLabCampaignForLabeling(campaignId: string): {
       ? (job.summary.event_ids as unknown[]).filter((value): value is string => typeof value === 'string')
       : [],
   }));
-  if (normalizedJobs.some((job) => job.attemptsCompleted !== job.attemptsPlanned || job.eventIds.length !== job.attemptsPlanned)) {
+  if (normalizedJobs.some((job) => !job.agentId || !job.egressIpHash ||
+      job.attemptsCompleted !== job.attemptsPlanned || job.eventIds.length !== job.attemptsPlanned)) {
     throw new Error('La campaña tiene tareas con solicitudes faltantes o sin IDs de evento confirmados; no se aplicarán etiquetas automáticamente.');
   }
   return { campaign: { ...campaign }, jobs: normalizedJobs };
