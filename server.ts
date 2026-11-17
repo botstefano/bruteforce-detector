@@ -40,6 +40,7 @@ import {
 } from './src/supabase_events.js';
 
 import {
+  LAB_SCENARIO_CATALOG,
   claimNextLabJob,
   completeLabJob,
   createLabCampaign,
@@ -607,11 +608,18 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
     if (phaseEndAtMs !== null) {
       const plannedJobs = (getLabSnapshot(activeExperiment.id).campaigns as Array<Record<string, unknown>>)
         .find((item) => item.campaign_id === campaign.campaignId)?.jobs as Array<Record<string, unknown>>;
-      const latestFinish = Math.max(...plannedJobs.map((job) => {
-        const start = Date.parse(String(job.start_at));
+      const finishByAgent = new Map<string, number>();
+      for (const job of [...plannedJobs].sort((a, b) => Date.parse(String(a.start_at)) - Date.parse(String(b.start_at)))) {
+        const agentId = String(job.agent_id || '');
+        const plannedStart = Date.parse(String(job.start_at));
         const scenario = LAB_SCENARIO_CATALOG[String(job.scenario_id) as keyof typeof LAB_SCENARIO_CATALOG];
-        return start + (scenario.outcomes.length * 25_000) + ((scenario.outcomes.length - 1) * scenario.intervalMs);
-      }));
+        const effectiveStart = Math.max(plannedStart, finishByAgent.get(agentId) || plannedStart);
+        const estimatedFinish = effectiveStart +
+          (scenario.outcomes.length * 25_000) +
+          ((scenario.outcomes.length - 1) * scenario.intervalMs);
+        finishByAgent.set(agentId, estimatedFinish);
+      }
+      const latestFinish = Math.max(...finishByAgent.values());
       if (!Number.isFinite(latestFinish) || latestFinish >= phaseEndAtMs) {
         updateLabCampaign(campaign.campaignId, 'stop');
         return res.status(409).json({ error: 'La duración máxima estimada de la campaña cruza el corte temporal de la fase. Reduce repeticiones o inicia antes.' });
