@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   claimNextLabJob,
@@ -8,9 +8,12 @@ import {
   getLabCampaignForLabeling,
   registerLabAgent,
   reportLabJobProgress,
+  resetLabCoordinatorForTesting,
 } from '../src/lab_coordinator.js';
 
 const unique = () => `test-${randomUUID()}`;
+
+beforeEach(() => resetLabCoordinatorForTesting());
 
 function registerAgents(prefix: string, count: number) {
   const ids: string[] = [];
