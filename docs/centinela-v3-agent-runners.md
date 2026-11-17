@@ -63,7 +63,7 @@ Render ofrece IP de salida dedicadas únicamente en planes Pro o superiores; la 
 - El escenario de baja frecuencia dura aproximadamente 9 minutos por ejecución.
 - Las campañas no pueden solaparse dentro del mismo experimento.
 - Detener una campaña no elimina los eventos ya capturados; los trabajos incompletos no se etiquetan automáticamente.
-- El coordinador mantiene las colas y estados de los runners en memoria de una única instancia. Un reinicio/despliegue pierde las tareas activas; el manifiesto ya almacenado en Supabase permanece. No desplegar durante una campaña. Antes de una captura definitiva debe resolverse esta limitación o garantizarse que no habrá reinicios durante toda la campaña.
+- El coordinador persiste en `centinela_experiments.metadata.lab_coordinator_state` las campañas, tareas, progreso y `event_id` confirmados. Al reiniciar, restaura las tareas activas y las deja disponibles para que el mismo runner vuelva a registrarse y continúe. Cada intento usa una clave `request_id` determinista para que un reintento posterior a un timeout no duplique el evento. La migración que añade el índice único parcial de `request_id` está en la rama de desarrollo, pero aún debe aplicarse a Supabase antes del despliegue v3. Antes de una captura definitiva deben probarse reinicio, recuperación del coordinador, reanudación del mismo runner y replay idempotente; no desplegar durante una campaña.
 - La interfaz muestra las IP solo como prefijos HMAC y los eventos que el detector persiste. El canal Socket.IO exige sesión administrativa.
 
 ## Verificación previa
