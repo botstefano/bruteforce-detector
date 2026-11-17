@@ -7,6 +7,7 @@ export type LabScenarioId =
   | 'attack_distributed';
 
 type JobStatus = 'queued' | 'assigned' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+export type ExperimentPhase = 'train' | 'validation' | 'test';
 
 interface LabAgent {
   agentId: string;
@@ -49,6 +50,7 @@ interface LabCampaign {
   targetAccount: string;
   scenarioIds: LabScenarioId[];
   repetitions: number;
+  phase: ExperimentPhase;
   jobIds: string[];
   manifest: Record<string, unknown>;
 }
@@ -185,6 +187,7 @@ export function createLabCampaign(input: {
   experimentId: string;
   targetAccount: string;
   scenarioIds: unknown[];
+  phase: ExperimentPhase;
   repetitions?: number;
 }): { campaign: LabCampaign; manifest: Record<string, unknown> } {
   const now = Date.now();
@@ -199,6 +202,12 @@ export function createLabCampaign(input: {
   }
   if (scenarioIds.length === 0 || scenarioIds.length !== input.scenarioIds.length) {
     throw new Error('Selecciona uno o más escenarios válidos del catálogo experimental.');
+  }
+  if (!['train', 'validation', 'test'].includes(input.phase)) {
+    throw new Error('La fase experimental no es válida.');
+  }
+  if (input.phase === 'train' && scenarioIds.some((scenarioId) => scenarioId !== 'benign_mixed')) {
+    throw new Error('Durante entrenamiento solo se permite el escenario benigno mixto.');
   }
   const activeCampaign = [...campaigns.values()].find((campaign) =>
     campaign.experimentId === input.experimentId && ['queued', 'running', 'paused'].includes(campaign.status)
@@ -294,11 +303,13 @@ export function createLabCampaign(input: {
     targetAccount: input.targetAccount,
     scenarioIds,
     repetitions,
+    phase: input.phase,
     jobIds,
     manifest: {
       protocol: 'centinela-auth-study-v3',
       campaign_id: campaignId,
       experiment_id: input.experimentId,
+      phase: input.phase,
       created_at: new Date(now).toISOString(),
       target_account: input.targetAccount,
       scenarios: manifestRuns,
@@ -488,6 +499,7 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
         target_account: campaign.targetAccount,
         scenario_ids: campaign.scenarioIds,
         repetitions: campaign.repetitions,
+        phase: campaign.phase,
         jobs: campaignJobs.map((job) => ({
           job_id: job.jobId,
           run_id: job.runId,
