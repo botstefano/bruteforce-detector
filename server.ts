@@ -854,7 +854,7 @@ async function tickLabAutomation(): Promise<void> {
     }
 
     let snapshot = getLabSnapshot(experiment.id) as {
-      agents: Array<{ agent_id: string; egress_ip_hash_prefix: string; status: string }>;
+      agents: Array<{ agent_id: string; egress_ip_hash_prefix: string; status: string; version: string }>;
       campaigns: Array<{ campaign_id: string; status: string; scheduled_by_automation?: boolean; labels_applied_at?: string | null }>;
     };
 
@@ -948,9 +948,11 @@ async function tickLabAutomation(): Promise<void> {
     snapshot = getLabSnapshot(experiment.id) as typeof snapshot;
     if (snapshot.campaigns.some((campaign) => ['queued', 'running', 'paused'].includes(campaign.status))) return;
 
-    const readyAgents = snapshot.agents.filter((agent) => agent.status === 'ready');
+    const readyAgents = snapshot.agents.filter((agent) =>
+      agent.status === 'ready' && agent.version.startsWith('centinela-v4-agent/')
+    );
     if (!readyAgents.length) {
-      updateLabAutomationStatus({ lastError: 'En espera: no hay agentes locales conectados y disponibles.' });
+      updateLabAutomationStatus({ lastError: 'En espera: conecta un runner centinela-v4-agent/2.x actualizado; los runners V3 no reciben trabajos V4.' });
       await persistLabAutomationState(experiment.id);
       return;
     }
@@ -1056,9 +1058,9 @@ app.post('/api/lab/automation/start', requiereAdmin, async (req: Request, res: R
     const targets = req.body?.targets && typeof req.body.targets === 'object'
       ? req.body.targets as Record<string, Record<string, number>>
       : {
-          train: { benign_mixed: 200 },
-          validation: { benign_mixed: 100, attack_rapid: 30, attack_low_frequency: 30, attack_distributed: 20 },
-          test: { benign_mixed: 200, attack_rapid: 50, attack_low_frequency: 50, attack_distributed: 30 },
+          train: { benign_mixed: 100 },
+          validation: { benign_mixed: 20, attack_rapid: 20, attack_low_frequency: 15, attack_distributed: 0 },
+          test: { benign_mixed: 15, attack_rapid: 15, attack_low_frequency: 10, attack_distributed: 0 },
         };
     const plan = configureLabAutomation({
       experimentId: experiment.id,
