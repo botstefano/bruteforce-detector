@@ -374,6 +374,36 @@ export function claimNextLabJob(agentId: string): Record<string, unknown> | null
   };
 }
 
+export function getLabJobCaptureContext(agentId: string, jobId: string, attemptIndex: number): {
+  campaignId: string;
+  runId: string;
+  scenarioId: LabScenarioId;
+  targetAccount: string;
+  expectedSuccess: boolean;
+  egressIpHash: string;
+} {
+  const job = jobs.get(jobId);
+  const agent = agents.get(agentId);
+  if (!job || !agent || job.agentId !== agentId || agent.currentJobId !== jobId) {
+    throw new Error('La tarea no está asignada al agente autenticado.');
+  }
+  if (!['assigned', 'running'].includes(job.status)) {
+    throw new Error('La tarea no está activa para capturar eventos.');
+  }
+  if (!Number.isInteger(attemptIndex) || attemptIndex !== job.attemptsCompleted ||
+      attemptIndex < 0 || attemptIndex >= job.outcomes.length) {
+    throw new Error('El índice de intento no coincide con el progreso confirmado de la tarea.');
+  }
+  return {
+    campaignId: job.campaignId,
+    runId: job.runId,
+    scenarioId: job.scenarioId,
+    targetAccount: job.targetAccount,
+    expectedSuccess: job.outcomes[attemptIndex],
+    egressIpHash: agent.egressIpHash,
+  };
+}
+
 export function reportLabJobProgress(agentId: string, jobId: string, attemptsCompleted: number): void {
   const job = jobs.get(jobId);
   if (!job || job.agentId !== agentId) throw new Error('La tarea no pertenece a este agente.');
