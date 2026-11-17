@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 export type GroundTruthLabel = 'unknown' | 'benign' | 'attack';
@@ -26,6 +26,7 @@ export interface CapturedAuthEvent {
   latency_ml_ms: number;
   latency_total_ms: number;
   campaign_id?: string | null;
+  request_id?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -142,6 +143,41 @@ export async function checkSupabaseConnection(): Promise<boolean> {
   }
 }
 
+export function labAttemptRequestId(jobId: string, attemptIndex: number): string {
+  if (!/^[a-f0-9-]{36}$/i.test(jobId) || !Number.isInteger(attemptIndex) || attemptIndex < 0 || attemptIndex > 11) {
+    throw new Error('No se puede construir la clave idempotente de un intento de laboratorio inválido.');
+  }
+  const bytes = createHash('sha256').update(`centinela-lab-attempt:${jobId}:${attemptIndex}`).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export async function findObservedLabAttempt(requestId: string): Promise<{
+  event_id: string;
+  auth_success: boolean;
+  experiment_id: string | null;
+  campaign_id: string | null;
+  metadata: Record<string, unknown>;
+} | null> {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  const { data, error } = await client
+    .from('centinela_auth_events')
+    .select('event_id, auth_success, experiment_id, campaign_id, metadata')
+    .eq('request_id', requestId)
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo comprobar la idempotencia del intento del agente: ${error.message}`);
+  if (!data) return null;
+  return data as {
+    event_id: string;
+    auth_success: boolean;
+    experiment_id: string | null;
+    campaign_id: string | null;
+    metadata: Record<string, unknown>;
+  };
+}
+
 function hashIdentifier(value: string): string {
   if (!hashSecret) {
     throw new Error('CENTINELA_HASH_SECRET no está configurado.');
@@ -179,7 +215,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     scenario: event.origen,
     campaign_id: event.campaign_id ?? null,
     dataset_split: splitForTimestamp(event.timestamp),
-    request_id: null,
+    request_id: event.request_id ?? null,
     alerta_reglas: event.alerta_reglas,
     razon_reglas: event.razon_reglas,
     alerta_ml: event.alerta_ml,
