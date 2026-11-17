@@ -155,6 +155,12 @@ La vista en vivo distinguirá claramente **verdad de referencia** (manifiesto) y
 8. Ejecutar piloto, verificar integridad, preregistrar y después iniciar train/validation/test.
 9. Preparar manuscrito únicamente con métricas calculadas desde los artefactos congelados.
 
-## 10. Protección de v2
+## 10. Aislamiento de experimentos v2 y v3
+
+El arranque de v3 solo restaura experimentos cuyo nombre de protocolo contiene `v3`. La creación de un experimento v3 solo comprueba conflictos con otros experimentos v3 activos. Un experimento v2 que siga marcado como `running` no se adopta ni recibe eventos de v3. Cada evento nuevo se vincula al identificador del experimento v3 seleccionado y permanece separado en Supabase.
+
+Antes de la primera captura v3 se debe crear un **experimento nuevo**, con nombre de protocolo que incluya `v3` y con los tres cortes temporales (train, validation y test). No reutilizar el experimento que se creó para el piloto v2. La captura y evaluación v3 deben exportarse filtrando por el nuevo `experiment_id`.
+
+## 11. Protección de v2
 
 Esta rama se creó desde `fix/supabase-event-audit`. No se hará merge a `master`, no se cambiarán etiquetas ni datos v2 y no se utilizará el CSV histórico como parte de v3. El servicio Render actual no debe cambiar de rama hasta que esta rama pase los criterios de aceptación y el usuario reciba un resumen de los riesgos del despliegue.
