@@ -472,7 +472,7 @@ async function procesarIntentoCapturado(
     latency_rules_ms: evento.latency_rules_ms,
     latency_ml_ms: evento.latency_ml_ms,
     latency_total_ms: evento.latency_total_ms,
-    campaign_id: evento.campaign_id ?? null,
+    campaign_id: (evento as typeof evento & { campaign_id?: string | null }).campaign_id ?? null,
     metadata: {
       agent_id: metadata.agent_id ?? null,
       run_id: metadata.run_id ?? null,
