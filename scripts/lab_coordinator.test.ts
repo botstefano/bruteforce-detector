@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -9,7 +10,7 @@ import {
   reportLabJobProgress,
 } from '../src/lab_coordinator.js';
 
-const unique = () => `test-${crypto.randomUUID()}`;
+const unique = () => `test-${randomUUID()}`;
 
 function registerAgents(prefix: string, count: number) {
   const ids: string[] = [];
@@ -50,7 +51,7 @@ test('el manifiesto no se filtra al agente y el etiquetado exige eventos complet
     assert.equal('expected_label' in task, false);
     assert.equal('actor_type' in task, false);
     const jobId = String(task.job_id);
-    const eventIds = [crypto.randomUUID(), crypto.randomUUID()];
+    const eventIds = [randomUUID(), randomUUID()];
     taskEvents.set(jobId, eventIds);
     reportLabJobProgress(agentId, jobId, 2);
     completeLabJob({
@@ -79,7 +80,7 @@ test('una campaña que no completó todas las solicitudes no puede etiquetarse',
   const task = claimNextLabJob(agentId);
   assert.ok(task);
   const jobId = String(task.job_id);
-  const eventIds = [crypto.randomUUID()];
+  const eventIds = [randomUUID()];
   reportLabJobProgress(agentId, jobId, 1);
   completeLabJob({
     agentId,
