@@ -151,94 +151,107 @@ async function executeJob(job: LabJob): Promise<void> {
   const httpStatuses: number[] = [];
   let attemptsCompleted = 0;
   let finalStatus: 'completed' | 'failed' | 'cancelled' = 'completed';
+  let failureReason: string | null = null;
 
-  if (!REQUIRED_USERS.includes(job.target_account)) throw new Error('La tarea contiene una cuenta objetivo fuera del testbed.');
-  if (!Array.isArray(job.outcomes) || job.outcomes.length === 0 || job.outcomes.length > 12 || job.max_attempts !== job.outcomes.length) {
-    throw new Error('La tarea supera los límites de intentos permitidos.');
-  }
-  if (job.interval_ms < 1_000 || job.interval_ms > 120_000) throw new Error('El intervalo de la tarea está fuera del rango permitido.');
-
-  await log(`Tarea ${job.job_id.slice(0, 8)} iniciada: ${job.scenario_id}, ${job.outcomes.length} intentos.`);
-  let command = await waitUntilAndCheck(job);
-  if (command === 'cancel') finalStatus = 'cancelled';
-
-  for (let index = 0; index < job.outcomes.length && finalStatus === 'completed'; index += 1) {
-    while (command === 'pause') {
-      command = await pauseUntilResumed(job);
+  try {
+    if (!REQUIRED_USERS.includes(job.target_account)) throw new Error('La tarea contiene una cuenta objetivo fuera del testbed.');
+    if (!Array.isArray(job.outcomes) || job.outcomes.length === 0 || job.outcomes.length > 12 || job.max_attempts !== job.outcomes.length) {
+      throw new Error('La tarea supera los límites de intentos permitidos.');
     }
-    if (command === 'cancel') {
+    if (job.interval_ms < 1_000 || job.interval_ms > 120_000) throw new Error('El intervalo de la tarea está fuera del rango permitido.');
+
+    await log(`Tarea ${job.job_id.slice(0, 8)} iniciada: ${job.scenario_id}, ${job.outcomes.length} intentos.`);
+    let command = await waitUntilAndCheck(job);
+    if (command === 'cancel') finalStatus = 'cancelled';
+
+    for (let index = 0; index < job.outcomes.length && finalStatus === 'completed'; index += 1) {
+      while (command === 'pause') {
+        command = await pauseUntilResumed(job);
+      }
+      if (command === 'cancel') {
+        finalStatus = 'cancelled';
+        break;
+      }
+
+      const expectedAuthSuccess = Boolean(job.outcomes[index]);
+      const password = expectedAuthSuccess ? credentials[job.target_account] : invalidPassword;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 25_000);
+      try {
+        const response = await fetch(portalUrl + '/agent/login', {
+          method: 'POST',
+          redirect: 'error',
+          headers: {
+            Authorization: `Bearer ${agentToken}`,
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            'X-Centinela-Campaign-Id': job.campaign_id,
+            'X-Centinela-Run-Id': job.run_id,
+            'X-Centinela-Agent-Id': agentId,
+            'X-Centinela-Scenario-Id': job.scenario_id,
+          },
+          body: JSON.stringify({ username: job.target_account, password }),
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => ({}));
+        httpStatuses.push(response.status);
+        if ((response.status !== 200 && response.status !== 401) || payload.event_recorded !== true || typeof payload.event_id !== 'string') {
+          throw new Error(`El portal no confirmó el evento (HTTP ${response.status}); se detiene la tarea para no producir datos incompletos.`);
+        }
+        eventIds.push(payload.event_id);
+        attemptsCompleted = index + 1;
+        await coordinator('/api/lab/agent/progress', 'POST', {
+          agent_id: agentId,
+          job_id: job.job_id,
+          attempts_completed: attemptsCompleted,
+        });
+        await log(`Evento ${attemptsCompleted}/${job.outcomes.length} confirmado: ${payload.event_id.slice(0, 8)} · HTTP ${response.status}.`);
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      if (index < job.outcomes.length - 1) {
+        const endAt = Date.now() + job.interval_ms;
+        while (Date.now() < endAt) {
+          command = await checkCommand(job.job_id);
+          if (command !== 'continue') break;
+          await sleep(Math.min(3_000, Math.max(250, endAt - Date.now())));
+        }
+      }
+    }
+
+    if (attemptsCompleted !== job.outcomes.length && finalStatus === 'completed') {
       finalStatus = 'cancelled';
-      break;
     }
-
-    const expectedAuthSuccess = Boolean(job.outcomes[index]);
-    const password = expectedAuthSuccess ? credentials[job.target_account] : invalidPassword;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25_000);
-    try {
-      const response = await fetch(portalUrl + '/agent/login', {
-        method: 'POST',
-        redirect: 'error',
-        headers: {
-          Authorization: `Bearer ${agentToken}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'X-Centinela-Campaign-Id': job.campaign_id,
-          'X-Centinela-Run-Id': job.run_id,
-          'X-Centinela-Agent-Id': agentId,
-          'X-Centinela-Scenario-Id': job.scenario_id,
-        },
-        body: JSON.stringify({ username: job.target_account, password }),
-        signal: controller.signal,
-      });
-      const payload = await response.json().catch(() => ({}));
-      httpStatuses.push(response.status);
-      if ((response.status !== 200 && response.status !== 401) || payload.event_recorded !== true || typeof payload.event_id !== 'string') {
-        throw new Error(`El portal no confirmó el evento (HTTP ${response.status}); se detiene la tarea para no producir datos incompletos.`);
-      }
-      eventIds.push(payload.event_id);
-      attemptsCompleted = index + 1;
-      await coordinator('/api/lab/agent/progress', 'POST', {
-        agent_id: agentId,
-        job_id: job.job_id,
-        attempts_completed: attemptsCompleted,
-      });
-      await log(`Evento ${attemptsCompleted}/${job.outcomes.length} confirmado: ${payload.event_id.slice(0, 8)} · HTTP ${response.status}.`);
-    } finally {
-      clearTimeout(timeout);
-    }
-
-    if (index < job.outcomes.length - 1) {
-      const endAt = Date.now() + job.interval_ms;
-      while (Date.now() < endAt) {
-        command = await checkCommand(job.job_id);
-        if (command !== 'continue') break;
-        await sleep(Math.min(3_000, Math.max(250, endAt - Date.now())));
-      }
-    }
+  } catch (error) {
+    finalStatus = 'failed';
+    failureReason = error instanceof Error ? error.message : String(error);
+    await log(`Tarea fallida: ${failureReason.slice(0, 180)}`);
   }
 
-  if (attemptsCompleted !== job.outcomes.length && finalStatus === 'completed') {
-    finalStatus = 'cancelled';
-  }
-
+  // Siempre informar un estado terminal. El coordinador rechazará etiquetar una tarea
+  // fallida, cancelada o con IDs de eventos incompletos.
   await coordinator('/api/lab/agent/complete', 'POST', {
     agent_id: agentId,
     job_id: job.job_id,
     status: finalStatus,
     attempts_completed: attemptsCompleted,
-    summary: { event_ids: eventIds, http_statuses: httpStatuses },
+    summary: { event_ids: eventIds, http_statuses: httpStatuses, failure_reason: failureReason },
   });
   await log(`Tarea ${job.job_id.slice(0, 8)} finalizada: ${finalStatus}, ${attemptsCompleted}/${job.outcomes.length} eventos confirmados.`);
 }
 
-async function main() {
+async function registerAgent() {
   const registration = await coordinator('/api/lab/agent/register', 'POST', {
     agent_id: agentId,
     version,
   });
   console.log(`Agente ${agentId} registrado. IP HMAC observado por el coordinador: ${registration.egress_ip_hash_prefix}.`);
   await log('Runner conectado y listo.');
+}
+
+async function main() {
+  await registerAgent();
 
   for (;;) {
     try {
@@ -252,6 +265,14 @@ async function main() {
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       await log(`Error de ejecución: ${detail.slice(0, 180)}`);
+      // El coordinador guarda su cola en memoria. Si Render reinicia el servicio,
+      // volver a registrar el runner permite que se recupere como agente disponible.
+      try {
+        await registerAgent();
+      } catch (registrationError) {
+        const registrationDetail = registrationError instanceof Error ? registrationError.message : String(registrationError);
+        await log(`No se pudo recuperar el registro: ${registrationDetail.slice(0, 160)}`);
+      }
       await sleep(8_000);
     }
   }
