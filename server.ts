@@ -20,6 +20,7 @@ import {
   abortExperimentRecord,
   appendLabCampaignManifest,
   getExperimentMetadata,
+  persistLabCollectionPlan,
   calculateObservedMetrics,
   checkSupabaseConnection,
   createExperimentRecord,
@@ -46,8 +47,19 @@ import {
 import {
   LAB_SCENARIO_CATALOG,
   activateLabCampaign,
+  configureLabAutomation,
+  getLabAutomationPlan,
+  getNextLabAutomationBatch,
+  resumeLabAutomation,
+  isLabAutomationPhaseComplete,
+  completeLabAutomation,
+  markLabCampaignLabeled,
+  stopLabAutomation,
+  discardUnpersistedLabAutomationPlan,
+  updateLabAutomationStatus,
   claimNextLabJob,
   completeLabJob,
+  expireStaleLabJobs,
   createLabCampaign,
   getLabCampaignForLabeling,
   getLabJobControl,
@@ -168,6 +180,13 @@ async function entrenarModeloDesdeCapturasBenignas(restaurarModeloCongelado = fa
   if (restaurarModeloCongelado) {
     if (!experiment.trainingFrozen) throw new Error('No existe un modelo congelado para restaurar.');
   } else {
+    const protocol = await getExperimentMetadata(experiment.id);
+    const protocolMetadata = (protocol.metadata ?? {}) as Record<string, unknown>;
+    if (Number(protocolMetadata.protocol_revision) >= 4 || /v4/i.test(String(protocol.protocol_name || ''))) {
+      if (!protocolMetadata.collection_plan || !isLabAutomationPhaseComplete(experiment.id, 'train')) {
+        throw new Error('V4 no permite congelar el baseline manualmente: deben completarse y etiquetarse las cuotas benignas preregistradas.');
+      }
+    }
     if (experiment.trainingFrozen) {
       throw new Error('El modelo ya está congelado para este experimento. Crea un experimento nuevo para reentrenar.');
     }
@@ -626,13 +645,498 @@ app.get('/api/experimentos/estado', requiereAdmin, (_req: Request, res: Response
 // LABORATORIO V3: coordinador y agentes HTTP controlados
 // =================================================================
 
-app.get('/api/lab/state', requiereAdmin, (_req: Request, res: Response) => {
+app.get('/api/lab/state', requiereAdmin, async (_req: Request, res: Response) => {
+  const experimentId = getActiveExperimentId();
+  let protocolRevision: number | null = null;
+  if (experimentId) {
+    try {
+      const record = await getExperimentMetadata(experimentId);
+      const metadata = (record.metadata ?? {}) as Record<string, unknown>;
+      protocolRevision = Number(metadata.protocol_revision) ||
+        (/v4/i.test(String(record.protocol_name || '')) ? 4 : /v3/i.test(String(record.protocol_name || '')) ? 3 : null);
+    } catch {
+      protocolRevision = null;
+    }
+  }
   return res.json({
-    ...getLabSnapshot(getActiveExperimentId()),
+    ...getLabSnapshot(experimentId),
     experiment: getActiveExperimentState(),
-    experiment_id: getActiveExperimentId(),
+    experiment_id: experimentId,
+    protocol_revision: protocolRevision,
     agent_token_configured: CENTINELA_LAB_AGENT_TOKEN.length >= 32,
   });
+});
+
+
+
+let labAutomationTickRunning = false;
+let labAutomationConfiguring = false;
+
+
+async function labelLabCampaignFromManifest(campaignId: string): Promise<{ labeled: number; alreadyLabeled: number }> {
+  const { campaign, jobs } = getLabCampaignForLabeling(campaignId);
+  const experiment = await getExperimentMetadata(campaign.experimentId);
+  const metadata = (experiment.metadata ?? {}) as Record<string, unknown>;
+  const manifests = Array.isArray(metadata.lab_campaign_manifests)
+    ? metadata.lab_campaign_manifests as Record<string, unknown>[]
+    : [];
+  const savedManifest = manifests.find((item) => item.campaign_id === campaignId);
+  if (!savedManifest || !Array.isArray(savedManifest.scenarios)) {
+    throw new Error('No se encontró el manifiesto independiente persistido para esta campaña.');
+  }
+
+  const requireV4Fields = Number(savedManifest.generation_profile_version) >= 2;
+  const labelByRun = new Map<string, {
+    label: 'benign' | 'attack';
+    scenarioId: string;
+    actorType: string;
+    targetAccount: string;
+    plannedAgentIds: string[];
+    plannedAgentOrigins: Array<{ agentId: string; egressIpHash: string }>;
+    plannedOutcomes: boolean[] | null;
+  }>();
+  for (const run of savedManifest.scenarios as Record<string, unknown>[]) {
+    if (typeof run.run_id !== 'string' ||
+        (run.expected_label !== 'benign' && run.expected_label !== 'attack') ||
+        typeof run.scenario_id !== 'string') continue;
+    const plannedAgentIds = Array.isArray(run.planned_agent_ids)
+      ? run.planned_agent_ids.filter((value): value is string => typeof value === 'string')
+      : [];
+    const plannedAgentOrigins = Array.isArray(run.planned_agent_origins)
+      ? run.planned_agent_origins.filter((value): value is Record<string, unknown> =>
+          Boolean(value && typeof value === 'object' && typeof value.agent_id === 'string' && typeof value.egress_ip_hash === 'string')
+        ).map((value) => ({ agentId: String(value.agent_id), egressIpHash: String(value.egress_ip_hash) }))
+      : [];
+    const plannedOutcomes = Array.isArray(run.planned_outcomes) &&
+      run.planned_outcomes.every((value) => typeof value === 'boolean')
+      ? run.planned_outcomes as boolean[]
+      : null;
+    if (requireV4Fields && (!plannedOutcomes || !plannedAgentIds.length ||
+        plannedAgentOrigins.length !== plannedAgentIds.length || typeof run.target_account !== 'string')) {
+      throw new Error(`El manifiesto V4 de la ejecución ${run.run_id} no contiene la secuencia, cuenta u orígenes planificados.`);
+    }
+    labelByRun.set(run.run_id, {
+      label: run.expected_label,
+      scenarioId: run.scenario_id,
+      actorType: String(run.actor_type || ''),
+      targetAccount: String(run.target_account || ''),
+      plannedAgentIds,
+      plannedAgentOrigins,
+      plannedOutcomes,
+    });
+  }
+
+  const observed = await fetchObservedEvents(campaign.experimentId);
+  const byId = new Map(observed.map((event) => [event.event_id, event]));
+  const toLabel: Array<{ eventId: string; label: 'benign' | 'attack'; runId: string; scenarioId: string }> = [];
+  let alreadyLabeled = 0;
+
+  // Validate the complete campaign before writing any ground-truth label.
+  for (const job of jobs) {
+    const expected = labelByRun.get(job.runId);
+    if (!expected || expected.label !== job.expectedLabel || expected.scenarioId !== job.scenarioId) {
+      throw new Error(`El manifiesto no coincide con la tarea ${job.jobId}; se detuvo el etiquetado.`);
+    }
+    if (job.agentId && expected.plannedAgentIds.length && !expected.plannedAgentIds.includes(job.agentId)) {
+      throw new Error(`El agente ${job.agentId} no figura como origen planificado para la ejecución ${job.runId}.`);
+    }
+    if (requireV4Fields) {
+      const plannedOrigin = expected.plannedAgentOrigins.find((origin) => origin.agentId === job.agentId);
+      if (!plannedOrigin || plannedOrigin.egressIpHash !== job.egressIpHash ||
+          new Set(expected.plannedAgentOrigins.map((origin) => origin.egressIpHash)).size !== expected.plannedAgentOrigins.length) {
+        throw new Error(`El origen de red de la ejecución ${job.runId} no coincide con el manifiesto independiente o no es único.`);
+      }
+    }
+    if (expected.targetAccount && expected.targetAccount !== job.targetAccount) {
+      throw new Error(`La cuenta objetivo de la tarea ${job.jobId} no coincide con el manifiesto.`);
+    }
+    if (requireV4Fields && (!expected.plannedOutcomes || expected.plannedOutcomes.length !== job.attemptsPlanned)) {
+      throw new Error(`La secuencia prevista de intentos no coincide con la tarea ${job.jobId}.`);
+    }
+
+    for (const eventId of job.eventIds) {
+      const event = byId.get(eventId);
+      if (!event || event.experiment_id !== campaign.experimentId || event.campaign_id !== campaignId) {
+        throw new Error(`El evento ${eventId} no pertenece a la campaña y experimento esperados.`);
+      }
+      const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
+      if (requireV4Fields) {
+        if (event.is_simulated || event.dataset_split !== campaign.phase) {
+          throw new Error(`El evento ${eventId} es simulado o quedó fuera de la fase temporal de su campaña.`);
+        }
+        if (eventMetadata.run_id !== job.runId ||
+            eventMetadata.scenario_id !== job.scenarioId ||
+            eventMetadata.agent_id !== job.agentId ||
+            eventMetadata.job_id !== job.jobId ||
+            eventMetadata.actor_type !== expected.actorType ||
+            eventMetadata.generation_method !== 'automated_http_agent') {
+          throw new Error(`La procedencia de agente, tarea o escenario del evento ${eventId} no coincide con su manifiesto.`);
+        }
+        if (event.source_ip_hash !== job.egressIpHash) {
+          throw new Error(`La IP de salida observada del evento ${eventId} no coincide con el origen registrado del agente.`);
+        }
+        const expectedUserHash = getAnalyticsIdentifiers('', job.targetAccount).userKey;
+        if (event.user_key_hash !== expectedUserHash) {
+          throw new Error(`La cuenta observada del evento ${eventId} no coincide con la cuenta planificada.`);
+        }
+        const attemptIndex = Number(eventMetadata.attempt_index);
+        if (!Number.isInteger(attemptIndex) || attemptIndex < 0 || attemptIndex >= job.attemptsPlanned ||
+            event.request_id !== labAttemptRequestId(job.jobId, attemptIndex)) {
+          throw new Error(`El índice o la clave idempotente del evento ${eventId} no coincide con la tarea.`);
+        }
+        if (expected.plannedOutcomes && event.auth_success !== expected.plannedOutcomes[attemptIndex]) {
+          throw new Error(`El resultado de autenticación del evento ${eventId} no coincide con la secuencia preregistrada.`);
+        }
+      } else if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId) {
+        throw new Error(`La procedencia del evento ${eventId} no coincide con su manifiesto.`);
+      }
+      if (event.ground_truth_label === expected.label) {
+        alreadyLabeled++;
+        continue;
+      }
+      if (event.ground_truth_label !== 'unknown') {
+        throw new Error(`El evento ${eventId} ya tiene una etiqueta distinta; requiere revisión manual.`);
+      }
+      toLabel.push({ eventId, label: expected.label, runId: job.runId, scenarioId: expected.scenarioId });
+    }
+  }
+
+  let labeled = 0;
+  for (const item of toLabel) {
+    await labelObservedEvent({
+      eventId: item.eventId,
+      label: item.label,
+      method: 'authorized_automated_campaign_manifest_v1',
+      rationale: `Evento de la campaña autorizada ${campaignId}, ejecución ${item.runId}, escenario ${item.scenarioId}; etiqueta derivada del manifiesto independiente preregistrado, no de las alertas de Centinela.`,
+      labeledBy: 'centinela-v4-lab-coordinator',
+    });
+    labeled++;
+  }
+  return { labeled, alreadyLabeled };
+}
+
+async function persistLabAutomationState(experimentId: string): Promise<void> {
+  await saveLabCoordinatorState(experimentId, () => serializeLabCoordinatorState(experimentId));
+  io.emit('lab_campaign_update', getLabSnapshot(experimentId));
+}
+
+async function tickLabAutomation(): Promise<void> {
+  if (labAutomationTickRunning || labAutomationConfiguring) return;
+  const plan = getLabAutomationPlan();
+  if (!plan?.enabled || plan.status !== 'running') return;
+  labAutomationTickRunning = true;
+
+  try {
+    const experiment = getActiveExperimentState();
+    if (!experiment || experiment.id !== plan.experimentId) {
+      updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La recolección automática se pausó porque el experimento configurado ya no está activo.' });
+      return;
+    }
+    if (eventCapturePaused) {
+      updateLabAutomationStatus({ lastError: eventCapturePauseReason || 'Captura pausada por el estado del almacén.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    const metadataRecord = await getExperimentMetadata(experiment.id);
+    let metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    const protocolName = String(metadataRecord.protocol_name || '');
+    if (!(Number(metadata.protocol_revision) >= 4) && !/v4/i.test(protocolName)) {
+      updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La planificación automática solo puede activarse en un protocolo V4 nuevo. El experimento V3 existente no se modifica.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    const expiredJobs = expireStaleLabJobs();
+    if (expiredJobs > 0) {
+      console.warn(`El planificador marcó ${expiredJobs} tareas fallidas por pérdida de heartbeat del runner.`);
+      await persistLabAutomationState(experiment.id);
+    }
+
+    let snapshot = getLabSnapshot(experiment.id) as {
+      agents: Array<{ agent_id: string; egress_ip_hash_prefix: string; status: string }>;
+      campaigns: Array<{ campaign_id: string; status: string; scheduled_by_automation?: boolean; labels_applied_at?: string | null }>;
+    };
+
+    // Automatic labeling is part of collection, not a manual operator step.
+    // Only completed campaigns created by this plan are eligible.
+    for (const campaign of snapshot.campaigns) {
+      if (campaign.scheduled_by_automation && campaign.status === 'completed' && !campaign.labels_applied_at) {
+        await labelLabCampaignFromManifest(campaign.campaign_id);
+        markLabCampaignLabeled(campaign.campaign_id);
+        await persistLabAutomationState(experiment.id);
+      }
+    }
+
+    const now = Date.now();
+    let phase: 'train' | 'validation' | 'test' =
+      now < experiment.trainEndMs ? 'train' :
+      now < experiment.validationEndMs ? 'validation' : 'test';
+
+    // Freeze the benign-only baseline automatically at the training cutoff,
+    // but only if the preregistered training session target was completed and labeled.
+    if (now >= experiment.trainEndMs && metadata.training_frozen !== true) {
+      if (!isLabAutomationPhaseComplete(experiment.id, 'train')) {
+        updateLabAutomationStatus({
+          enabled: false,
+          status: 'paused',
+          lastError: 'No se congeló el entrenamiento: no se alcanzó la cuota de sesiones benignas antes del corte preregistrado. No se moverán las fechas.',
+        });
+        await persistLabAutomationState(experiment.id);
+        return;
+      }
+      if (now >= experiment.validationEndMs) {
+        updateLabAutomationStatus({
+          enabled: false,
+          status: 'paused',
+          lastError: 'No se pudo entrenar dentro del intervalo preregistrado entre train_end_at y validation_end_at.',
+        });
+        await persistLabAutomationState(experiment.id);
+        return;
+      }
+      await entrenarModeloDesdeCapturasBenignas();
+      const updated = await getExperimentMetadata(experiment.id);
+      metadata = (updated.metadata ?? {}) as Record<string, unknown>;
+      console.log('Baseline V4 entrenado y congelado automáticamente con eventos benignos etiquetados.');
+    }
+
+    // Validation is closed automatically only after its quotas are complete.
+    if (now >= experiment.validationEndMs && metadata.validation_frozen !== true) {
+      if (metadata.training_frozen !== true || !isLabAutomationPhaseComplete(experiment.id, 'validation')) {
+        updateLabAutomationStatus({
+          enabled: false,
+          status: 'paused',
+          lastError: 'No se congeló la validación: falta congelar el baseline o completar y etiquetar todas las cuotas de validación antes del corte.',
+        });
+        await persistLabAutomationState(experiment.id);
+        return;
+      }
+      await freezeActiveExperimentValidation(experiment.id);
+      const updated = await getExperimentMetadata(experiment.id);
+      metadata = (updated.metadata ?? {}) as Record<string, unknown>;
+      console.log('Configuración V4 de validación congelada automáticamente.');
+    }
+
+    // Test cutoff is final: never schedule work beyond it, and mark the plan
+    // complete only if every independent test target was met and labeled.
+    if (experiment.testEndMs && now >= experiment.testEndMs) {
+      if (metadata.training_frozen === true && metadata.validation_frozen === true &&
+          isLabAutomationPhaseComplete(experiment.id, 'test')) {
+        completeLabAutomation();
+      } else {
+        updateLabAutomationStatus({
+          enabled: false,
+          status: 'paused',
+          lastError: 'Se alcanzó test_end_at sin completar todas las cuotas del test independiente; los límites temporales se conservaron.',
+        });
+      }
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    if (phase !== 'train' && metadata.training_frozen !== true) {
+      updateLabAutomationStatus({ lastError: 'En espera: el baseline benigno debe entrenarse y congelarse antes de iniciar validación.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+    if (phase === 'test' && metadata.validation_frozen !== true) {
+      updateLabAutomationStatus({ lastError: 'En espera: la validación debe congelarse antes de iniciar el test independiente.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    snapshot = getLabSnapshot(experiment.id) as typeof snapshot;
+    if (snapshot.campaigns.some((campaign) => ['queued', 'running', 'paused'].includes(campaign.status))) return;
+
+    const readyAgents = snapshot.agents.filter((agent) => agent.status === 'ready');
+    if (!readyAgents.length) {
+      updateLabAutomationStatus({ lastError: 'En espera: no hay agentes locales conectados y disponibles.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    const batch = getNextLabAutomationBatch(experiment.id, phase);
+    if (!batch) {
+      // Reaching the target early is valid; wait for the phase cutoff so that
+      // the temporal protocol, not operator clicks, decides the transition.
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+    if (batch.scenarioId === 'attack_distributed') {
+      const distinctOrigins = new Set(readyAgents.map((agent) => agent.egress_ip_hash_prefix));
+      if (readyAgents.length < 4 || distinctOrigins.size < 4) {
+        updateLabAutomationStatus({ lastError: 'En espera: la fase requiere cuatro agentes activos desde cuatro IP de salida verificadas para la campaña distribuida.' });
+        await persistLabAutomationState(experiment.id);
+        return;
+      }
+    }
+
+    const phaseEndAtMs = phase === 'train'
+      ? experiment.trainEndMs
+      : phase === 'validation'
+        ? experiment.validationEndMs
+        : experiment.testEndMs;
+
+    const { campaign, manifest } = createLabCampaign({
+      experimentId: experiment.id,
+      targetAccount: batch.targetAccount,
+      targetAccounts: batch.targetAccounts,
+      scenarioIds: [batch.scenarioId],
+      repetitions: batch.repetitions,
+      phase,
+      phaseEndAtMs,
+      scheduledByAutomation: true,
+    });
+    const plannedJobs = (getLabSnapshot(experiment.id).campaigns as Array<Record<string, unknown>>)
+      .find((item) => item.campaign_id === campaign.campaignId)?.jobs as Array<Record<string, unknown>>;
+    const finishByAgent = new Map<string, number>();
+    for (const job of [...plannedJobs].sort((a, b) => Date.parse(String(a.start_at)) - Date.parse(String(b.start_at)))) {
+      const agentId = String(job.agent_id || '');
+      const plannedStart = Date.parse(String(job.start_at));
+      const attempts = Number(job.attempts_planned || 0);
+      const plannedDelays = Array.isArray(job.planned_inter_attempt_delays_ms)
+        ? (job.planned_inter_attempt_delays_ms as unknown[]).filter((value): value is number => typeof value === 'number')
+        : [];
+      const effectiveStart = Math.max(plannedStart, finishByAgent.get(agentId) || plannedStart);
+      const sessionGapAfterMs = Number(job.planned_session_gap_after_ms || 0);
+      finishByAgent.set(agentId, effectiveStart + (attempts * 366_000) +
+        plannedDelays.reduce((sum, delay) => sum + delay, 0) + sessionGapAfterMs);
+    }
+    const latestFinish = Math.max(...finishByAgent.values());
+    if (!Number.isFinite(latestFinish) || !phaseEndAtMs || latestFinish >= phaseEndAtMs) {
+      updateLabCampaign(campaign.campaignId, 'stop');
+      updateLabAutomationStatus({ lastError: 'Lote no programado: su duración máxima estimada cruza el corte preregistrado de la fase.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+
+    try {
+      await appendLabCampaignManifest(experiment.id, manifest);
+      await saveLabCoordinatorState(experiment.id, () => serializeLabCoordinatorState(experiment.id));
+      activateLabCampaign(campaign.campaignId);
+      await saveLabCoordinatorState(experiment.id, () => serializeLabCoordinatorState(experiment.id));
+      updateLabAutomationStatus({ lastError: null });
+      await persistLabAutomationState(experiment.id);
+      console.log(`Recolección automática: campaña ${campaign.campaignId}, fase ${phase}, escenario ${batch.scenarioId}, ${batch.repetitions} sesiones.`);
+    } catch (error) {
+      updateLabCampaign(campaign.campaignId, 'stop');
+      throw error;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Error desconocido del planificador experimental.';
+    console.error('Planificador de recolección Centinela:', message);
+    const current = getLabAutomationPlan();
+    if (current) {
+      updateLabAutomationStatus({ lastError: message.slice(0, 240) });
+      try { await persistLabAutomationState(current.experimentId); } catch { /* se reintentará en el próximo ciclo */ }
+    }
+  } finally {
+    labAutomationTickRunning = false;
+  }
+}
+
+
+app.post('/api/lab/automation/start', requiereAdmin, async (req: Request, res: Response) => {
+  if (labAutomationConfiguring) return res.status(409).json({ error: 'Ya se está preregistrando un plan de recolección.' });
+  labAutomationConfiguring = true;
+  try {
+    const experiment = getActiveExperimentState();
+    if (!experiment) return res.status(409).json({ error: 'No hay un experimento activo.' });
+    const metadataRecord = await getExperimentMetadata(experiment.id);
+    const metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    if (!(Number(metadata.protocol_revision) >= 4) && !/v4/i.test(String(metadataRecord.protocol_name || ''))) {
+      return res.status(409).json({ error: 'La recolección automática requiere crear un protocolo V4 nuevo. El experimento V3 existente permanece intacto.' });
+    }
+    if (metadata.collection_plan) {
+      return res.status(409).json({ error: 'Las cuotas V4 ya están preregistradas. Usa reanudar; no se permite volver a configurar el plan.' });
+    }
+    if (CENTINELA_LAB_AGENT_TOKEN.length < 32 || !eventStoreStatus().configured) {
+      return res.status(503).json({ error: 'El token de agentes y el almacenamiento persistente deben estar configurados.' });
+    }
+    const targets = req.body?.targets && typeof req.body.targets === 'object'
+      ? req.body.targets as Record<string, Record<string, number>>
+      : {
+          train: { benign_mixed: 200 },
+          validation: { benign_mixed: 100, attack_rapid: 30, attack_low_frequency: 30, attack_distributed: 20 },
+          test: { benign_mixed: 200, attack_rapid: 50, attack_low_frequency: 50, attack_distributed: 30 },
+        };
+    const plan = configureLabAutomation({
+      experimentId: experiment.id,
+      batchSize: Number(req.body?.batch_size ?? 5),
+      accounts: Array.isArray(req.body?.accounts) ? req.body.accounts : ['ronan', 'andy', 'stefano'],
+      targets,
+    });
+    try {
+      await persistLabCollectionPlan(
+        experiment.id,
+        plan,
+        serializeLabCoordinatorState(experiment.id),
+      );
+    } catch (persistError) {
+      // If the write did not commit, release the in-memory draft so setup can be
+      // retried. If the response was lost after commit, preserve the immutable plan.
+      try {
+        const latest = await getExperimentMetadata(experiment.id);
+        const latestMetadata = (latest.metadata ?? {}) as Record<string, unknown>;
+        if (!latestMetadata.collection_plan) discardUnpersistedLabAutomationPlan(experiment.id);
+      } catch {
+        // Do not discard when commit state cannot be established.
+        stopLabAutomation();
+      }
+      throw persistError;
+    }
+    io.emit('lab_campaign_update', getLabSnapshot(experiment.id));
+    void tickLabAutomation();
+    return res.status(201).json({ status: 'running', plan });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo iniciar la recolección automática.';
+    return res.status(400).json({ error: message });
+  } finally {
+    labAutomationConfiguring = false;
+  }
+});
+
+app.post('/api/lab/automation/resume', requiereAdmin, async (_req: Request, res: Response) => {
+  if (labAutomationTickRunning || labAutomationConfiguring) {
+    return res.status(409).json({ error: 'El planificador está procesando un lote; vuelve a intentar la reanudación cuando termine el ciclo actual.' });
+  }
+  labAutomationConfiguring = true;
+  try {
+    const experimentId = getActiveExperimentId();
+    if (!experimentId) return res.status(409).json({ error: 'No hay un experimento activo.' });
+    const metadataRecord = await getExperimentMetadata(experimentId);
+    const metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    if (!metadata.collection_plan) return res.status(409).json({ error: 'No existe un plan V4 preregistrado para reanudar.' });
+    const plan = resumeLabAutomation(experimentId);
+    await persistLabAutomationState(experimentId);
+    io.emit('lab_campaign_update', getLabSnapshot(experimentId));
+    return res.json({ status: 'running', plan });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo reanudar la recolección automática.';
+    return res.status(400).json({ error: message });
+  } finally {
+    labAutomationConfiguring = false;
+    void tickLabAutomation();
+  }
+});
+
+app.post('/api/lab/automation/stop', requiereAdmin, async (_req: Request, res: Response) => {
+  if (labAutomationTickRunning || labAutomationConfiguring) {
+    return res.status(409).json({ error: 'El planificador está procesando un lote; pausa la automatización cuando termine el ciclo actual.' });
+  }
+  labAutomationConfiguring = true;
+  try {
+    const plan = stopLabAutomation();
+    const experimentId = getActiveExperimentId();
+    if (experimentId) await persistLabAutomationState(experimentId);
+    io.emit('lab_campaign_update', getLabSnapshot(experimentId));
+    return res.json({ status: 'paused', plan });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo pausar la recolección automática.';
+    return res.status(400).json({ error: message });
+  } finally {
+    labAutomationConfiguring = false;
+  }
 });
 
 app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response) => {
@@ -651,6 +1155,9 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
         : 'test';
     const metadataRecord = await getExperimentMetadata(activeExperiment.id);
     const experimentMetadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    if (Number(experimentMetadata.protocol_revision) >= 4 || /v4/i.test(String(metadataRecord.protocol_name || ''))) {
+      return res.status(409).json({ error: 'En el protocolo V4 las campañas se generan únicamente mediante el planificador científico automático; las campañas manuales están deshabilitadas para evitar alterar las cuotas preregistradas.' });
+    }
     if (phase !== 'train' && experimentMetadata.training_frozen !== true) {
       return res.status(409).json({ error: 'No se permiten campañas de validación o test hasta entrenar y congelar el baseline benigno.' });
     }
@@ -677,6 +1184,7 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
       scenarioIds,
       repetitions,
       phase,
+      phaseEndAtMs,
     });
     if (phaseEndAtMs !== null) {
       const plannedJobs = (getLabSnapshot(activeExperiment.id).campaigns as Array<Record<string, unknown>>)
@@ -685,11 +1193,14 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
       for (const job of [...plannedJobs].sort((a, b) => Date.parse(String(a.start_at)) - Date.parse(String(b.start_at)))) {
         const agentId = String(job.agent_id || '');
         const plannedStart = Date.parse(String(job.start_at));
-        const scenario = LAB_SCENARIO_CATALOG[String(job.scenario_id) as keyof typeof LAB_SCENARIO_CATALOG];
         const effectiveStart = Math.max(plannedStart, finishByAgent.get(agentId) || plannedStart);
-        const estimatedFinish = effectiveStart +
-          (scenario.outcomes.length * 330_000) +
-          ((scenario.outcomes.length - 1) * scenario.intervalMs);
+        const attempts = Number(job.attempts_planned || 0);
+        const plannedDelays = Array.isArray(job.planned_inter_attempt_delays_ms)
+          ? (job.planned_inter_attempt_delays_ms as unknown[]).filter((value): value is number => typeof value === 'number')
+          : [];
+        const sessionGapAfterMs = Number(job.planned_session_gap_after_ms || 0);
+        const estimatedFinish = effectiveStart + (attempts * 366_000) +
+          plannedDelays.reduce((sum, delay) => sum + delay, 0) + sessionGapAfterMs;
         finishByAgent.set(agentId, estimatedFinish);
       }
       const latestFinish = Math.max(...finishByAgent.values());
@@ -719,7 +1230,14 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
 
 app.post('/api/experimentos/:experimentId/congelar_validacion', requiereAdmin, async (req: Request, res: Response) => {
   try {
-    const result = await freezeActiveExperimentValidation(singleRouteParam(req.params.experimentId));
+    const experimentId = singleRouteParam(req.params.experimentId);
+    const protocol = await getExperimentMetadata(experimentId);
+    const protocolMetadata = (protocol.metadata ?? {}) as Record<string, unknown>;
+    if ((Number(protocolMetadata.protocol_revision) >= 4 || /v4/i.test(String(protocol.protocol_name || ''))) &&
+        (!protocolMetadata.collection_plan || !isLabAutomationPhaseComplete(experimentId, 'validation'))) {
+      return res.status(409).json({ error: 'V4 solo congela la validación cuando todas las cuotas preregistradas están completas y etiquetadas mediante sus manifiestos auditados.' });
+    }
+    const result = await freezeActiveExperimentValidation(experimentId);
     return res.json({
       status: 'validation_frozen',
       validation: (result.metadata as Record<string, unknown>)?.validation_frozen === true,
@@ -758,58 +1276,16 @@ app.post('/api/lab/campaigns/:campaignId/:action', requiereAdmin, async (req: Re
 app.post('/api/lab/campaigns/:campaignId/label', requiereAdmin, async (req: Request, res: Response) => {
   try {
     const campaignId = singleRouteParam(req.params.campaignId);
-    const { campaign, jobs } = getLabCampaignForLabeling(campaignId);
-    const experiment = await getExperimentMetadata(campaign.experimentId);
-    const metadata = (experiment.metadata ?? {}) as Record<string, unknown>;
-    const manifests = Array.isArray(metadata.lab_campaign_manifests)
-      ? metadata.lab_campaign_manifests as Record<string, unknown>[]
-      : [];
-    const savedManifest = manifests.find((item) => item.campaign_id === campaignId);
-    if (!savedManifest || !Array.isArray(savedManifest.scenarios)) {
-      throw new Error('No se encontró el manifiesto independiente persistido para esta campaña.');
-    }
-    const labelByRun = new Map<string, { label: 'benign' | 'attack'; scenarioId: string }>();
-    for (const run of savedManifest.scenarios as Record<string, unknown>[]) {
-      if (typeof run.run_id === 'string' && (run.expected_label === 'benign' || run.expected_label === 'attack')) {
-        labelByRun.set(run.run_id, { label: run.expected_label, scenarioId: String(run.scenario_id || 'unknown') });
-      }
-    }
-    const observed = await fetchObservedEvents(campaign.experimentId);
-    const byId = new Map(observed.map((event) => [event.event_id, event]));
-    let labeled = 0;
-    let alreadyLabeled = 0;
-    for (const job of jobs) {
-      const expected = labelByRun.get(job.runId);
-      if (!expected || expected.label !== job.expectedLabel) {
-        throw new Error(`El manifiesto no coincide con la tarea ${job.jobId}; se detuvo el etiquetado.`);
-      }
-      for (const eventId of job.eventIds) {
-        const event = byId.get(eventId);
-        if (!event || event.experiment_id !== campaign.experimentId || event.campaign_id !== campaignId) {
-          throw new Error(`El evento ${eventId} no pertenece a la campaña y experimento esperados.`);
-        }
-        const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
-        if (eventMetadata.run_id !== job.runId || eventMetadata.scenario_id !== job.scenarioId) {
-          throw new Error(`La procedencia del evento ${eventId} no coincide con su manifiesto.`);
-        }
-        if (event.ground_truth_label === expected.label) {
-          alreadyLabeled++;
-          continue;
-        }
-        if (event.ground_truth_label !== 'unknown') {
-          throw new Error(`El evento ${eventId} ya tiene una etiqueta distinta; requiere revisión manual.`);
-        }
-        await labelObservedEvent({
-          eventId,
-          label: expected.label,
-          method: 'authorized_automated_campaign_manifest_v1',
-          rationale: `Evento de la campaña autorizada ${campaignId}, ejecución ${job.runId}, escenario ${expected.scenarioId}; etiqueta derivada del manifiesto independiente preregistrado, no de las alertas de Centinela.`,
-          labeledBy: 'centinela-v3-lab-coordinator',
-        });
-        labeled++;
-      }
-    }
-    return res.json({ status: 'ok', campaign_id: campaignId, labeled, already_labeled: alreadyLabeled });
+    const result = await labelLabCampaignFromManifest(campaignId);
+    const { campaign } = getLabCampaignForLabeling(campaignId);
+    markLabCampaignLabeled(campaignId);
+    await saveLabCoordinatorState(campaign.experimentId, () => serializeLabCoordinatorState(campaign.experimentId));
+    return res.json({
+      status: 'ok',
+      campaign_id: campaignId,
+      labeled: result.labeled,
+      already_labeled: result.alreadyLabeled,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudieron etiquetar los eventos de la campaña.';
     return res.status(400).json({ error: message });
@@ -1015,9 +1491,9 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
         const protocolName = typeof activeExperiment.protocol_name === 'string'
           ? activeExperiment.protocol_name.toLowerCase()
           : '';
-        if (protocolName.includes('v3')) {
+        if (protocolName.includes('v3') || protocolName.includes('v4')) {
           return res.status(409).json({
-            error: 'El protocolo v3 solo acepta eventos de agentes autenticados con manifiesto de campaña. Los logins manuales o integraciones sin procedencia completa se rechazan.',
+            error: 'Los protocolos v3/v4 solo aceptan eventos de agentes autenticados con manifiesto de campaña. Los logins manuales o integraciones sin procedencia completa se rechazan.',
             persisted: false,
           });
         }
@@ -1058,6 +1534,9 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
           persisted: true,
           duplicate_replay: true,
         });
+      }
+      if (context.deadlineExpired) {
+        return res.status(409).json({ error: 'El corte temporal de la fase ya venció; no se crearán eventos nuevos para esta tarea.' });
       }
     }
     const eventMetadata = campaignId ? {
@@ -1519,8 +1998,8 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
   if (!Number.isFinite(Date.parse(trainEndAt)) || !Number.isFinite(Date.parse(validationEndAt)) || Date.parse(trainEndAt) <= Date.now() || Date.parse(validationEndAt) <= Date.parse(trainEndAt)) {
     return res.status(400).json({ error: 'Usa fechas ISO futuras: train_end_at debe ser posterior a ahora y validation_end_at posterior a train_end_at.' });
   }
-  if (protocolName.toLowerCase().includes('v3') && (!testEndAt || !Number.isFinite(Date.parse(testEndAt)) || Date.parse(testEndAt) <= Date.parse(validationEndAt))) {
-    return res.status(400).json({ error: 'El protocolo v3 requiere test_end_at, posterior al corte de validación y expresado en ISO.' });
+  if (/(v3|v4)/i.test(protocolName) && (!testEndAt || !Number.isFinite(Date.parse(testEndAt)) || Date.parse(testEndAt) <= Date.parse(validationEndAt))) {
+    return res.status(400).json({ error: 'Los protocolos v3/v4 requieren test_end_at, posterior al corte de validación y expresado en ISO.' });
   }
   try {
     const experiment = await createExperimentRecord({
@@ -1538,7 +2017,16 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
         feature_schema: 'centinela-auth-features-v3',
         isolation_forest_random_seed: 42,
       },
-      metadata: data.metadata && typeof data.metadata === 'object' ? data.metadata : {},
+      metadata: {
+        ...(data.metadata && typeof data.metadata === 'object' ? data.metadata : {}),
+        ...( /v4/i.test(protocolName) ? {
+          protocol_revision: 4,
+          generation_profile_version: 2,
+          phase_policy: 'train-benign-only_validation-mixed_validation-freeze_before_test',
+          truth_policy: 'independent_preregistered_campaign_manifest',
+          split_policy: 'temporal_by_event_timestamp_and_campaign_v1',
+        } : {}),
+      },
     });
     // Each experiment begins with a clean in-memory detection state and no inherited model.
     db.limpiar();
@@ -1582,7 +2070,22 @@ app.post('/api/experimentos/:experimentId/abortar', requiereAdmin, async (req: R
 
 app.post('/api/experimentos/:experimentId/finalizar', requiereAdmin, async (req: Request, res: Response) => {
   try {
-    const experiment = await finishExperimentRecord(singleRouteParam(req.params.experimentId));
+    const experimentId = singleRouteParam(req.params.experimentId);
+    const metadataRecord = await getExperimentMetadata(experimentId);
+    const metadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    const isTemporalProtocol = /v[34]/i.test(String(metadataRecord.protocol_name || '')) ||
+      Number(metadata.protocol_revision) >= 3;
+    if (isTemporalProtocol) {
+      const testEndAt = typeof metadata.test_end_at === 'string' ? Date.parse(metadata.test_end_at) : NaN;
+      if (!Number.isFinite(testEndAt) || Date.now() < testEndAt) {
+        return res.status(409).json({ error: 'El experimento temporal no puede finalizarse antes de su corte preregistrado test_end_at.' });
+      }
+    }
+    const snapshot = getLabSnapshot(experimentId) as { campaigns: Array<{ status: string }> };
+    if (snapshot.campaigns.some((campaign) => ['queued', 'running', 'paused'].includes(campaign.status))) {
+      return res.status(409).json({ error: 'No se puede finalizar mientras haya campañas con tareas pendientes o en ejecución.' });
+    }
+    const experiment = await finishExperimentRecord(experimentId);
     return res.json({ status: 'completed', experiment });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo finalizar el experimento.';
@@ -2729,6 +3232,13 @@ async function startServer() {
     app.use((req: Request, res: Response) => {
       res.sendFile(path.join(clientDist, 'index.html'));
     });
+  }
+
+  if (eventStoreStatus().configured) {
+    // The plan and queue are persisted in Supabase. This in-process tick only
+    // advances one batch at a time; after a Render restart the saved plan resumes.
+    setInterval(() => { void tickLabAutomation(); }, 30_000);
+    setTimeout(() => { void tickLabAutomation(); }, 5_000);
   }
 
   server.listen(PORT, '0.0.0.0', () => {

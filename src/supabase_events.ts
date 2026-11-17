@@ -360,8 +360,7 @@ export async function restoreActiveExperimentRecord() {
   let query = client
     .from('centinela_experiments')
     .select('id, protocol_name, scenario, status, started_at, metadata')
-    .eq('status', 'running')
-    .ilike('protocol_name', '%v3%');
+    .eq('status', 'running');
   if (activeExperimentId) query = query.eq('id', activeExperimentId);
   const { data, error } = await query
     .order('started_at', { ascending: false })
@@ -399,7 +398,6 @@ export async function createExperimentRecord(input: {
     .from('centinela_experiments')
     .select('id, protocol_name')
     .eq('status', 'running')
-    .ilike('protocol_name', '%v3%')
     .limit(1)
     .maybeSingle();
   if (existingError) throw new Error(`No se pudo comprobar si existe otro experimento activo: ${existingError.message}`);
@@ -412,9 +410,9 @@ export async function createExperimentRecord(input: {
     throw new Error('Define train_end_at y validation_end_at como fechas ISO futuras, con validation_end_at posterior a train_end_at.');
   }
   const testEndMs = input.testEndAt ? Date.parse(input.testEndAt) : NaN;
-  const requiresTestCutoff = input.protocolName.toLowerCase().includes('v3');
+  const requiresTestCutoff = /v[34]/i.test(input.protocolName);
   if (requiresTestCutoff && (!Number.isFinite(testEndMs) || testEndMs <= validationEndMs)) {
-    throw new Error('El protocolo v3 exige test_end_at en ISO futuro, posterior a validation_end_at.');
+    throw new Error('Los protocolos v3/v4 exigen test_end_at en ISO futuro, posterior a validation_end_at.');
   }
   if (input.testEndAt && (!Number.isFinite(testEndMs) || testEndMs <= validationEndMs)) {
     throw new Error('test_end_at debe ser una fecha ISO posterior a validation_end_at.');
@@ -427,7 +425,9 @@ export async function createExperimentRecord(input: {
     train_end_at: trainEndAt,
     validation_end_at: validationEndAt,
     ...(testEndAt ? { test_end_at: testEndAt } : {}),
-    split_policy: 'temporal_by_event_timestamp_v1',
+    split_policy: Number(input.metadata?.protocol_revision) >= 4
+      ? 'temporal_by_event_timestamp_and_campaign_v1'
+      : 'temporal_by_event_timestamp_v1',
     training_frozen: false,
     validation_frozen: false,
   };
@@ -536,7 +536,9 @@ export async function appendLabCampaignManifest(
   const updatedMetadata = {
     ...metadata,
     lab_campaign_manifests: [...existing, manifest],
-    lab_protocol_version: 'centinela-auth-study-v3',
+    lab_protocol_version: Number(manifest.generation_profile_version) >= 2
+      ? 'centinela-auth-study-v4'
+      : 'centinela-auth-study-v3',
   };
   const { data, error } = await client
     .from('centinela_experiments')
@@ -547,6 +549,69 @@ export async function appendLabCampaignManifest(
     .maybeSingle();
   if (error) throw new Error(`No se pudo persistir el manifiesto de campaña: ${error.message}`);
   if (!data) throw new Error('El experimento dejó de estar activo antes de guardar el manifiesto.');
+  if (activeExperimentId === experimentId) activeExperimentMetadata = updatedMetadata;
+  return data;
+}
+
+
+export async function persistLabCollectionPlan(
+  experimentId: string,
+  plan: {
+    experimentId: string;
+    batchSize: number;
+    accounts: string[];
+    targets: Record<string, unknown>;
+  },
+  coordinatorState: Record<string, unknown>,
+) {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  if (plan.experimentId !== experimentId) throw new Error('El plan no corresponde al experimento indicado.');
+
+  const { data: current, error: readError } = await client
+    .from('centinela_experiments')
+    .select('id, protocol_name, metadata, status')
+    .eq('id', experimentId)
+    .maybeSingle();
+  if (readError) throw new Error(`No se pudo leer el protocolo antes de preregistrar las cuotas: ${readError.message}`);
+  if (!current || current.status !== 'running') throw new Error('El experimento V4 ya no está activo.');
+
+  const metadata = (current.metadata ?? {}) as Record<string, unknown>;
+  if (Number(metadata.protocol_revision) < 4 && !/v4/i.test(String(current.protocol_name || ''))) {
+    throw new Error('Las cuotas automáticas solo se pueden preregistrar en un protocolo V4.');
+  }
+  if (metadata.collection_plan) {
+    throw new Error('El diseño de recolección ya está preregistrado y no puede modificarse.');
+  }
+
+  const collectionPlan = {
+    protocol_revision: 4,
+    plan_version: 1,
+    preregistered_at: new Date().toISOString(),
+    batch_size: plan.batchSize,
+    accounts: [...plan.accounts],
+    targets: structuredClone(plan.targets),
+    session_profile_version: 2,
+    truth_source: 'predefined_authorized_campaign_manifest',
+    quota_unit: 'completed_independent_sessions',
+    immutable_after_start: true,
+    phase_policy: 'train_benign_only_validation_mixed_freeze_before_test',
+  };
+  const updatedMetadata = {
+    ...metadata,
+    collection_plan: collectionPlan,
+    lab_protocol_version: 'centinela-auth-study-v4',
+    lab_coordinator_state: coordinatorState,
+    lab_coordinator_state_saved_at: new Date().toISOString(),
+  };
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ metadata: updatedMetadata })
+    .eq('id', experimentId)
+    .eq('status', 'running')
+    .select('id, metadata')
+    .maybeSingle();
+  if (error) throw new Error(`No se pudieron preregistrar las cuotas V4: ${error.message}`);
+  if (!data) throw new Error('El experimento dejó de estar activo al guardar el protocolo V4.');
   if (activeExperimentId === experimentId) activeExperimentMetadata = updatedMetadata;
   return data;
 }

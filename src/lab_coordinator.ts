@@ -17,6 +17,7 @@ interface LabAgent {
   status: 'ready' | 'running' | 'paused' | 'offline' | 'error';
   currentJobId: string | null;
   version: string;
+  nextJobAvailableAt: number;
 }
 
 interface LabJob {
@@ -27,8 +28,13 @@ interface LabJob {
   agentId: string | null;
   targetAccount: string;
   startAt: number;
+  deadlineAt: number | null;
+  sessionGapAfterMs: number;
   intervalMs: number;
+  interAttemptDelaysMs: number[];
   outcomes: boolean[];
+  sessionProfile: Record<string, unknown>;
+  seed: number;
   expectedLabel: 'benign' | 'attack';
   actorType: 'benign_agent' | 'attack_agent';
   generationMethod: 'automated_http_agent';
@@ -40,6 +46,17 @@ interface LabJob {
   pauseRequested: boolean;
   cancelRequested: boolean;
   summary: Record<string, unknown>;
+}
+
+export interface LabAutomationPlan {
+  enabled: boolean;
+  experimentId: string;
+  batchSize: number;
+  accounts: Array<'ronan' | 'andy' | 'stefano'>;
+  targets: Record<ExperimentPhase, Partial<Record<LabScenarioId, number>>>;
+  status: 'running' | 'paused' | 'completed';
+  updatedAt: string;
+  lastError: string | null;
 }
 
 interface LabCampaign {
@@ -54,11 +71,14 @@ interface LabCampaign {
   jobIds: string[];
   manifestPersisted: boolean;
   manifest: Record<string, unknown>;
+  scheduledByAutomation: boolean;
+  labelsAppliedAt: string | null;
 }
 
 const agents = new Map<string, LabAgent>();
 const jobs = new Map<string, LabJob>();
 const campaigns = new Map<string, LabCampaign>();
+let labAutomationPlan: LabAutomationPlan | null = null;
 const AGENT_STALE_MS = 90_000;
 
 /** Resets module state for isolated unit tests; never exposed by the HTTP API. */
@@ -66,6 +86,7 @@ export function resetLabCoordinatorForTesting(): void {
   agents.clear();
   jobs.clear();
   campaigns.clear();
+  labAutomationPlan = null;
 }
 
 export function serializeLabCoordinatorState(experimentId?: string | null): Record<string, unknown> {
@@ -74,13 +95,13 @@ export function serializeLabCoordinatorState(experimentId?: string | null): Reco
   );
   const campaignIds = new Set(selectedCampaigns.map((campaign) => campaign.campaignId));
   const selectedJobs = [...jobs.values()].filter((job) => campaignIds.has(job.campaignId));
-  const selectedAgentIds = new Set(selectedJobs.map((job) => job.agentId).filter((id): id is string => Boolean(id)));
-  const selectedAgents = [...agents.values()].filter((agent) =>
-    !experimentId || selectedAgentIds.has(agent.agentId)
-  );
+  // Persist every registered runner, including idle runners. After a service
+  // restart their next authenticated poll can safely move them from offline to ready.
+  const selectedAgents = [...agents.values()];
   return {
-    version: 1,
+    version: 2,
     saved_at: new Date().toISOString(),
+    automation_plan: labAutomationPlan ? { ...labAutomationPlan, accounts: [...labAutomationPlan.accounts], targets: structuredClone(labAutomationPlan.targets) } : null,
     agents: selectedAgents.map((agent) => ({ ...agent })),
     campaigns: selectedCampaigns.map((campaign) => ({ ...campaign, jobIds: [...campaign.jobIds], scenarioIds: [...campaign.scenarioIds] })),
     jobs: selectedJobs.map((job) => ({ ...job, outcomes: [...job.outcomes], summary: { ...job.summary } })),
@@ -92,17 +113,29 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
     throw new Error('El estado persistido del laboratorio no tiene un formato válido.');
   }
   const state = value as Record<string, unknown>;
-  if (state.version !== 1 || !Array.isArray(state.agents) || !Array.isArray(state.campaigns) || !Array.isArray(state.jobs)) {
+  if (![1, 2].includes(Number(state.version)) || !Array.isArray(state.agents) || !Array.isArray(state.campaigns) || !Array.isArray(state.jobs)) {
     throw new Error('La versión del estado persistido del laboratorio no es compatible.');
   }
   resetLabCoordinatorForTesting();
+  const rawPlan = state.automation_plan;
+  if (rawPlan && typeof rawPlan === 'object' && !Array.isArray(rawPlan)) {
+    const candidate = rawPlan as LabAutomationPlan;
+    if (typeof candidate.experimentId === 'string' && typeof candidate.enabled === 'boolean' &&
+        Number.isInteger(candidate.batchSize) && Array.isArray(candidate.accounts) &&
+        candidate.targets && typeof candidate.targets === 'object') {
+      labAutomationPlan = { ...candidate, accounts: [...candidate.accounts], targets: structuredClone(candidate.targets) };
+    }
+  }
 
   for (const raw of state.agents) {
     if (!raw || typeof raw !== 'object') continue;
     const agent = raw as LabAgent;
     if (typeof agent.agentId !== 'string' || !/^[a-f0-9]{64}$/i.test(agent.egressIpHash || '')) continue;
+    // Give runners a 90-second reconnection window after coordinator restart.
+    // A live runner's next authenticated poll will restore its ready/running state.
     agent.status = 'offline';
-    agent.lastSeenAt = 0;
+    agent.lastSeenAt = Date.now();
+    if (!Number.isFinite(agent.nextJobAvailableAt)) agent.nextJobAvailableAt = 0;
     agents.set(agent.agentId, { ...agent });
   }
   for (const raw of state.campaigns) {
@@ -116,12 +149,21 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
       manifestPersisted: true,
       jobIds: [...campaign.jobIds],
       scenarioIds: [...campaign.scenarioIds],
+      scheduledByAutomation: campaign.scheduledByAutomation === true,
+      labelsAppliedAt: typeof campaign.labelsAppliedAt === 'string' ? campaign.labelsAppliedAt : null,
     });
   }
   for (const raw of state.jobs) {
     if (!raw || typeof raw !== 'object') continue;
     const job = raw as LabJob;
     if (typeof job.jobId !== 'string' || typeof job.campaignId !== 'string' || !Array.isArray(job.outcomes)) continue;
+    if (!Array.isArray(job.interAttemptDelaysMs)) {
+      job.interAttemptDelaysMs = Array.from({ length: Math.max(0, job.outcomes.length - 1) }, () => job.intervalMs);
+    }
+    if (!job.sessionProfile || typeof job.sessionProfile !== 'object') job.sessionProfile = { profile_version: 'legacy-fixed-v1' };
+    if (!Number.isInteger(job.seed)) job.seed = 0;
+    if (typeof job.deadlineAt !== 'number' || !Number.isFinite(job.deadlineAt)) job.deadlineAt = null;
+    if (!Number.isFinite(job.sessionGapAfterMs)) job.sessionGapAfterMs = 0;
     const eventIds = Array.isArray(job.summary?.event_ids)
       ? (job.summary.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
       : [];
@@ -142,47 +184,110 @@ export const LAB_SCENARIO_CATALOG: Record<LabScenarioId, {
   description: string;
   expectedLabel: 'benign' | 'attack';
   actorType: 'benign_agent' | 'attack_agent';
-  outcomes: boolean[];
-  intervalMs: number;
   requiredAgents: number;
 }> = {
   benign_mixed: {
     label: 'Sesión legítima con errores ocasionales',
-    description: 'Autenticaciones correctas intercaladas con errores aislados de contraseña.',
+    description: 'Sesiones controladas de 3–8 autenticaciones, con 0–2 errores ocasionales y pausas reproducibles variables de 8–180 segundos.',
     expectedLabel: 'benign',
     actorType: 'benign_agent',
-    outcomes: [true, true, false, true, false, true, true],
-    intervalMs: 4_000,
     requiredAgents: 1,
   },
   attack_rapid: {
     label: 'Fuerza bruta desde un origen',
-    description: 'Seis intentos fallidos controlados desde un único agente y origen de red.',
+    description: 'Entre 6 y 10 autenticaciones fallidas controladas desde un único agente y origen de red.',
     expectedLabel: 'attack',
     actorType: 'attack_agent',
-    outcomes: [false, false, false, false, false, false],
-    intervalMs: 2_000,
     requiredAgents: 1,
   },
   attack_low_frequency: {
     label: 'Intentos de baja frecuencia',
-    description: 'Ocho intentos fallidos espaciados desde un único origen.',
+    description: 'Entre 8 y 12 autenticaciones fallidas con intervalos variables desde un único origen.',
     expectedLabel: 'attack',
     actorType: 'attack_agent',
-    outcomes: [false, false, false, false, false, false, false, false],
-    intervalMs: 75_000,
     requiredAgents: 1,
   },
   attack_distributed: {
     label: 'Fuerza bruta distribuida',
-    description: 'Cuatro agentes desde cuatro IP observadas distintas, coordinados contra una cuenta de laboratorio.',
+    description: 'Entre 2 y 4 intentos fallidos por agente, desde cuatro IP observadas distintas y verificadas.',
     expectedLabel: 'attack',
     actorType: 'attack_agent',
-    outcomes: [false, false],
-    intervalMs: 12_000,
     requiredAgents: 4,
   },
 };
+
+
+
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state += 0x6D2B79F5;
+    let value = state;
+    value = Math.imul(value ^ (value >>> 15), value | 1);
+    value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+    return ((value ^ (value >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+function randomBetween(random: () => number, min: number, max: number): number {
+  return Math.floor(min + random() * (max - min + 1));
+}
+
+function shuffle<T>(items: T[], random: () => number): T[] {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+function buildScenarioProfile(scenarioId: LabScenarioId, seed: number): {
+  outcomes: boolean[];
+  delaysMs: number[];
+  profile: Record<string, unknown>;
+} {
+  const random = seededRandom(seed);
+  let outcomes: boolean[];
+  let delaysMs: number[];
+  let profileId: string;
+
+  if (scenarioId === 'benign_mixed') {
+    const attempts = randomBetween(random, 3, 8);
+    const errors = randomBetween(random, 0, Math.min(2, attempts - 1));
+    outcomes = shuffle([...Array(errors).fill(false), ...Array(attempts - errors).fill(true)], random);
+    delaysMs = Array.from({ length: attempts - 1 }, () => randomBetween(random, 8_000, 180_000));
+    profileId = 'benign_session_v2';
+  } else if (scenarioId === 'attack_rapid') {
+    const attempts = randomBetween(random, 6, 10);
+    outcomes = Array(attempts).fill(false);
+    delaysMs = Array.from({ length: attempts - 1 }, () => randomBetween(random, 1_000, 4_000));
+    profileId = 'rapid_bruteforce_v2';
+  } else if (scenarioId === 'attack_low_frequency') {
+    const attempts = randomBetween(random, 8, 12);
+    outcomes = Array(attempts).fill(false);
+    delaysMs = Array.from({ length: attempts - 1 }, () => randomBetween(random, 45_000, 150_000));
+    profileId = 'low_frequency_bruteforce_v2';
+  } else {
+    const attempts = randomBetween(random, 2, 4);
+    outcomes = Array(attempts).fill(false);
+    delaysMs = Array.from({ length: attempts - 1 }, () => randomBetween(random, 6_000, 20_000));
+    profileId = 'distributed_bruteforce_v2';
+  }
+
+  return {
+    outcomes,
+    delaysMs,
+    profile: {
+      profile_id: profileId,
+      profile_version: 2,
+      planned_attempts: outcomes.length,
+      planned_failures: outcomes.filter((success) => !success).length,
+      inter_attempt_delays_ms: [...delaysMs],
+      reproducibility: 'seeded_prng_v1',
+    },
+  };
+}
 
 function isScenarioId(value: unknown): value is LabScenarioId {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(LAB_SCENARIO_CATALOG, value);
@@ -228,8 +333,10 @@ export function registerLabAgent(input: {
     status: 'ready',
     currentJobId: null,
     version: input.version || 'unknown',
+    nextJobAvailableAt: 0,
   };
   agent.lastSeenAt = Date.now();
+  if (!Number.isFinite(agent.nextJobAvailableAt)) agent.nextJobAvailableAt = 0;
   agent.version = input.version || agent.version;
   if (agent.status === 'offline' || agent.status === 'error') agent.status = 'ready';
   agents.set(agentId, agent);
@@ -248,6 +355,8 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
   targetAccount: string;
   expectedSuccess: boolean;
   egressIpHash: string;
+  deadlineAt: number | null;
+  deadlineExpired: boolean;
 } {
   const job = jobs.get(jobId);
   const agent = agents.get(agentId);
@@ -257,6 +366,7 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
   if (!['assigned', 'running'].includes(job.status)) {
     throw new Error('La tarea no está activa para capturar eventos.');
   }
+
   if (!Number.isInteger(attemptIndex) || attemptIndex !== job.attemptsCompleted ||
       attemptIndex < 0 || attemptIndex >= job.outcomes.length) {
     throw new Error('El índice de intento no coincide con el progreso confirmado de la tarea.');
@@ -268,6 +378,8 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
     targetAccount: job.targetAccount,
     expectedSuccess: job.outcomes[attemptIndex],
     egressIpHash: agent.egressIpHash,
+    deadlineAt: job.deadlineAt,
+    deadlineExpired: job.deadlineAt !== null && Date.now() >= job.deadlineAt,
   };
 }
 
@@ -295,12 +407,59 @@ export function heartbeatLabAgent(agentId: string): {
   return { agent: { ...agent }, command: 'continue' };
 }
 
+
+function buildLegacyScenarioProfile(scenarioId: LabScenarioId): {
+  outcomes: boolean[];
+  delaysMs: number[];
+  profile: Record<string, unknown>;
+} {
+  const definitions: Record<LabScenarioId, { outcomes: boolean[]; intervalMs: number; profileId: string }> = {
+    benign_mixed: {
+      outcomes: [true, true, false, true, false, true, true],
+      intervalMs: 4_000,
+      profileId: 'legacy_benign_mixed_v1',
+    },
+    attack_rapid: {
+      outcomes: [false, false, false, false, false, false],
+      intervalMs: 2_000,
+      profileId: 'legacy_attack_rapid_v1',
+    },
+    attack_low_frequency: {
+      outcomes: [false, false, false, false, false, false, false, false],
+      intervalMs: 75_000,
+      profileId: 'legacy_attack_low_frequency_v1',
+    },
+    attack_distributed: {
+      outcomes: [false, false],
+      intervalMs: 12_000,
+      profileId: 'legacy_attack_distributed_v1',
+    },
+  };
+  const definition = definitions[scenarioId];
+  const delaysMs = Array.from({ length: Math.max(0, definition.outcomes.length - 1) }, () => definition.intervalMs);
+  return {
+    outcomes: [...definition.outcomes],
+    delaysMs,
+    profile: {
+      profile_id: definition.profileId,
+      profile_version: 1,
+      planned_attempts: definition.outcomes.length,
+      planned_failures: definition.outcomes.filter((success) => !success).length,
+      inter_attempt_delays_ms: [...delaysMs],
+      reproducibility: 'legacy_fixed_v1',
+    },
+  };
+}
+
 export function createLabCampaign(input: {
   experimentId: string;
   targetAccount: string;
+  targetAccounts?: string[];
   scenarioIds: unknown[];
   phase: ExperimentPhase;
   repetitions?: number;
+  scheduledByAutomation?: boolean;
+  phaseEndAtMs?: number | null;
 }): { campaign: LabCampaign; manifest: Record<string, unknown> } {
   const now = Date.now();
   const scenarioIds = [...new Set(input.scenarioIds.filter(isScenarioId))];
@@ -309,8 +468,9 @@ export function createLabCampaign(input: {
     throw new Error('repetitions debe ser un entero entre 1 y 5.');
   }
   if (!input.experimentId) throw new Error('Se requiere un experimento activo.');
-  if (!/^(ronan|andy|stefano)$/.test(input.targetAccount)) {
-    throw new Error('La cuenta objetivo debe ser una cuenta de laboratorio autorizada.');
+  const targetAccounts = [...new Set(input.targetAccounts?.length ? input.targetAccounts : [input.targetAccount])];
+  if (!targetAccounts.length || targetAccounts.some((account) => !/^(ronan|andy|stefano)$/.test(account))) {
+    throw new Error('Las cuentas objetivo deben ser cuentas de laboratorio autorizadas.');
   }
   if (scenarioIds.length === 0 || scenarioIds.length !== input.scenarioIds.length) {
     throw new Error('Selecciona uno o más escenarios válidos del catálogo experimental.');
@@ -338,7 +498,7 @@ export function createLabCampaign(input: {
     throw new Error('No hay agentes conectados. Registra al menos un runner antes de crear una campaña.');
   }
 
-  const campaignId = `v3-${randomUUID()}`;
+  const campaignId = `${input.scheduledByAutomation ? 'v4' : 'v3'}-${randomUUID()}`;
   const jobIds: string[] = [];
   const manifestRuns: Record<string, unknown>[] = [];
   // Ejecutar primero los escenarios que necesitan sincronización distribuida
@@ -349,15 +509,30 @@ export function createLabCampaign(input: {
     ...scenarioIds.filter((id) => id === 'attack_low_frequency'),
   ];
   let nextSingleAgent = 0;
+  let nextSessionStart = now + 25_000;
 
   for (const scenarioId of orderedScenarioIds) {
     const definition = LAB_SCENARIO_CATALOG[scenarioId];
     for (let repetition = 1; repetition <= repetitions; repetition += 1) {
+      const runTargetAccount = targetAccounts[(repetition - 1) % targetAccounts.length];
       const runId = randomUUID();
-      const startAt = now + 25_000 + (repetition - 1) * 5_000;
+      const runSeed = Number.parseInt(randomUUID().replace(/-/g, '').slice(0, 8), 16) >>> 0;
+      const profile = input.scheduledByAutomation
+        ? buildScenarioProfile(scenarioId, runSeed)
+        : buildLegacyScenarioProfile(scenarioId);
+      let startAt = nextSessionStart;
+      const sessionGapMs = randomBetween(seededRandom(runSeed ^ 0x9e3779b9), 8 * 60_000, 25 * 60_000);
+      const plannedActiveDurationMs = profile.delaysMs.reduce((sum, delay) => sum + delay, 0) + profile.outcomes.length * 2_000;
       const assignedAgents = scenarioId === 'attack_distributed'
-        ? readyAgents.slice(0, 4)
+        ? readyAgents.filter((agent, index, all) =>
+            all.findIndex((candidate) => candidate.egressIpHash === agent.egressIpHash) === index
+          ).slice(0, 4)
         : [readyAgents[nextSingleAgent++ % readyAgents.length]];
+      // Sessions cannot start until every assigned runner has completed its
+      // previously scheduled rest. For distributed runs this synchronizes
+      // all four origins to the latest available start time.
+      startAt = Math.max(startAt, ...assignedAgents.map((agent) => agent.nextJobAvailableAt || 0));
+      nextSessionStart = startAt + plannedActiveDurationMs + sessionGapMs;
       const runJobIds: string[] = [];
 
       for (const agent of assignedAgents) {
@@ -368,10 +543,15 @@ export function createLabCampaign(input: {
           runId,
           scenarioId,
           agentId: agent.agentId,
-          targetAccount: input.targetAccount,
+          targetAccount: runTargetAccount,
           startAt,
-          intervalMs: definition.intervalMs,
-          outcomes: [...definition.outcomes],
+          deadlineAt: Number.isFinite(input.phaseEndAtMs) ? Number(input.phaseEndAtMs) : null,
+          sessionGapAfterMs: input.scheduledByAutomation ? sessionGapMs : 0,
+          intervalMs: profile.delaysMs.length ? Math.round(profile.delaysMs.reduce((sum, delay) => sum + delay, 0) / profile.delaysMs.length) : 0,
+          interAttemptDelaysMs: [...profile.delaysMs],
+          outcomes: [...profile.outcomes],
+          sessionProfile: { ...profile.profile },
+          seed: runSeed,
           expectedLabel: definition.expectedLabel,
           actorType: definition.actorType,
           generationMethod: 'automated_http_agent',
@@ -396,12 +576,22 @@ export function createLabCampaign(input: {
         expected_label: definition.expectedLabel,
         actor_type: definition.actorType,
         generation_method: 'automated_http_agent',
-        target_account: input.targetAccount,
+        target_account: runTargetAccount,
         required_independent_egress_ips: definition.requiredAgents,
         planned_agent_ids: assignedAgents.map((agent) => agent.agentId),
+        planned_agent_origins: assignedAgents.map((agent) => ({
+          agent_id: agent.agentId,
+          egress_ip_hash: agent.egressIpHash,
+        })),
         planned_start_at: new Date(startAt).toISOString(),
-        planned_attempts_per_agent: definition.outcomes.length,
-        planned_interval_ms: definition.intervalMs,
+        planned_attempts_per_agent: profile.outcomes.length,
+        planned_outcomes: [...profile.outcomes],
+        planned_active_duration_ms: plannedActiveDurationMs,
+        planned_inter_attempt_delays_ms: [...profile.delaysMs],
+        session_profile: profile.profile,
+        reproducibility_seed: runSeed,
+        planned_session_gap_after_ms: sessionGapMs,
+        planned_session_gap_profile: 'uniform_random_8_to_25_minutes',
         job_ids: runJobIds,
       });
     }
@@ -412,22 +602,27 @@ export function createLabCampaign(input: {
     experimentId: input.experimentId,
     createdAt: now,
     status: 'queued',
-    targetAccount: input.targetAccount,
+    targetAccount: targetAccounts[0],
     scenarioIds,
     repetitions,
     phase: input.phase,
     jobIds,
     manifestPersisted: false,
+    scheduledByAutomation: input.scheduledByAutomation === true,
+    labelsAppliedAt: null,
     manifest: {
-      protocol: 'centinela-auth-study-v3',
+      protocol: input.scheduledByAutomation ? 'centinela-auth-study-v4-empirical' : 'centinela-auth-study-v3-compatible',
       campaign_id: campaignId,
       experiment_id: input.experimentId,
       phase: input.phase,
       created_at: new Date(now).toISOString(),
-      target_account: input.targetAccount,
+      target_account: targetAccounts[0],
+      target_accounts: [...targetAccounts],
       scenarios: manifestRuns,
       truth_source: 'predefined_authorized_campaign_manifest',
-      note: 'La etiqueta esperada se conserva en el manifiesto independiente del detector y nunca se envía en las solicitudes de autenticación.',
+      generation_profile_version: input.scheduledByAutomation ? 2 : 1,
+      scheduling_mode: input.scheduledByAutomation ? 'automatic_phase_scheduler' : 'manual_campaign',
+      note: 'Cada sesión tiene semilla reproducible, secuencia de resultados e intervalos planificados registrados en este manifiesto. La etiqueta esperada se conserva fuera del detector y nunca se envía en las solicitudes de autenticación. Los eventos son transacciones HTTP ejecutadas por agentes en un testbed controlado, no sesiones humanas espontáneas.',
     },
   };
   campaigns.set(campaignId, campaign);
@@ -438,6 +633,8 @@ function serializeJobForAgent(job: LabJob, agentId: string): Record<string, unkn
   const eventIds = Array.isArray(job.summary.event_ids)
     ? (job.summary.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
     : [];
+  const agent = agents.get(agentId);
+  const effectiveStartAt = Math.max(job.startAt, agent?.nextJobAvailableAt ?? 0);
   return {
     job_id: job.jobId,
     campaign_id: job.campaignId,
@@ -445,13 +642,243 @@ function serializeJobForAgent(job: LabJob, agentId: string): Record<string, unkn
     scenario_id: job.scenarioId,
     agent_id: agentId,
     target_account: job.targetAccount,
-    start_at: new Date(job.startAt).toISOString(),
+    start_at: new Date(effectiveStartAt).toISOString(),
+    deadline_at: job.deadlineAt !== null ? new Date(job.deadlineAt).toISOString() : null,
     interval_ms: job.intervalMs,
+    inter_attempt_delays_ms: [...job.interAttemptDelaysMs],
+    session_profile: { ...job.sessionProfile },
+    seed: job.seed,
     outcomes: [...job.outcomes],
     max_attempts: job.outcomes.length,
     attempts_completed: job.attemptsCompleted,
     event_ids: eventIds,
   };
+}
+
+
+
+export function configureLabAutomation(input: {
+  experimentId: string;
+  batchSize?: number;
+  accounts?: string[];
+  targets: Record<string, Record<string, number>>;
+}): LabAutomationPlan {
+  if (!input.experimentId) throw new Error('Se requiere un experimento para automatizar la recolección.');
+  if (labAutomationPlan) throw new Error('El plan V4 ya fue configurado. No se pueden cambiar cuotas, cuentas ni tamaño de lote durante el experimento; usa pausar/reanudar.');
+  const batchSize = input.batchSize ?? 5;
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 5) {
+    throw new Error('El tamaño de lote automático debe estar entre 1 y 5 sesiones.');
+  }
+  const allowedAccounts = ['ronan', 'andy', 'stefano'] as const;
+  const accounts = [...new Set((input.accounts ?? [...allowedAccounts]).filter(
+    (account): account is typeof allowedAccounts[number] => allowedAccounts.includes(account as typeof allowedAccounts[number])
+  ))];
+  if (!accounts.length) throw new Error('Configura al menos una cuenta de laboratorio autorizada.');
+  const targets: LabAutomationPlan['targets'] = { train: {}, validation: {}, test: {} };
+  for (const phase of ['train', 'validation', 'test'] as const) {
+    const phaseTargets = input.targets[phase] ?? {};
+    for (const [scenario, rawCount] of Object.entries(phaseTargets)) {
+      if (!isScenarioId(scenario) || !Number.isInteger(rawCount) || rawCount < 0 || rawCount > 10_000) {
+        throw new Error('Los objetivos de recolección contienen un escenario o una cantidad inválida.');
+      }
+      if (phase === 'train' && scenario !== 'benign_mixed') {
+        throw new Error('El entrenamiento solo admite sesiones benignas.');
+      }
+      targets[phase][scenario] = rawCount;
+    }
+  }
+  if (!targets.train.benign_mixed || targets.train.benign_mixed < 1) {
+    throw new Error('Define un objetivo de al menos una sesión benigna para entrenamiento.');
+  }
+  const evaluationScenarios: LabScenarioId[] = ['benign_mixed', 'attack_rapid', 'attack_low_frequency', 'attack_distributed'];
+  for (const phase of ['validation', 'test'] as const) {
+    for (const scenarioId of evaluationScenarios) {
+      if (!Number.isInteger(targets[phase][scenarioId]) || (targets[phase][scenarioId] ?? 0) < 1) {
+        throw new Error(`La fase ${phase} debe incluir al menos una sesión de ${scenarioId}; no se omitirá ningún escenario de evaluación.`);
+      }
+    }
+  }
+
+  labAutomationPlan = {
+    enabled: true,
+    experimentId: input.experimentId,
+    batchSize,
+    accounts,
+    targets,
+    status: 'running',
+    updatedAt: new Date().toISOString(),
+    lastError: null,
+  };
+  return { ...labAutomationPlan, accounts: [...accounts], targets: structuredClone(targets) };
+}
+
+
+export function discardUnpersistedLabAutomationPlan(experimentId: string): boolean {
+  if (!labAutomationPlan || labAutomationPlan.experimentId !== experimentId) return false;
+  const hasAutomaticCampaign = [...campaigns.values()].some(
+    (campaign) => campaign.experimentId === experimentId && campaign.scheduledByAutomation
+  );
+  if (hasAutomaticCampaign) return false;
+  labAutomationPlan = null;
+  return true;
+}
+
+export function stopLabAutomation(): LabAutomationPlan | null {
+  if (!labAutomationPlan) return null;
+  labAutomationPlan = { ...labAutomationPlan, enabled: false, status: 'paused', updatedAt: new Date().toISOString() };
+  return { ...labAutomationPlan, accounts: [...labAutomationPlan.accounts], targets: structuredClone(labAutomationPlan.targets) };
+}
+
+export function updateLabAutomationStatus(input: {
+  status?: LabAutomationPlan['status'];
+  enabled?: boolean;
+  lastError?: string | null;
+}): LabAutomationPlan | null {
+  if (!labAutomationPlan) return null;
+  labAutomationPlan = {
+    ...labAutomationPlan,
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+    ...(input.lastError !== undefined ? { lastError: input.lastError } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  return { ...labAutomationPlan, accounts: [...labAutomationPlan.accounts], targets: structuredClone(labAutomationPlan.targets) };
+}
+
+
+export function resumeLabAutomation(experimentId: string): LabAutomationPlan {
+  if (!labAutomationPlan || labAutomationPlan.experimentId !== experimentId) {
+    throw new Error('No existe un plan V4 persistido para este experimento.');
+  }
+  if (labAutomationPlan.status === 'completed') {
+    throw new Error('El plan V4 ya completó todas sus cuotas y no puede reanudarse.');
+  }
+  labAutomationPlan = {
+    ...labAutomationPlan,
+    enabled: true,
+    status: 'running',
+    lastError: null,
+    updatedAt: new Date().toISOString(),
+  };
+  return {
+    ...labAutomationPlan,
+    accounts: [...labAutomationPlan.accounts],
+    targets: structuredClone(labAutomationPlan.targets),
+  };
+}
+
+export function getLabAutomationPlan(): LabAutomationPlan | null {
+  return labAutomationPlan
+    ? { ...labAutomationPlan, accounts: [...labAutomationPlan.accounts], targets: structuredClone(labAutomationPlan.targets) }
+    : null;
+}
+
+export function getNextLabAutomationBatch(experimentId: string, phase: ExperimentPhase): {
+  scenarioId: LabScenarioId;
+  repetitions: number;
+  targetAccount: string;
+  targetAccounts: string[];
+  completed: number;
+  target: number;
+} | null {
+  const plan = labAutomationPlan;
+  if (!plan || !plan.enabled || plan.status !== 'running' || plan.experimentId !== experimentId) return null;
+  const phaseTargets = plan.targets[phase] ?? {};
+  const phaseCampaigns = [...campaigns.values()].filter(
+    (campaign) => campaign.experimentId === experimentId &&
+      campaign.phase === phase && campaign.scheduledByAutomation
+  );
+  const counts = new Map<LabScenarioId, { completed: number; failed: number }>();
+  for (const scenarioId of Object.keys(phaseTargets) as LabScenarioId[]) counts.set(scenarioId, { completed: 0, failed: 0 });
+  for (const campaign of phaseCampaigns) {
+    const runs = new Map<string, LabJob[]>();
+    for (const jobId of campaign.jobIds) {
+      const job = jobs.get(jobId);
+      if (!job) continue;
+      const runJobs = runs.get(job.runId) ?? [];
+      runJobs.push(job);
+      runs.set(job.runId, runJobs);
+    }
+    for (const runJobs of runs.values()) {
+      const scenarioId = runJobs[0]?.scenarioId;
+      const count = scenarioId ? counts.get(scenarioId) : undefined;
+      if (!count) continue;
+      if (runJobs.every((job) => job.status === 'completed')) count.completed += 1;
+      if (runJobs.some((job) => job.status === 'failed' || job.status === 'cancelled')) count.failed += 1;
+    }
+  }
+
+  const ordered = (['benign_mixed', 'attack_rapid', 'attack_low_frequency', 'attack_distributed'] as LabScenarioId[])
+    .filter((scenarioId) => phaseTargets[scenarioId] !== undefined);
+  for (const scenarioId of ordered) {
+    const target = phaseTargets[scenarioId] ?? 0;
+    const count = counts.get(scenarioId) ?? { completed: 0, failed: 0 };
+    if (count.completed >= target) continue;
+    if (count.failed >= 3) {
+      updateLabAutomationStatus({ status: 'paused', enabled: false, lastError: `Se pausó la automatización: ${scenarioId} acumula tres ejecuciones fallidas.` });
+      return null;
+    }
+    const remaining = target - count.completed;
+    const startAccountIndex = (count.completed + count.failed) % plan.accounts.length;
+    const orderedAccounts = plan.accounts.map((_, index) => plan.accounts[(startAccountIndex + index) % plan.accounts.length]);
+    return {
+      scenarioId,
+      repetitions: Math.min(plan.batchSize, remaining),
+      targetAccount: orderedAccounts[0],
+      targetAccounts: orderedAccounts,
+      completed: count.completed,
+      target,
+    };
+  }
+  return null;
+}
+
+export function isLabAutomationPhaseComplete(experimentId: string, phase: ExperimentPhase): boolean {
+  const plan = labAutomationPlan;
+  if (!plan || plan.experimentId !== experimentId) return false;
+  const targets = plan.targets[phase] ?? {};
+  for (const [scenarioId, target] of Object.entries(targets) as Array<[LabScenarioId, number]>) {
+    let completed = 0;
+    const phaseCampaigns = [...campaigns.values()].filter(
+      (campaign) => campaign.experimentId === experimentId &&
+        campaign.phase === phase && campaign.scheduledByAutomation
+    );
+    for (const campaign of phaseCampaigns) {
+      if (!campaign.labelsAppliedAt || campaign.status !== 'completed') continue;
+      const runs = new Map<string, LabJob[]>();
+      for (const jobId of campaign.jobIds) {
+        const job = jobs.get(jobId);
+        if (!job || job.scenarioId !== scenarioId) continue;
+        const runJobs = runs.get(job.runId) ?? [];
+        runJobs.push(job);
+        runs.set(job.runId, runJobs);
+      }
+      for (const runJobs of runs.values()) {
+        if (runJobs.length > 0 && runJobs.every((job) => job.status === 'completed')) completed += 1;
+      }
+    }
+    if (completed < target) return false;
+  }
+  return true;
+}
+
+export function completeLabAutomation(): LabAutomationPlan | null {
+  if (!labAutomationPlan) return null;
+  labAutomationPlan = {
+    ...labAutomationPlan,
+    enabled: false,
+    status: 'completed',
+    lastError: null,
+    updatedAt: new Date().toISOString(),
+  };
+  return { ...labAutomationPlan, accounts: [...labAutomationPlan.accounts], targets: structuredClone(labAutomationPlan.targets) };
+}
+
+export function markLabCampaignLabeled(campaignId: string): LabCampaign {
+  const campaign = campaigns.get(campaignId);
+  if (!campaign) throw new Error('Campaña no encontrada.');
+  campaign.labelsAppliedAt = campaign.labelsAppliedAt ?? new Date().toISOString();
+  return { ...campaign };
 }
 
 export function activateLabCampaign(campaignId: string): LabCampaign {
@@ -484,7 +911,10 @@ export function claimNextLabJob(agentId: string): Record<string, unknown> | null
     (candidate.agentId === null || candidate.agentId === agentId) &&
     (!candidate.agentId || candidate.agentId === agentId)
   );
-  if (!job) return null;
+  if (!job) {
+    if (agent.status === 'offline' || agent.status === 'error') agent.status = 'ready';
+    return null;
+  }
 
   if (job.scenarioId === 'attack_distributed') {
     const matching = [...agents.values()].filter((item) =>
@@ -526,6 +956,33 @@ export function reportLabJobProgress(agentId: string, jobId: string, attemptsCom
   if (agent) agent.lastSeenAt = Date.now();
 }
 
+
+export function expireStaleLabJobs(now = Date.now()): number {
+  let expired = 0;
+  for (const job of jobs.values()) {
+    if (!['assigned', 'running', 'paused'].includes(job.status) || !job.agentId) continue;
+    const agent = agents.get(job.agentId);
+    if (agent && now - agent.lastSeenAt <= AGENT_STALE_MS) continue;
+    job.status = 'failed';
+    job.finishedAt = now;
+    job.pauseRequested = false;
+    job.cancelRequested = false;
+    job.summary = {
+      ...job.summary,
+      failure_reason: 'agent_heartbeat_timeout',
+      failure_message: 'El runner dejó de enviar heartbeats durante más de 90 segundos.',
+    };
+    if (agent) {
+      agent.currentJobId = null;
+      agent.status = 'offline';
+    }
+    const campaign = campaigns.get(job.campaignId);
+    if (campaign) refreshCampaignStatus(campaign);
+    expired++;
+  }
+  return expired;
+}
+
 export function completeLabJob(input: {
   agentId: string;
   jobId: string;
@@ -565,6 +1022,9 @@ export function completeLabJob(input: {
     agent.lastSeenAt = Date.now();
     agent.currentJobId = null;
     agent.status = input.status === 'failed' ? 'error' : 'ready';
+    agent.nextJobAvailableAt = input.status === 'completed'
+      ? Date.now() + job.sessionGapAfterMs
+      : Date.now();
   }
   const campaign = campaigns.get(job.campaignId);
   if (campaign) refreshCampaignStatus(campaign);
@@ -613,6 +1073,9 @@ export function getLabCampaignForLabeling(campaignId: string): {
     jobId: string;
     runId: string;
     scenarioId: LabScenarioId;
+    agentId: string;
+    targetAccount: string;
+    egressIpHash: string;
     expectedLabel: 'benign' | 'attack';
     status: JobStatus;
     attemptsCompleted: number;
@@ -630,6 +1093,9 @@ export function getLabCampaignForLabeling(campaignId: string): {
     jobId: job.jobId,
     runId: job.runId,
     scenarioId: job.scenarioId,
+    agentId: job.agentId || '',
+    targetAccount: job.targetAccount,
+    egressIpHash: job.agentId ? agents.get(job.agentId)?.egressIpHash || '' : '',
     expectedLabel: job.expectedLabel,
     status: job.status,
     attemptsCompleted: job.attemptsCompleted,
@@ -638,10 +1104,48 @@ export function getLabCampaignForLabeling(campaignId: string): {
       ? (job.summary.event_ids as unknown[]).filter((value): value is string => typeof value === 'string')
       : [],
   }));
-  if (normalizedJobs.some((job) => job.attemptsCompleted !== job.attemptsPlanned || job.eventIds.length !== job.attemptsPlanned)) {
+  if (normalizedJobs.some((job) => !job.agentId ||
+      job.attemptsCompleted !== job.attemptsPlanned || job.eventIds.length !== job.attemptsPlanned)) {
     throw new Error('La campaña tiene tareas con solicitudes faltantes o sin IDs de evento confirmados; no se aplicarán etiquetas automáticamente.');
   }
   return { campaign: { ...campaign }, jobs: normalizedJobs };
+}
+
+
+export function getLabAutomationProgress(experimentId: string): Record<string, Record<string, { completed: number; target: number }>> | null {
+  const plan = labAutomationPlan;
+  if (!plan || plan.experimentId !== experimentId) return null;
+
+  const result: Record<string, Record<string, { completed: number; target: number }>> = {};
+  for (const phase of ['train', 'validation', 'test'] as const) {
+    result[phase] = {};
+    const targets = plan.targets[phase] ?? {};
+    const phaseCampaigns = [...campaigns.values()].filter(
+      (campaign) => campaign.experimentId === experimentId &&
+        campaign.phase === phase && campaign.scheduledByAutomation &&
+        campaign.status === 'completed' && Boolean(campaign.labelsAppliedAt)
+    );
+    for (const [scenarioId, target] of Object.entries(targets) as Array<[LabScenarioId, number]>) {
+      const runIds = new Set<string>();
+      for (const campaign of phaseCampaigns) {
+        const byRun = new Map<string, LabJob[]>();
+        for (const jobId of campaign.jobIds) {
+          const job = jobs.get(jobId);
+          if (!job || job.scenarioId !== scenarioId) continue;
+          const runJobs = byRun.get(job.runId) ?? [];
+          runJobs.push(job);
+          byRun.set(job.runId, runJobs);
+        }
+        for (const [runId, runJobs] of byRun) {
+          if (runJobs.length > 0 && runJobs.every((job) =>
+            job.status === 'completed' && job.attemptsCompleted === job.outcomes.length
+          )) runIds.add(runId);
+        }
+      }
+      result[phase][scenarioId] = { completed: Math.min(runIds.size, target), target };
+    }
+  }
+  return result;
 }
 
 export function getLabSnapshot(experimentId?: string | null): Record<string, unknown> {
@@ -670,6 +1174,8 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
         repetitions: campaign.repetitions,
         phase: campaign.phase,
         manifest_persisted: campaign.manifestPersisted,
+        scheduled_by_automation: campaign.scheduledByAutomation,
+        labels_applied_at: campaign.labelsAppliedAt,
         jobs: campaignJobs.map((job) => ({
           job_id: job.jobId,
           run_id: job.runId,
@@ -678,7 +1184,11 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
           status: job.status,
           attempts_completed: job.attemptsCompleted,
           attempts_planned: job.outcomes.length,
-          start_at: new Date(job.startAt).toISOString(),
+          planned_inter_attempt_delays_ms: [...job.interAttemptDelaysMs],
+          planned_session_gap_after_ms: job.sessionGapAfterMs,
+          session_profile: { ...job.sessionProfile },
+          start_at: new Date(Math.max(job.startAt, job.agentId ? agents.get(job.agentId)?.nextJobAvailableAt ?? 0 : 0)).toISOString(),
+          deadline_at: job.deadlineAt !== null ? new Date(job.deadlineAt).toISOString() : null,
           started_at: job.startedAt ? new Date(job.startedAt).toISOString() : null,
           finished_at: job.finishedAt ? new Date(job.finishedAt).toISOString() : null,
           expected_label: job.expectedLabel,
@@ -689,6 +1199,8 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
   return {
     generated_at: new Date(now).toISOString(),
     agent_stale_after_ms: AGENT_STALE_MS,
+    automation: getLabAutomationPlan(),
+    automation_progress: experimentId ? getLabAutomationProgress(experimentId) : null,
     agents: agentList,
     campaigns: campaignList,
     scenarios: Object.entries(LAB_SCENARIO_CATALOG).map(([id, value]) => ({

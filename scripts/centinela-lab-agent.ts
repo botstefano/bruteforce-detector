@@ -10,7 +10,11 @@ interface LabJob {
   agent_id: string;
   target_account: 'ronan' | 'andy' | 'stefano';
   start_at: string;
+  deadline_at?: string | null;
   interval_ms: number;
+  inter_attempt_delays_ms?: number[];
+  session_profile?: Record<string, unknown>;
+  seed?: number;
   outcomes: boolean[];
   max_attempts: number;
   attempts_completed?: number;
@@ -163,9 +167,15 @@ async function executeJob(job: LabJob): Promise<void> {
     if (!Array.isArray(job.outcomes) || job.outcomes.length === 0 || job.outcomes.length > 12 || job.max_attempts !== job.outcomes.length) {
       throw new Error('La tarea supera los límites de intentos permitidos.');
     }
-    if (job.interval_ms < 1_000 || job.interval_ms > 120_000) throw new Error('El intervalo de la tarea está fuera del rango permitido.');
+    const delays = Array.isArray(job.inter_attempt_delays_ms)
+      ? job.inter_attempt_delays_ms
+      : Array.from({ length: Math.max(0, job.outcomes.length - 1) }, () => job.interval_ms);
+    if (delays.length !== job.outcomes.length - 1 ||
+        delays.some((delay) => !Number.isInteger(delay) || delay < 1_000 || delay > 180_000)) {
+      throw new Error('La secuencia de pausas de la sesión no es válida o no coincide con el número de intentos.');
+    }
 
-    await log(`Tarea ${job.job_id.slice(0, 8)} iniciada: ${job.scenario_id}, ${job.outcomes.length} intentos.`);
+    await log(`Sesión ${job.job_id.slice(0, 8)} iniciada: ${job.scenario_id}, ${job.outcomes.length} intentos, perfil ${String(job.session_profile?.profile_id || 'legacy')}.`);
     let command = await waitUntilAndCheck(job);
     if (command === 'cancel') finalStatus = 'cancelled';
 
@@ -178,6 +188,12 @@ async function executeJob(job: LabJob): Promise<void> {
         break;
       }
 
+      if (job.deadline_at) {
+        const deadlineMs = Date.parse(job.deadline_at);
+        if (!Number.isFinite(deadlineMs) || Date.now() + 366_000 >= deadlineMs) {
+          throw new Error('Se detuvo la tarea antes de iniciar una autenticación que podría cruzar el corte temporal de la fase.');
+        }
+      }
       const expectedAuthSuccess = Boolean(job.outcomes[index]);
       const invalidCandidate = `${invalidPassword}-${index + 1}`;
       if (!expectedAuthSuccess && Object.values(credentials).includes(invalidCandidate)) {
@@ -185,8 +201,18 @@ async function executeJob(job: LabJob): Promise<void> {
       }
       const password = expectedAuthSuccess ? credentials[job.target_account] : invalidCandidate;
       const controller = new AbortController();
-      // The portal may need up to ~235s for detector warm-up and up to 90s to persist an event.
+      // Keep the runner alive while the portal may take several minutes to
+      // warm the detector and persist the event.
       const timeout = setTimeout(() => controller.abort(), 360_000);
+      let heartbeatInFlight = false;
+      const heartbeatTimer = setInterval(() => {
+        if (heartbeatInFlight) return;
+        heartbeatInFlight = true;
+        void checkCommand(job.job_id)
+          .then((nextCommand) => { command = nextCommand; })
+          .catch(() => { /* The request timeout and stale-runner guard remain authoritative. */ })
+          .finally(() => { heartbeatInFlight = false; });
+      }, 10_000);
       try {
         const response = await fetch(portalUrl + '/agent/login', {
           method: 'POST',
@@ -219,10 +245,12 @@ async function executeJob(job: LabJob): Promise<void> {
         await log(`Evento ${attemptsCompleted}/${job.outcomes.length} confirmado: ${payload.event_id.slice(0, 8)} · HTTP ${response.status}.`);
       } finally {
         clearTimeout(timeout);
+        clearInterval(heartbeatTimer);
       }
 
       if (index < job.outcomes.length - 1) {
-        const endAt = Date.now() + job.interval_ms;
+        const delayMs = delays[index];
+        const endAt = Date.now() + delayMs;
         while (Date.now() < endAt) {
           command = await checkCommand(job.job_id);
           if (command !== 'continue') break;
