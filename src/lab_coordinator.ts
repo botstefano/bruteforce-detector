@@ -558,7 +558,7 @@ export function createLabCampaign(input: {
       target_accounts: [...targetAccounts],
       scenarios: manifestRuns,
       truth_source: 'predefined_authorized_campaign_manifest',
-      generation_profile_version: 2,
+      generation_profile_version: input.scheduledByAutomation ? 2 : 1,
       scheduling_mode: input.scheduledByAutomation ? 'automatic_phase_scheduler' : 'manual_campaign',
       note: 'Cada sesión tiene semilla reproducible, secuencia de resultados e intervalos planificados registrados en este manifiesto. La etiqueta esperada se conserva fuera del detector y nunca se envía en las solicitudes de autenticación. Los eventos son transacciones HTTP ejecutadas por agentes en un testbed controlado, no sesiones humanas espontáneas.',
     },
