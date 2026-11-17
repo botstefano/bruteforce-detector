@@ -1078,6 +1078,10 @@ app.post('/api/lab/automation/start', requiereAdmin, async (req: Request, res: R
 });
 
 app.post('/api/lab/automation/resume', requiereAdmin, async (_req: Request, res: Response) => {
+  if (labAutomationTickRunning || labAutomationConfiguring) {
+    return res.status(409).json({ error: 'El planificador está procesando un lote; vuelve a intentar la reanudación cuando termine el ciclo actual.' });
+  }
+  labAutomationConfiguring = true;
   try {
     const experimentId = getActiveExperimentId();
     if (!experimentId) return res.status(409).json({ error: 'No hay un experimento activo.' });
@@ -1087,15 +1091,21 @@ app.post('/api/lab/automation/resume', requiereAdmin, async (_req: Request, res:
     const plan = resumeLabAutomation(experimentId);
     await persistLabAutomationState(experimentId);
     io.emit('lab_campaign_update', getLabSnapshot(experimentId));
-    void tickLabAutomation();
     return res.json({ status: 'running', plan });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo reanudar la recolección automática.';
     return res.status(400).json({ error: message });
+  } finally {
+    labAutomationConfiguring = false;
+    void tickLabAutomation();
   }
 });
 
 app.post('/api/lab/automation/stop', requiereAdmin, async (_req: Request, res: Response) => {
+  if (labAutomationTickRunning || labAutomationConfiguring) {
+    return res.status(409).json({ error: 'El planificador está procesando un lote; pausa la automatización cuando termine el ciclo actual.' });
+  }
+  labAutomationConfiguring = true;
   try {
     const plan = stopLabAutomation();
     const experimentId = getActiveExperimentId();
@@ -1105,6 +1115,8 @@ app.post('/api/lab/automation/stop', requiereAdmin, async (_req: Request, res: R
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo pausar la recolección automática.';
     return res.status(400).json({ error: message });
+  } finally {
+    labAutomationConfiguring = false;
   }
 });
 
