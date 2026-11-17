@@ -493,7 +493,7 @@ export function LabExperimentPanel() {
               {snapshot.automation?.enabled ? 'Automatización activa' : snapshot.automation?.status === 'completed' ? 'Objetivos completados' : 'Automatización detenida'}
             </Pill>
           </div>
-          <p className="text-xs text-slate-300">Protocolo actual: V{snapshot.protocol_revision ?? '—'}. Entrenamiento: 200 sesiones benignas; validación: 100 benignas y 30 por escenario de ataque; prueba final: 200 benignas y 50 rápidas, 50 de baja frecuencia y 30 distribuidas.</p>
+          <p className="text-xs text-slate-300">Protocolo actual: V{snapshot.protocol_revision ?? '—'}. Entrenamiento: 200 sesiones benignas; validación: 100 benignas, 30 rápidas, 30 de baja frecuencia y 20 distribuidas; prueba final: 200 benignas, 50 rápidas, 50 de baja frecuencia y 30 distribuidas.</p>
           {snapshot.automation_progress && (
             <div className="mt-3 grid gap-2 md:grid-cols-3">
               {Object.entries(snapshot.automation_progress).map(([phase, scenarios]) => (
