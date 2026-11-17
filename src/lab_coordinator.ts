@@ -60,6 +60,14 @@ const jobs = new Map<string, LabJob>();
 const campaigns = new Map<string, LabCampaign>();
 const AGENT_STALE_MS = 90_000;
 
+/** Resets module state for isolated unit tests; never exposed by the HTTP API. */
+export function resetLabCoordinatorForTesting(): void {
+  agents.clear();
+  jobs.clear();
+  campaigns.clear();
+}
+
+
 export const LAB_SCENARIO_CATALOG: Record<LabScenarioId, {
   label: string;
   description: string;
