@@ -647,6 +647,7 @@ export function configureLabAutomation(input: {
   targets: Record<string, Record<string, number>>;
 }): LabAutomationPlan {
   if (!input.experimentId) throw new Error('Se requiere un experimento para automatizar la recolección.');
+  if (labAutomationPlan) throw new Error('El plan V4 ya fue configurado. No se pueden cambiar cuotas, cuentas ni tamaño de lote durante el experimento; usa pausar/reanudar.');
   const batchSize = input.batchSize ?? 5;
   if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 5) {
     throw new Error('El tamaño de lote automático debe estar entre 1 y 5 sesiones.');
@@ -714,6 +715,28 @@ export function updateLabAutomationStatus(input: {
     updatedAt: new Date().toISOString(),
   };
   return { ...labAutomationPlan, accounts: [...labAutomationPlan.accounts], targets: structuredClone(labAutomationPlan.targets) };
+}
+
+
+export function resumeLabAutomation(experimentId: string): LabAutomationPlan {
+  if (!labAutomationPlan || labAutomationPlan.experimentId !== experimentId) {
+    throw new Error('No existe un plan V4 persistido para este experimento.');
+  }
+  if (labAutomationPlan.status === 'completed') {
+    throw new Error('El plan V4 ya completó todas sus cuotas y no puede reanudarse.');
+  }
+  labAutomationPlan = {
+    ...labAutomationPlan,
+    enabled: true,
+    status: 'running',
+    lastError: null,
+    updatedAt: new Date().toISOString(),
+  };
+  return {
+    ...labAutomationPlan,
+    accounts: [...labAutomationPlan.accounts],
+    targets: structuredClone(labAutomationPlan.targets),
+  };
 }
 
 export function getLabAutomationPlan(): LabAutomationPlan | null {
