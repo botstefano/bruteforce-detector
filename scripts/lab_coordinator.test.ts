@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  activateLabCampaign,
   claimNextLabJob,
   completeLabJob,
   createLabCampaign,
@@ -47,6 +48,7 @@ test('el manifiesto no se filtra al agente y el etiquetado exige eventos complet
     scenarioIds: ['attack_distributed'],
     phase: 'validation',
   });
+  activateLabCampaign(campaign.campaignId);
 
   const taskEvents = new Map<string, string[]>();
   for (const agentId of agentIds) {
@@ -84,6 +86,7 @@ test('una campaña que no completó todas las solicitudes no puede etiquetarse',
     scenarioIds: ['benign_mixed'],
     phase: 'train',
   });
+  activateLabCampaign(campaign.campaignId);
   const task = claimNextLabJob(agentId);
   assert.ok(task);
   const jobId = String(task.job_id);
