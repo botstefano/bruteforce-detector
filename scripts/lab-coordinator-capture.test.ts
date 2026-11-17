@@ -5,6 +5,9 @@ import {
   createLabCampaign,
   getLabJobCaptureContext,
   registerLabAgent,
+  reportLabJobProgress,
+  serializeLabCoordinatorState,
+  restoreLabCoordinatorState,
   resetLabCoordinatorForTesting,
 } from '../src/lab_coordinator.js';
 
