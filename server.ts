@@ -1720,8 +1720,8 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
   if (!Number.isFinite(Date.parse(trainEndAt)) || !Number.isFinite(Date.parse(validationEndAt)) || Date.parse(trainEndAt) <= Date.now() || Date.parse(validationEndAt) <= Date.parse(trainEndAt)) {
     return res.status(400).json({ error: 'Usa fechas ISO futuras: train_end_at debe ser posterior a ahora y validation_end_at posterior a train_end_at.' });
   }
-  if (protocolName.toLowerCase().includes('v3') && (!testEndAt || !Number.isFinite(Date.parse(testEndAt)) || Date.parse(testEndAt) <= Date.parse(validationEndAt))) {
-    return res.status(400).json({ error: 'El protocolo v3 requiere test_end_at, posterior al corte de validación y expresado en ISO.' });
+  if (/(v3|v4)/i.test(protocolName) && (!testEndAt || !Number.isFinite(Date.parse(testEndAt)) || Date.parse(testEndAt) <= Date.parse(validationEndAt))) {
+    return res.status(400).json({ error: 'Los protocolos v3/v4 requieren test_end_at, posterior al corte de validación y expresado en ISO.' });
   }
   try {
     const experiment = await createExperimentRecord({
@@ -1739,7 +1739,16 @@ app.post('/api/experimentos', requiereAdmin, async (req: Request, res: Response)
         feature_schema: 'centinela-auth-features-v3',
         isolation_forest_random_seed: 42,
       },
-      metadata: data.metadata && typeof data.metadata === 'object' ? data.metadata : {},
+      metadata: {
+        ...(data.metadata && typeof data.metadata === 'object' ? data.metadata : {}),
+        ...( /v4/i.test(protocolName) ? {
+          protocol_revision: 4,
+          generation_profile_version: 2,
+          phase_policy: 'train-benign-only_validation-mixed_validation-freeze_before_test',
+          truth_policy: 'independent_preregistered_campaign_manifest',
+          split_policy: 'temporal_by_event_timestamp_and_campaign_v1',
+        } : {}),
+      },
     });
     // Each experiment begins with a clean in-memory detection state and no inherited model.
     db.limpiar();
@@ -2930,6 +2939,13 @@ async function startServer() {
     app.use((req: Request, res: Response) => {
       res.sendFile(path.join(clientDist, 'index.html'));
     });
+  }
+
+  if (eventStoreStatus().configured) {
+    // The plan and queue are persisted in Supabase. This in-process tick only
+    // advances one batch at a time; after a Render restart the saved plan resumes.
+    setInterval(() => { void tickLabAutomation(); }, 30_000);
+    setTimeout(() => { void tickLabAutomation(); }, 5_000);
   }
 
   server.listen(PORT, '0.0.0.0', () => {
