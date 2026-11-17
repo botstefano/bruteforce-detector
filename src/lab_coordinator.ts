@@ -122,8 +122,15 @@ export function restoreLabCoordinatorState(value: unknown): { agents: number; ca
     if (!raw || typeof raw !== 'object') continue;
     const job = raw as LabJob;
     if (typeof job.jobId !== 'string' || typeof job.campaignId !== 'string' || !Array.isArray(job.outcomes)) continue;
+    const eventIds = Array.isArray(job.summary?.event_ids)
+      ? (job.summary.event_ids as unknown[]).filter((item): item is string => typeof item === 'string')
+      : [];
+    if (!Number.isInteger(job.attemptsCompleted) || job.attemptsCompleted < 0 ||
+        job.attemptsCompleted > job.outcomes.length || eventIds.length !== job.attemptsCompleted) {
+      throw new Error(`La tarea persistida ${job.jobId} tiene progreso e IDs de eventos inconsistentes.`);
+    }
     if (job.status === 'running' || job.status === 'assigned') job.status = 'assigned';
-    jobs.set(job.jobId, { ...job, outcomes: [...job.outcomes], summary: { ...(job.summary ?? {}) } });
+    jobs.set(job.jobId, { ...job, outcomes: [...job.outcomes], summary: { ...(job.summary ?? {}), event_ids: eventIds } });
   }
   for (const campaign of campaigns.values()) refreshCampaignStatus(campaign);
   return { agents: agents.size, campaigns: campaigns.size, jobs: jobs.size };
