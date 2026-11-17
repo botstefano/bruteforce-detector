@@ -150,8 +150,12 @@ export function LabExperimentPanel() {
         socket.on('connect', () => setConnected(true));
         socket.on('disconnect', () => setConnected(false));
         socket.on('connect_error', () => setConnected(false));
-        socket.on('lab_agent_update', (data: LabSnapshot) => setSnapshot(data));
-        socket.on('lab_campaign_update', (data: LabSnapshot) => setSnapshot(data));
+        // Socket payloads are partial coordinator snapshots and omit experiment metadata.
+        // Re-fetch the canonical endpoint instead of replacing the full dashboard state
+        // with an incomplete event payload (which caused cards to disappear/reappear).
+        const refreshFromCoordinator = () => { void refresh(); };
+        socket.on('lab_agent_update', refreshFromCoordinator);
+        socket.on('lab_campaign_update', refreshFromCoordinator);
         socket.on('nuevo_evento', (event: LiveEvent) => {
           setLiveEvents((current) => [event, ...current].slice(0, 80));
           void refresh();
