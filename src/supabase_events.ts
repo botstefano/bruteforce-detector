@@ -780,6 +780,22 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
   const labeled = testEvents.filter((event) => event.ground_truth_label !== 'unknown');
   const benign = labeled.filter((event) => event.ground_truth_label === 'benign').length;
   const attacks = labeled.filter((event) => event.ground_truth_label === 'attack').length;
+  const independentTestCampaigns = new Set(
+    labeled.map((event) => event.campaign_id).filter((campaignId): campaignId is string => Boolean(campaignId))
+  );
+  const testScenarioCounts = Object.fromEntries(
+    [...new Set(labeled.map((event) => event.scenario || 'unknown'))].sort().map((scenario) => {
+      const subset = labeled.filter((event) => (event.scenario || 'unknown') === scenario);
+      return [scenario, {
+        events: subset.length,
+        benign: subset.filter((event) => event.ground_truth_label === 'benign').length,
+        attack: subset.filter((event) => event.ground_truth_label === 'attack').length,
+        campaigns: new Set(subset.map((event) => event.campaign_id).filter(Boolean)).size,
+        observed_sources: new Set(subset.map((event) => event.source_ip_hash).filter(Boolean)).size,
+      }];
+    })
+  );
+  const bothClassesPresent = benign > 0 && attacks > 0;
 
   const methods = {
     rules: calculateMetrics(labeled, (event) => event.alerta_reglas),
@@ -810,13 +826,17 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
     test_unknown_events: testEvents.filter((event) => event.ground_truth_label === 'unknown').length,
     benign_events: benign,
     attack_events: attacks,
-    metrics: baselineFrozen && labeled.length > 0 ? methods : null,
+    independent_test_campaigns: independentTestCampaigns.size,
+    test_scenario_counts: testScenarioCounts,
+    metrics: baselineFrozen && bothClassesPresent ? methods : null,
     baseline_frozen: baselineFrozen,
     latency,
     note: !baselineFrozen
       ? 'El baseline de entrenamiento aún no está congelado para este experimento; no se publican métricas de clasificación.'
       : labeled.length === 0
         ? 'No hay eventos de prueba etiquetados; no se calculan métricas de clasificación.'
-        : 'Las métricas se calculan exclusivamente sobre eventos capturados, etiquetados y reservados para el periodo de prueba.'
+        : !bothClassesPresent
+          ? 'El test aún no contiene ambas clases (benign y attack); no se publican métricas de clasificación.'
+          : 'Las métricas se calculan exclusivamente sobre eventos capturados, etiquetados y reservados para el periodo de prueba.'
   };
 }
