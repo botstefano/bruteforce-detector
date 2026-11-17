@@ -324,7 +324,8 @@ export async function restoreActiveExperimentRecord() {
   let query = client
     .from('centinela_experiments')
     .select('id, protocol_name, scenario, status, started_at, metadata')
-    .eq('status', 'running');
+    .eq('status', 'running')
+    .ilike('protocol_name', '%v3%');
   if (activeExperimentId) query = query.eq('id', activeExperimentId);
   const { data, error } = await query
     .order('started_at', { ascending: false })
@@ -362,6 +363,7 @@ export async function createExperimentRecord(input: {
     .from('centinela_experiments')
     .select('id, protocol_name')
     .eq('status', 'running')
+    .ilike('protocol_name', '%v3%')
     .limit(1)
     .maybeSingle();
   if (existingError) throw new Error(`No se pudo comprobar si existe otro experimento activo: ${existingError.message}`);
