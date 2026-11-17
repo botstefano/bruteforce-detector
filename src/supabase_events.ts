@@ -501,6 +501,7 @@ export function saveLabCoordinatorState(
       .maybeSingle();
     if (error) throw new Error(`No se pudo persistir el estado del coordinador: ${error.message}`);
     if (!data) throw new Error('El experimento dejó de estar activo antes de guardar el estado del coordinador.');
+    if (activeExperimentId === experimentId) activeExperimentMetadata = updatedMetadata;
   });
   labCoordinatorPersistQueue = operation.catch(() => undefined);
   return operation;
