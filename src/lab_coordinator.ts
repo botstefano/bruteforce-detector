@@ -938,6 +938,7 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
   return {
     generated_at: new Date(now).toISOString(),
     agent_stale_after_ms: AGENT_STALE_MS,
+    automation: getLabAutomationPlan(),
     agents: agentList,
     campaigns: campaignList,
     scenarios: Object.entries(LAB_SCENARIO_CATALOG).map(([id, value]) => ({
