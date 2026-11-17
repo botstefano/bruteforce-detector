@@ -167,6 +167,11 @@ export function registerLabAgent(input: {
   return { ...agent };
 }
 
+export function verifyLabAgentOrigin(agentId: string, egressIpHash: string): boolean {
+  const agent = agents.get(agentId);
+  return Boolean(agent && agent.egressIpHash === egressIpHash.toLowerCase());
+}
+
 export function heartbeatLabAgent(agentId: string): {
   agent: LabAgent;
   command: 'continue' | 'pause' | 'cancel';
