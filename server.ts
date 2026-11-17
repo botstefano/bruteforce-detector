@@ -32,6 +32,7 @@ import {
   fetchBenignTrainingSamples,
   fetchRecentObservedEventsForState,
   freezeActiveExperimentTraining,
+  freezeActiveExperimentValidation,
   getAnalyticsIdentifiers,
   getActiveExperimentId,
   getActiveExperimentState,
@@ -557,6 +558,7 @@ app.get('/api/experimentos/estado', requiereAdmin, (_req: Request, res: Response
 app.get('/api/lab/state', requiereAdmin, (_req: Request, res: Response) => {
   return res.json({
     ...getLabSnapshot(getActiveExperimentId()),
+    experiment: getActiveExperimentState(),
     experiment_id: getActiveExperimentId(),
     agent_token_configured: CENTINELA_LAB_AGENT_TOKEN.length >= 32,
   });
@@ -570,15 +572,51 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
     const activeExperiment = getActiveExperimentState();
     if (!activeExperiment) return res.status(409).json({ error: 'Crea primero el experimento temporal v3.' });
     if (eventCapturePaused) return res.status(503).json({ error: eventCapturePauseReason || 'La captura está pausada.' });
+    const now = Date.now();
+    const phase = now < activeExperiment.trainEndMs
+      ? 'train'
+      : now < activeExperiment.validationEndMs
+        ? 'validation'
+        : 'test';
+    const metadataRecord = await getExperimentMetadata(activeExperiment.id);
+    const experimentMetadata = (metadataRecord.metadata ?? {}) as Record<string, unknown>;
+    if (phase !== 'train' && experimentMetadata.training_frozen !== true) {
+      return res.status(409).json({ error: 'No se permiten campañas de validación o test hasta entrenar y congelar el baseline benigno.' });
+    }
+    if (phase === 'test' && experimentMetadata.validation_frozen !== true) {
+      return res.status(409).json({ error: 'El test está bloqueado: revisa y congela explícitamente la configuración después de completar la validación.' });
+    }
     const scenarioIds = Array.isArray(req.body?.scenario_ids) ? req.body.scenario_ids : [];
+    if (phase === 'train' && scenarioIds.some((id: unknown) => id !== 'benign_mixed')) {
+      return res.status(409).json({ error: 'Durante entrenamiento solo se permite actividad benigna controlada.' });
+    }
     const targetAccount = typeof req.body?.target_account === 'string' ? req.body.target_account.trim().toLowerCase() : '';
     const repetitions = Number(req.body?.repetitions ?? 1);
+    const phaseEndAtMs = phase === 'train'
+      ? activeExperiment.trainEndMs
+      : phase === 'validation'
+        ? activeExperiment.validationEndMs
+        : null;
     const { campaign, manifest } = createLabCampaign({
       experimentId: activeExperiment.id,
       targetAccount,
       scenarioIds,
       repetitions,
+      phase,
     });
+    if (phaseEndAtMs !== null) {
+      const plannedJobs = (getLabSnapshot(activeExperiment.id).campaigns as Array<Record<string, unknown>>)
+        .find((item) => item.campaign_id === campaign.campaignId)?.jobs as Array<Record<string, unknown>>;
+      const latestFinish = Math.max(...plannedJobs.map((job) => {
+        const start = Date.parse(String(job.start_at));
+        const scenario = LAB_SCENARIO_CATALOG[String(job.scenario_id) as keyof typeof LAB_SCENARIO_CATALOG];
+        return start + (scenario.outcomes.length * 25_000) + ((scenario.outcomes.length - 1) * scenario.intervalMs);
+      }));
+      if (!Number.isFinite(latestFinish) || latestFinish >= phaseEndAtMs) {
+        updateLabCampaign(campaign.campaignId, 'stop');
+        return res.status(409).json({ error: 'La duración máxima estimada de la campaña cruza el corte temporal de la fase. Reduce repeticiones o inicia antes.' });
+      }
+    }
     try {
       await appendLabCampaignManifest(activeExperiment.id, manifest);
     } catch (error) {
@@ -589,6 +627,24 @@ app.post('/api/lab/campaigns', requiereAdmin, async (req: Request, res: Response
     return res.status(201).json({ campaign_id: campaign.campaignId, manifest, state: getLabSnapshot(activeExperiment.id) });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo crear la campaña experimental.';
+    return res.status(400).json({ error: message });
+  }
+});
+
+app.post('/api/experimentos/:experimentId/congelar_validacion', requiereAdmin, async (req: Request, res: Response) => {
+  try {
+    const result = await freezeActiveExperimentValidation(singleRouteParam(req.params.experimentId));
+    return res.json({
+      status: 'validation_frozen',
+      validation: (result.metadata as Record<string, unknown>)?.validation_frozen === true,
+      validation_total_events: (result.metadata as Record<string, unknown>)?.validation_total_events,
+      validation_benign_events: (result.metadata as Record<string, unknown>)?.validation_benign_events,
+      validation_attack_events: (result.metadata as Record<string, unknown>)?.validation_attack_events,
+      validation_config_version: (result.metadata as Record<string, unknown>)?.validation_config_version,
+      validation_code_version: (result.metadata as Record<string, unknown>)?.validation_code_version,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudo congelar la configuración validada.';
     return res.status(400).json({ error: message });
   }
 });
