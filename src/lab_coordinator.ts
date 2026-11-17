@@ -402,7 +402,11 @@ export function heartbeatLabAgent(agentId: string): {
     refreshCampaignStatus(campaigns.get(job.campaignId)!);
     return { agent: { ...agent }, command: 'pause' };
   }
-  if (job.status === 'paused') job.status = 'running';
+  if (job.status === 'paused') {
+    job.status = 'running';
+    const campaign = campaigns.get(job.campaignId);
+    if (campaign) refreshCampaignStatus(campaign);
+  }
   agent.status = 'running';
   return { agent: { ...agent }, command: 'continue' };
 }
@@ -964,6 +968,21 @@ export function expireStaleLabJobs(now = Date.now()): number {
     if (!['assigned', 'running', 'paused'].includes(job.status) || !job.agentId) continue;
     const agent = agents.get(job.agentId);
     if (agent && now - agent.lastSeenAt <= AGENT_STALE_MS) continue;
+
+    // A deliberate campaign pause is a durable checkpoint. A laptop may sleep
+    // for hours, so do not turn a paused job into a failure after the heartbeat
+    // timeout. If the runner went to sleep before acknowledging the pause,
+    // pauseRequested is sufficient evidence to preserve the current job.
+    if (job.status === 'paused' || job.pauseRequested) {
+      job.status = 'paused';
+      if (agent) agent.status = 'offline';
+      const campaign = campaigns.get(job.campaignId);
+      if (campaign) refreshCampaignStatus(campaign);
+      continue;
+    }
+
+    // Unexpected loss of an active runner remains a failure; only an explicit
+    // pause can preserve the job and its confirmed event progress.
     job.status = 'failed';
     job.finishedAt = now;
     job.pauseRequested = false;
@@ -1061,9 +1080,19 @@ export function updateLabCampaign(campaignId: string, action: 'pause' | 'resume'
     for (const jobId of campaign.jobIds) {
       const job = jobs.get(jobId);
       if (!job) continue;
-      if (job.status === 'paused' && !job.cancelRequested) job.status = 'queued';
+      if (job.status === 'paused' && !job.cancelRequested) {
+        const agent = job.agentId ? agents.get(job.agentId) : null;
+        const runnerStillOwnsJob = Boolean(agent && agent.currentJobId === job.jobId);
+        // Keep an already assigned task attached to its original runner. Its
+        // next heartbeat will move it from paused to running without losing
+        // confirmed progress. Only never-claimed jobs return to the queue.
+        if (!runnerStillOwnsJob) job.status = 'queued';
+      }
       job.pauseRequested = false;
     }
+    // If the runner is still asleep, the campaign remains visibly paused until
+    // its next authenticated heartbeat actually resumes the assigned task.
+    refreshCampaignStatus(campaign);
   }
   return { ...campaign };
 }
