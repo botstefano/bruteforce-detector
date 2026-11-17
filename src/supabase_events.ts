@@ -188,7 +188,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     alerta_lof: event.modelos_ml.lof.alerta,
     score_ml: event.score_ml,
     features: event.features,
-    feature_schema_version: 'centinela-auth-features-v2',
+    feature_schema_version: 'centinela-auth-features-v3',
     latency_rules_ms: event.latency_rules_ms,
     latency_ml_ms: event.latency_ml_ms,
     latency_total_ms: event.latency_total_ms,
