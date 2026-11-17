@@ -1170,6 +1170,7 @@ export function getLabSnapshot(experimentId?: string | null): Record<string, unk
           attempts_completed: job.attemptsCompleted,
           attempts_planned: job.outcomes.length,
           planned_inter_attempt_delays_ms: [...job.interAttemptDelaysMs],
+          planned_session_gap_after_ms: job.sessionGapAfterMs,
           session_profile: { ...job.sessionProfile },
           start_at: new Date(job.startAt).toISOString(),
           deadline_at: job.deadlineAt !== null ? new Date(job.deadlineAt).toISOString() : null,
