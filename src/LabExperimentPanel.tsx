@@ -450,7 +450,7 @@ export function LabExperimentPanel() {
               <button type="button" disabled={busy} onClick={() => void finishExperiment()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">Finalizar experimento</button>
             </div>
           )}
-          {Date.now() >= snapshot.experiment.validationEndMs && snapshot.experiment.trainingFrozen && !snapshot.experiment.validationFrozen && (
+          {snapshot.protocol_revision !== 4 && Date.now() >= snapshot.experiment.validationEndMs && snapshot.experiment.trainingFrozen && !snapshot.experiment.validationFrozen && (
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-[11px] text-amber-300">Revisa las métricas y etiquetas de validación. Al congelar, el sistema registrará el código y versión de configuración antes de permitir campañas de test.</p>
               <button type="button" disabled={busy} onClick={() => void freezeValidation()} className="rounded-xl bg-amber-600 px-4 py-3 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-40">Congelar configuración de validación</button>
@@ -527,6 +527,7 @@ export function LabExperimentPanel() {
         )}
       </div>
 
+      {snapshot?.protocol_revision !== 4 && (
       <div className={card}>
         <div>
           <h3 className="text-sm font-bold text-white">Configurar campaña experimental</h3>
@@ -576,6 +577,7 @@ export function LabExperimentPanel() {
           </button>
         </div>
       </div>
+      )}
 
       <div className={card}>
         <h3 className="text-sm font-bold text-white">Campañas y ejecuciones</h3>
