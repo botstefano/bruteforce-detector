@@ -8,6 +8,8 @@ import {
   getLabAutomationPlan,
   registerLabAgent,
   resetLabCoordinatorForTesting,
+  resumeLabAutomation,
+  stopLabAutomation,
   restoreLabCoordinatorState,
   serializeLabCoordinatorState,
 } from '../src/lab_coordinator.js';
@@ -93,4 +95,58 @@ test('automation plan persists and only schedules benign activity during trainin
   assert.equal(restored?.enabled, true);
   assert.equal(restored?.experimentId, 'experiment-v4-test');
   assert.equal(getNextLabAutomationBatch('experiment-v4-test', 'train')?.scenarioId, 'benign_mixed');
+});
+
+
+test('legacy manual campaigns remain on the original V3 fixed profile', () => {
+  resetLabCoordinatorForTesting();
+  registerRunner();
+
+  const { manifest } = createLabCampaign({
+    experimentId: 'experiment-v3-compatibility',
+    targetAccount: 'ronan',
+    scenarioIds: ['benign_mixed'],
+    phase: 'train',
+    repetitions: 1,
+  });
+
+  const run = (manifest.scenarios as Array<Record<string, unknown>>)[0];
+  assert.equal(run.planned_attempts_per_agent, 7);
+  assert.deepEqual(run.planned_inter_attempt_delays_ms, [4_000, 4_000, 4_000, 4_000, 4_000, 4_000]);
+  assert.equal(run.session_profile && (run.session_profile as Record<string, unknown>).profile_version, 1);
+  assert.equal(manifest.generation_profile_version, 1);
+});
+
+test('a preregistered plan cannot be reconfigured; it can only be paused and resumed', () => {
+  resetLabCoordinatorForTesting();
+  configureLabAutomation({
+    experimentId: 'experiment-v4-lock',
+    batchSize: 5,
+    accounts: ['ronan', 'andy', 'stefano'],
+    targets: {
+      train: { benign_mixed: 12 },
+      validation: { benign_mixed: 10, attack_rapid: 5, attack_low_frequency: 5, attack_distributed: 2 },
+      test: { benign_mixed: 20, attack_rapid: 10, attack_low_frequency: 10, attack_distributed: 4 },
+    },
+  });
+
+  assert.throws(() => configureLabAutomation({
+    experimentId: 'experiment-v4-lock',
+    batchSize: 1,
+    accounts: ['ronan'],
+    targets: {
+      train: { benign_mixed: 1 },
+      validation: { benign_mixed: 1, attack_rapid: 1, attack_low_frequency: 1, attack_distributed: 1 },
+      test: { benign_mixed: 1, attack_rapid: 1, attack_low_frequency: 1, attack_distributed: 1 },
+    },
+  }), /ya fue configurado/i);
+
+  const paused = stopLabAutomation();
+  assert.equal(paused?.status, 'paused');
+  assert.equal(paused?.enabled, false);
+  const resumed = resumeLabAutomation('experiment-v4-lock');
+  assert.equal(resumed.status, 'running');
+  assert.equal(resumed.enabled, true);
+  assert.equal(resumed.batchSize, 5);
+  assert.equal(resumed.targets.train.benign_mixed, 12);
 });
