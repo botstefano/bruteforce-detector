@@ -801,8 +801,10 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
     (campaign) => campaign.experimentId === experimentId &&
       campaign.phase === phase && campaign.scheduledByAutomation
   );
-  const counts = new Map<LabScenarioId, { completed: number; failed: number }>();
-  for (const scenarioId of Object.keys(phaseTargets) as LabScenarioId[]) counts.set(scenarioId, { completed: 0, failed: 0 });
+  const counts = new Map<LabScenarioId, { completed: number; failed: number; failedTotal: number }>();
+  for (const scenarioId of Object.keys(phaseTargets) as LabScenarioId[]) {
+    counts.set(scenarioId, { completed: 0, failed: 0, failedTotal: 0 });
+  }
   // The circuit breaker measures consecutive failed sessions, not lifetime
   // failures. A later successful replacement session clears the failure streak.
   for (const campaign of [...phaseCampaigns].sort((a, b) => a.createdAt - b.createdAt)) {
@@ -823,6 +825,7 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
         count.failed = 0;
       } else if (runJobs.some((job) => job.status === 'failed' || job.status === 'cancelled')) {
         count.failed += 1;
+        count.failedTotal += 1;
       }
     }
   }
@@ -831,14 +834,16 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
     .filter((scenarioId) => phaseTargets[scenarioId] !== undefined);
   for (const scenarioId of ordered) {
     const target = phaseTargets[scenarioId] ?? 0;
-    const count = counts.get(scenarioId) ?? { completed: 0, failed: 0 };
+    const count = counts.get(scenarioId) ?? { completed: 0, failed: 0, failedTotal: 0 };
     if (count.completed >= target) continue;
     if (count.failed >= 3 && !plan.recoveryPending) {
       updateLabAutomationStatus({ status: 'paused', enabled: false, lastError: `Se pausó la automatización: ${scenarioId} acumula tres ejecuciones fallidas.` });
       return null;
     }
     const remaining = target - count.completed;
-    const recoveryBatchSize = plan.recoveryPending ? Math.min(plan.batchSize, count.failed) : plan.batchSize;
+    // Recovery replaces every failed session that is still missing from the
+    // completed quota, even when a campaign also contains later successes.
+    const recoveryBatchSize = plan.recoveryPending ? Math.min(plan.batchSize, count.failedTotal) : plan.batchSize;
     const startAccountIndex = (count.completed + count.failed) % plan.accounts.length;
     const orderedAccounts = plan.accounts.map((_, index) => plan.accounts[(startAccountIndex + index) % plan.accounts.length]);
     return {

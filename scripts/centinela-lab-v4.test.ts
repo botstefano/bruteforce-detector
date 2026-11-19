@@ -10,6 +10,7 @@ import {
   getNextLabAutomationBatch,
   getLabAutomationPlan,
   registerLabAgent,
+  reportLabJobProgress,
   resetLabCoordinatorForTesting,
   resumeLabAutomation,
   stopLabAutomation,
@@ -159,6 +160,39 @@ test('resume after three failed sessions schedules a bounded replacement batch',
 
   assert.equal(getNextLabAutomationBatch('experiment-v4-recovery', 'train'), null);
   assert.equal(getLabAutomationPlan()?.status, 'paused');
+
+  // Model a later successful session in the same experiment. It clears the
+  // consecutive-failure streak but must not erase the three failed quota slots.
+  registerRunner('runner-recovery-04');
+  const { campaign: successfulCampaign } = createLabCampaign({
+    experimentId: 'experiment-v4-recovery',
+    targetAccount: 'ronan',
+    scenarioIds: ['benign_mixed'],
+    phase: 'train',
+    repetitions: 1,
+    scheduledByAutomation: true,
+  });
+  activateLabCampaign(successfulCampaign.campaignId);
+  try {
+    Date.now = () => realNow() + 60_000;
+    const successfulTask = claimNextLabJob('runner-recovery-04');
+    assert.ok(successfulTask);
+    const jobId = String(successfulTask.job_id);
+    const outcomes = successfulTask.outcomes as boolean[];
+    const eventIds = outcomes.map((_, index) =>
+      `10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`
+    );
+    eventIds.forEach((eventId, index) => reportLabJobProgress('runner-recovery-04', jobId, index + 1, eventId));
+    completeLabJob({
+      agentId: 'runner-recovery-04',
+      jobId,
+      status: 'completed',
+      attemptsCompleted: outcomes.length,
+      summary: { event_ids: eventIds },
+    });
+  } finally {
+    Date.now = realNow;
+  }
 
   const resumed = resumeLabAutomation('experiment-v4-recovery');
   assert.equal(resumed.recoveryPending, true);
