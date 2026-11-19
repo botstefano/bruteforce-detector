@@ -1042,7 +1042,7 @@ async function tickLabAutomation(): Promise<void> {
       await saveLabCoordinatorState(experiment.id, () => serializeLabCoordinatorState(experiment.id));
       activateLabCampaign(campaign.campaignId);
       await saveLabCoordinatorState(experiment.id, () => serializeLabCoordinatorState(experiment.id));
-      updateLabAutomationStatus({ lastError: null });
+      updateLabAutomationStatus({ lastError: null, recoveryPending: false });
       await persistLabAutomationState(experiment.id);
       console.log(`Recolección automática: campaña ${campaign.campaignId}, fase ${phase}, escenario ${batch.scenarioId}, ${batch.repetitions} sesiones.`);
     } catch (error) {
