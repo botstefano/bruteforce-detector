@@ -834,7 +834,7 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
     .filter((scenarioId) => phaseTargets[scenarioId] !== undefined);
   for (const scenarioId of ordered) {
     const target = phaseTargets[scenarioId] ?? 0;
-    const count = counts.get(scenarioId) ?? { completed: 0, failed: 0 };
+    const count = counts.get(scenarioId) ?? { completed: 0, failed: 0, failedTotal: 0 };
     if (count.completed >= target) continue;
     if (count.failed >= 3 && !plan.recoveryPending) {
       updateLabAutomationStatus({ status: 'paused', enabled: false, lastError: `Se pausó la automatización: ${scenarioId} acumula tres ejecuciones fallidas.` });
