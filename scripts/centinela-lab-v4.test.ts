@@ -135,10 +135,12 @@ test('resume after three failed sessions schedules a bounded replacement batch',
   activateLabCampaign(campaign.campaignId);
 
   const realNow = Date.now;
+  let fakeNow = realNow() + 60_000;
   try {
-    // Campaign sessions start 25 seconds in the future; advance into the
-    // permitted final-minute claim window for this deterministic unit test.
-    Date.now = () => realNow() + 60_000;
+    // Campaign sessions are sequential and include up to 25 minutes of rest.
+    // Advance one hour per planned session so every runner is inside its
+    // permitted final-minute claim window.
+    Date.now = () => fakeNow;
     for (const agentId of ['runner-recovery-01', 'runner-recovery-02', 'runner-recovery-03']) {
       const task = claimNextLabJob(agentId);
       assert.ok(task);
@@ -149,6 +151,7 @@ test('resume after three failed sessions schedules a bounded replacement batch',
         attemptsCompleted: 0,
         summary: { event_ids: [] },
       });
+      fakeNow += 60 * 60_000;
     }
   } finally {
     Date.now = realNow;
