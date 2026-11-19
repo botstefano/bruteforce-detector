@@ -77,7 +77,52 @@ test('el manifiesto no se filtra al agente y el etiquetado exige eventos complet
   assert.ok(result.jobs.every((job) => job.eventIds.length === 2));
 });
 
-test('una campaña que no completó todas las solicitudes no puede etiquetarse', () => {
+test('una campaña fallida solo expone sesiones completas para etiquetado', () => {
+  const prefix = unique();
+  const agentIds = registerAgents(prefix, 2);
+  const { campaign } = createLabCampaign({
+    experimentId: unique(),
+    targetAccount: 'andy',
+    scenarioIds: ['benign_mixed'],
+    phase: 'train',
+    repetitions: 2,
+  });
+  activateLabCampaign(campaign.campaignId);
+
+  const completedTask = claimNextLabJob(agentIds[0]);
+  assert.ok(completedTask);
+  const completedJobId = String(completedTask.job_id);
+  const completedEventIds = (completedTask.outcomes as boolean[]).map(() => randomUUID());
+  completedEventIds.forEach((eventId, index) => reportLabJobProgress(agentIds[0], completedJobId, index + 1, eventId));
+  completeLabJob({
+    agentId: agentIds[0],
+    jobId: completedJobId,
+    status: 'completed',
+    attemptsCompleted: completedEventIds.length,
+    summary: { event_ids: completedEventIds },
+  });
+
+  const failedTask = claimNextLabJob(agentIds[1]);
+  assert.ok(failedTask);
+  const failedJobId = String(failedTask.job_id);
+  const partialEventIds = [randomUUID()];
+  reportLabJobProgress(agentIds[1], failedJobId, 1, partialEventIds[0]);
+  completeLabJob({
+    agentId: agentIds[1],
+    jobId: failedJobId,
+    status: 'failed',
+    attemptsCompleted: 1,
+    summary: { event_ids: partialEventIds },
+  });
+
+  const result = getLabCampaignForLabeling(campaign.campaignId);
+  assert.equal(result.campaign.status, 'failed');
+  assert.equal(result.jobs.length, 1);
+  assert.deepEqual(result.jobs[0]?.eventIds, completedEventIds);
+  assert.equal(result.jobs.some((job) => job.eventIds.includes(partialEventIds[0])), false);
+});
+
+test('una campaña sin ninguna sesión completa no puede etiquetarse', () => {
   const prefix = unique();
   const [agentId] = registerAgents(prefix, 1);
   const { campaign } = createLabCampaign({
