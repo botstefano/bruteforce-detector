@@ -173,7 +173,6 @@ test('resume after three failed sessions schedules a bounded replacement batch',
     scheduledByAutomation: true,
   });
   activateLabCampaign(successfulCampaign.campaignId);
-  const realNow = Date.now;
   try {
     Date.now = () => realNow() + 60_000;
     const successfulTask = claimNextLabJob('runner-recovery-04');
