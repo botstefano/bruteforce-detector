@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   activateLabCampaign,
   claimNextLabJob,
+  completeLabJob,
   createLabCampaign,
   getLabJobCaptureContext,
   registerLabAgent,
