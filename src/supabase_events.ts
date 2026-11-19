@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 export type GroundTruthLabel = 'unknown' | 'benign' | 'attack';
@@ -26,6 +26,7 @@ export interface CapturedAuthEvent {
   latency_ml_ms: number;
   latency_total_ms: number;
   campaign_id?: string | null;
+  request_id?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -72,8 +73,9 @@ const supabaseKey =
 const hashSecret = process.env.CENTINELA_HASH_SECRET?.trim() ?? '';
 let activeExperimentId: string | null = null;
 let activeExperimentMetadata: Record<string, unknown> = {};
-let activeSplitBoundaries: { trainEndMs: number; validationEndMs: number } | null = null;
+let activeSplitBoundaries: { trainEndMs: number; validationEndMs: number; testEndMs: number | null } | null = null;
 let activeTrainingFrozen = false;
+let activeValidationFrozen = false;
 
 function splitForTimestamp(timestampSeconds: number): 'unassigned' | 'train' | 'validation' | 'test' {
   if (!activeSplitBoundaries) return 'unassigned';
@@ -104,7 +106,9 @@ export function getActiveExperimentState() {
     id: activeExperimentId,
     trainEndMs: activeSplitBoundaries.trainEndMs,
     validationEndMs: activeSplitBoundaries.validationEndMs,
+    testEndMs: activeSplitBoundaries.testEndMs,
     trainingFrozen: activeTrainingFrozen,
+    validationFrozen: activeValidationFrozen,
   };
 }
 
@@ -137,6 +141,41 @@ export async function checkSupabaseConnection(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export function labAttemptRequestId(jobId: string, attemptIndex: number): string {
+  if (!/^[a-f0-9-]{36}$/i.test(jobId) || !Number.isInteger(attemptIndex) || attemptIndex < 0 || attemptIndex > 11) {
+    throw new Error('No se puede construir la clave idempotente de un intento de laboratorio inválido.');
+  }
+  const bytes = createHash('sha256').update(`centinela-lab-attempt:${jobId}:${attemptIndex}`).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export async function findObservedLabAttempt(requestId: string): Promise<{
+  event_id: string;
+  auth_success: boolean;
+  experiment_id: string | null;
+  campaign_id: string | null;
+  metadata: Record<string, unknown>;
+} | null> {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  const { data, error } = await client
+    .from('centinela_auth_events')
+    .select('event_id, auth_success, experiment_id, campaign_id, metadata')
+    .eq('request_id', requestId)
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo comprobar la idempotencia del intento del agente: ${error.message}`);
+  if (!data) return null;
+  return data as {
+    event_id: string;
+    auth_success: boolean;
+    experiment_id: string | null;
+    campaign_id: string | null;
+    metadata: Record<string, unknown>;
+  };
 }
 
 function hashIdentifier(value: string): string {
@@ -173,10 +212,10 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     ground_truth_updated_at: null,
     ground_truth_notes: null,
     experiment_id: activeExperimentId,
-    scenario: event.origen,
+    scenario: typeof event.metadata?.scenario_id === 'string' ? event.metadata.scenario_id : event.origen,
     campaign_id: event.campaign_id ?? null,
     dataset_split: splitForTimestamp(event.timestamp),
-    request_id: null,
+    request_id: event.request_id ?? null,
     alerta_reglas: event.alerta_reglas,
     razon_reglas: event.razon_reglas,
     alerta_ml: event.alerta_ml,
@@ -185,7 +224,7 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     alerta_lof: event.modelos_ml.lof.alerta,
     score_ml: event.score_ml,
     features: event.features,
-    feature_schema_version: 'centinela-auth-features-v2',
+    feature_schema_version: 'centinela-auth-features-v3',
     latency_rules_ms: event.latency_rules_ms,
     latency_ml_ms: event.latency_ml_ms,
     latency_total_ms: event.latency_total_ms,
@@ -302,12 +341,13 @@ export async function fetchBenignTrainingSamples(windowSeconds = 120): Promise<n
       intervalStd = Math.sqrt(variance);
     }
 
+    // v3 baseline matches the four-dimensional online feature schema.
+    // Absolute UTC hour was removed to prevent artificial day-boundary drift.
     samples.push([
       timestamps.length,
       distinctUsers,
       Math.round(intervalMean * 100) / 100,
       Math.round(intervalStd * 100) / 100,
-      new Date(timestamp * 1000).getUTCHours(),
     ]);
   }
 
@@ -333,10 +373,12 @@ export async function restoreActiveExperimentRecord() {
   const metadata = (data.metadata ?? {}) as Record<string, unknown>;
   activeExperimentMetadata = metadata;
   activeTrainingFrozen = metadata.training_frozen === true;
+  activeValidationFrozen = metadata.validation_frozen === true;
   const trainEndMs = typeof metadata.train_end_at === 'string' ? Date.parse(metadata.train_end_at) : NaN;
   const validationEndMs = typeof metadata.validation_end_at === 'string' ? Date.parse(metadata.validation_end_at) : NaN;
+  const testEndMs = typeof metadata.test_end_at === 'string' ? Date.parse(metadata.test_end_at) : NaN;
   activeSplitBoundaries = Number.isFinite(trainEndMs) && Number.isFinite(validationEndMs) && validationEndMs > trainEndMs
-    ? { trainEndMs, validationEndMs }
+    ? { trainEndMs, validationEndMs, testEndMs: Number.isFinite(testEndMs) && testEndMs > validationEndMs ? testEndMs : null }
     : null;
   return data;
 }
@@ -346,6 +388,7 @@ export async function createExperimentRecord(input: {
   scenario: string;
   trainEndAt: string;
   validationEndAt: string;
+  testEndAt?: string;
   description?: string;
   detectorConfig?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
@@ -366,14 +409,27 @@ export async function createExperimentRecord(input: {
   if (!Number.isFinite(trainEndMs) || !Number.isFinite(validationEndMs) || trainEndMs <= Date.now() || validationEndMs <= trainEndMs) {
     throw new Error('Define train_end_at y validation_end_at como fechas ISO futuras, con validation_end_at posterior a train_end_at.');
   }
+  const testEndMs = input.testEndAt ? Date.parse(input.testEndAt) : NaN;
+  const requiresTestCutoff = /v[34]/i.test(input.protocolName);
+  if (requiresTestCutoff && (!Number.isFinite(testEndMs) || testEndMs <= validationEndMs)) {
+    throw new Error('Los protocolos v3/v4 exigen test_end_at en ISO futuro, posterior a validation_end_at.');
+  }
+  if (input.testEndAt && (!Number.isFinite(testEndMs) || testEndMs <= validationEndMs)) {
+    throw new Error('test_end_at debe ser una fecha ISO posterior a validation_end_at.');
+  }
   const trainEndAt = new Date(trainEndMs).toISOString();
   const validationEndAt = new Date(validationEndMs).toISOString();
+  const testEndAt = input.testEndAt ? new Date(testEndMs).toISOString() : null;
   const experimentMetadata = {
     ...(input.metadata ?? {}),
     train_end_at: trainEndAt,
     validation_end_at: validationEndAt,
-    split_policy: 'temporal_by_event_timestamp_v1',
+    ...(testEndAt ? { test_end_at: testEndAt } : {}),
+    split_policy: Number(input.metadata?.protocol_revision) >= 4
+      ? 'temporal_by_event_timestamp_and_campaign_v1'
+      : 'temporal_by_event_timestamp_v1',
     training_frozen: false,
+    validation_frozen: false,
   };
   const { data, error } = await client
     .from('centinela_experiments')
@@ -392,8 +448,188 @@ export async function createExperimentRecord(input: {
   if (error) throw new Error(`No se pudo crear el experimento: ${error.message}`);
   activeExperimentId = data.id as string;
   activeExperimentMetadata = experimentMetadata;
-  activeSplitBoundaries = { trainEndMs, validationEndMs };
+  activeSplitBoundaries = { trainEndMs, validationEndMs, testEndMs: Number.isFinite(testEndMs) ? testEndMs : null };
   activeTrainingFrozen = false;
+  activeValidationFrozen = false;
+  return data;
+}
+
+let labCoordinatorPersistQueue: Promise<void> = Promise.resolve();
+
+export async function loadLabCoordinatorState(experimentId: string): Promise<Record<string, unknown> | null> {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .select('id, metadata, status')
+    .eq('id', experimentId)
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo restaurar el estado del coordinador: ${error.message}`);
+  if (!data || data.status !== 'running') return null;
+  const metadata = (data.metadata ?? {}) as Record<string, unknown>;
+  const snapshot = metadata.lab_coordinator_state;
+  return snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+    ? snapshot as Record<string, unknown>
+    : null;
+}
+
+export function saveLabCoordinatorState(
+  experimentId: string,
+  getSnapshot: () => Record<string, unknown>,
+): Promise<void> {
+  if (!client || !hashSecret) return Promise.reject(new Error('El almacén persistente de Centinela no está configurado.'));
+  const operation = labCoordinatorPersistQueue.then(async () => {
+    const { data: current, error: readError } = await client!
+      .from('centinela_experiments')
+      .select('id, metadata, status')
+      .eq('id', experimentId)
+      .maybeSingle();
+    if (readError) throw new Error(`No se pudo leer el estado antes de persistir el coordinador: ${readError.message}`);
+    if (!current || current.status !== 'running') throw new Error('El experimento dejó de estar activo; no se guardó el estado del coordinador.');
+
+    const metadata = (current.metadata ?? {}) as Record<string, unknown>;
+    const updatedMetadata = {
+      ...metadata,
+      lab_coordinator_state: getSnapshot(),
+      lab_coordinator_state_saved_at: new Date().toISOString(),
+    };
+    const { data, error } = await client!
+      .from('centinela_experiments')
+      .update({ metadata: updatedMetadata })
+      .eq('id', experimentId)
+      .eq('status', 'running')
+      .select('id')
+      .maybeSingle();
+    if (error) throw new Error(`No se pudo persistir el estado del coordinador: ${error.message}`);
+    if (!data) throw new Error('El experimento dejó de estar activo antes de guardar el estado del coordinador.');
+    if (activeExperimentId === experimentId) activeExperimentMetadata = updatedMetadata;
+  });
+  labCoordinatorPersistQueue = operation.catch(() => undefined);
+  return operation;
+}
+
+export async function appendLabCampaignManifest(
+  experimentId: string,
+  manifest: Record<string, unknown>
+) {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  if (!experimentId || typeof manifest.campaign_id !== 'string') {
+    throw new Error('Se requiere experiment_id y campaign_id para registrar el manifiesto.');
+  }
+
+  const { data: current, error: readError } = await client
+    .from('centinela_experiments')
+    .select('id, metadata, status')
+    .eq('id', experimentId)
+    .maybeSingle();
+  if (readError) throw new Error(`No se pudo consultar el experimento para registrar el manifiesto: ${readError.message}`);
+  if (!current || current.status !== 'running') {
+    throw new Error('El manifiesto solo puede añadirse a un experimento activo.');
+  }
+
+  const metadata = (current.metadata ?? {}) as Record<string, unknown>;
+  const existing = Array.isArray(metadata.lab_campaign_manifests)
+    ? metadata.lab_campaign_manifests as Record<string, unknown>[]
+    : [];
+  if (existing.some((item) => item.campaign_id === manifest.campaign_id)) {
+    throw new Error('El manifiesto de esta campaña ya está registrado.');
+  }
+  const updatedMetadata = {
+    ...metadata,
+    lab_campaign_manifests: [...existing, manifest],
+    lab_protocol_version: Number(manifest.generation_profile_version) >= 2
+      ? 'centinela-auth-study-v4'
+      : 'centinela-auth-study-v3',
+  };
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ metadata: updatedMetadata })
+    .eq('id', experimentId)
+    .eq('status', 'running')
+    .select('id, metadata')
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo persistir el manifiesto de campaña: ${error.message}`);
+  if (!data) throw new Error('El experimento dejó de estar activo antes de guardar el manifiesto.');
+  if (activeExperimentId === experimentId) activeExperimentMetadata = updatedMetadata;
+  return data;
+}
+
+
+export async function persistLabCollectionPlan(
+  experimentId: string,
+  plan: {
+    experimentId: string;
+    batchSize: number;
+    accounts: string[];
+    targets: Record<string, unknown>;
+  },
+  coordinatorState: Record<string, unknown>,
+) {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  if (plan.experimentId !== experimentId) throw new Error('El plan no corresponde al experimento indicado.');
+
+  const { data: current, error: readError } = await client
+    .from('centinela_experiments')
+    .select('id, protocol_name, metadata, status')
+    .eq('id', experimentId)
+    .maybeSingle();
+  if (readError) throw new Error(`No se pudo leer el protocolo antes de preregistrar las cuotas: ${readError.message}`);
+  if (!current || current.status !== 'running') throw new Error('El experimento V4 ya no está activo.');
+
+  const metadata = (current.metadata ?? {}) as Record<string, unknown>;
+  if (Number(metadata.protocol_revision) < 4 && !/v4/i.test(String(current.protocol_name || ''))) {
+    throw new Error('Las cuotas automáticas solo se pueden preregistrar en un protocolo V4.');
+  }
+  if (metadata.collection_plan) {
+    throw new Error('El diseño de recolección ya está preregistrado y no puede modificarse.');
+  }
+
+  const distributedValidation = Number((plan.targets.validation as Record<string, unknown> | undefined)?.attack_distributed ?? -1);
+  const distributedTest = Number((plan.targets.test as Record<string, unknown> | undefined)?.attack_distributed ?? -1);
+  const collectionPlan = {
+    protocol_revision: 4,
+    plan_version: 1,
+    preregistered_at: new Date().toISOString(),
+    batch_size: plan.batchSize,
+    accounts: [...plan.accounts],
+    targets: structuredClone(plan.targets),
+    session_profile_version: 2,
+    truth_source: 'predefined_authorized_campaign_manifest',
+    quota_unit: 'completed_independent_sessions',
+    immutable_after_start: true,
+    phase_policy: 'train_benign_only_validation_mixed_freeze_before_test',
+    excluded_scenarios: distributedValidation === 0 && distributedTest === 0
+      ? [{ scenario: 'attack_distributed', reason: 'No se dispone de cuatro IP de salida verificadas e independientes; se excluye explícitamente en lugar de falsificar o suplantar direcciones.' }]
+      : [],
+  };
+  const updatedMetadata = {
+    ...metadata,
+    collection_plan: collectionPlan,
+    lab_protocol_version: 'centinela-auth-study-v4',
+    lab_coordinator_state: coordinatorState,
+    lab_coordinator_state_saved_at: new Date().toISOString(),
+  };
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ metadata: updatedMetadata })
+    .eq('id', experimentId)
+    .eq('status', 'running')
+    .select('id, metadata')
+    .maybeSingle();
+  if (error) throw new Error(`No se pudieron preregistrar las cuotas V4: ${error.message}`);
+  if (!data) throw new Error('El experimento dejó de estar activo al guardar el protocolo V4.');
+  if (activeExperimentId === experimentId) activeExperimentMetadata = updatedMetadata;
+  return data;
+}
+
+export async function getExperimentMetadata(experimentId: string) {
+  if (!client || !hashSecret) throw new Error('El almacén persistente de Centinela no está configurado.');
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .select('id, protocol_name, metadata, status')
+    .eq('id', experimentId)
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo recuperar el metadato del experimento: ${error.message}`);
+  if (!data) throw new Error('El experimento solicitado no existe.');
   return data;
 }
 
@@ -413,6 +649,7 @@ export async function finishExperimentRecord(experimentId: string) {
     activeExperimentMetadata = {};
     activeSplitBoundaries = null;
     activeTrainingFrozen = false;
+    activeValidationFrozen = false;
   }
   return data;
 }
@@ -442,6 +679,55 @@ export async function freezeActiveExperimentTraining(sampleCount: number) {
 
   activeExperimentMetadata = metadata;
   activeTrainingFrozen = true;
+  return data;
+}
+
+export async function freezeActiveExperimentValidation(experimentId: string) {
+  if (!client || !hashSecret || !activeExperimentId || !activeSplitBoundaries) {
+    throw new Error('No hay un experimento activo con almacenamiento y cortes temporales válidos.');
+  }
+  if (activeExperimentId !== experimentId) {
+    throw new Error('El identificador no corresponde al experimento activo.');
+  }
+  if (!activeTrainingFrozen) {
+    throw new Error('El baseline de entrenamiento debe estar congelado antes de cerrar la validación.');
+  }
+  if (Date.now() < activeSplitBoundaries.validationEndMs) {
+    throw new Error('El periodo de validación todavía está abierto; no se puede congelar la configuración antes de su corte.');
+  }
+  if (activeValidationFrozen) throw new Error('La configuración de validación ya está congelada.');
+  const events = await fetchObservedEvents(experimentId);
+  const validation = events.filter((event) => event.dataset_split === 'validation');
+  const labeled = validation.filter((event) => event.ground_truth_label !== 'unknown');
+  const benign = labeled.filter((event) => event.ground_truth_label === 'benign').length;
+  const attacks = labeled.filter((event) => event.ground_truth_label === 'attack').length;
+  if (benign < 1 || attacks < 1) {
+    throw new Error('La validación debe contener eventos benignos y de ataque etiquetados independientemente antes de congelar la configuración.');
+  }
+  const completedAt = new Date().toISOString();
+  const metadata = {
+    ...activeExperimentMetadata,
+    validation_frozen: true,
+    validation_completed_at: completedAt,
+    validation_total_events: validation.length,
+    validation_labeled_events: labeled.length,
+    validation_unknown_events: validation.length - labeled.length,
+    validation_benign_events: benign,
+    validation_attack_events: attacks,
+    validation_code_version: process.env.CENTINELA_VERSION?.trim() || 'unversioned',
+    validation_config_version: process.env.CENTINELA_CONFIG_VERSION?.trim() || 'unversioned',
+  };
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ metadata })
+    .eq('id', experimentId)
+    .eq('status', 'running')
+    .select('id, metadata')
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo congelar la configuración validada: ${error.message}`);
+  if (!data) throw new Error('El experimento dejó de estar activo antes de congelar la configuración.');
+  activeExperimentMetadata = metadata;
+  activeValidationFrozen = true;
   return data;
 }
 
@@ -480,6 +766,7 @@ export async function abortExperimentRecord(experimentId: string, reason: string
     activeExperimentMetadata = {};
     activeSplitBoundaries = null;
     activeTrainingFrozen = false;
+    activeValidationFrozen = false;
   }
   return data;
 }
@@ -563,6 +850,22 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
   const labeled = testEvents.filter((event) => event.ground_truth_label !== 'unknown');
   const benign = labeled.filter((event) => event.ground_truth_label === 'benign').length;
   const attacks = labeled.filter((event) => event.ground_truth_label === 'attack').length;
+  const independentTestCampaigns = new Set(
+    labeled.map((event) => event.campaign_id).filter((campaignId): campaignId is string => Boolean(campaignId))
+  );
+  const testScenarioCounts = Object.fromEntries(
+    [...new Set(labeled.map((event) => event.scenario || 'unknown'))].sort().map((scenario) => {
+      const subset = labeled.filter((event) => (event.scenario || 'unknown') === scenario);
+      return [scenario, {
+        events: subset.length,
+        benign: subset.filter((event) => event.ground_truth_label === 'benign').length,
+        attack: subset.filter((event) => event.ground_truth_label === 'attack').length,
+        campaigns: new Set(subset.map((event) => event.campaign_id).filter(Boolean)).size,
+        observed_sources: new Set(subset.map((event) => event.source_ip_hash).filter(Boolean)).size,
+      }];
+    })
+  );
+  const bothClassesPresent = benign > 0 && attacks > 0;
 
   const methods = {
     rules: calculateMetrics(labeled, (event) => event.alerta_reglas),
@@ -593,13 +896,17 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
     test_unknown_events: testEvents.filter((event) => event.ground_truth_label === 'unknown').length,
     benign_events: benign,
     attack_events: attacks,
-    metrics: baselineFrozen && labeled.length > 0 ? methods : null,
+    independent_test_campaigns: independentTestCampaigns.size,
+    test_scenario_counts: testScenarioCounts,
+    metrics: baselineFrozen && bothClassesPresent ? methods : null,
     baseline_frozen: baselineFrozen,
     latency,
     note: !baselineFrozen
       ? 'El baseline de entrenamiento aún no está congelado para este experimento; no se publican métricas de clasificación.'
       : labeled.length === 0
         ? 'No hay eventos de prueba etiquetados; no se calculan métricas de clasificación.'
-        : 'Las métricas se calculan exclusivamente sobre eventos capturados, etiquetados y reservados para el periodo de prueba.'
+        : !bothClassesPresent
+          ? 'El test aún no contiene ambas clases (benign y attack); no se publican métricas de clasificación.'
+          : 'Las métricas se calculan exclusivamente sobre eventos capturados, etiquetados y reservados para el periodo de prueba.'
   };
 }

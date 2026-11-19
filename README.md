@@ -165,7 +165,7 @@ The CSV must be exported from the authenticated endpoint:
 GET /api/dataset/capturado?formato=csv
 ```
 
-The evaluator refuses rows marked as simulated, unassigned temporal splits, and feature schemas other than `centinela-auth-features-v2`. It requires at least 50 labeled-benign training events plus labeled benign and attack observations in both validation and test.
+The evaluator refuses rows marked as simulated, unassigned temporal splits, mixed feature schemas, and unsupported feature versions. It supports historical `centinela-auth-features-v2` (5 dimensions) and `centinela-auth-features-v3` (4 dimensions; excludes absolute UTC hour). It requires at least 50 labeled-benign training events plus labeled benign and attack observations in both validation and test.
 
 Training vectors are reconstructed from confirmed benign training events only, to avoid contaminating the normal baseline with earlier malicious events that may have been recognized and labeled later. Validation and test use the exact feature vectors stored when the live Node detector processed each event.
 
@@ -177,3 +177,8 @@ For valid research claims, describe controlled attack campaigns as experimental 
 
 
 If a Supabase write fails after the detector has processed a request, Centinela pauses further capture to avoid generating feature windows with a missing event. Check server logs and `/health`. If the gap cannot be reconciled, abort the incomplete experiment with a written reason, then create a new experiment after repairing storage. Do not report the incomplete run as a completed evaluation.
+
+
+## Centinela v3 automated lab
+
+See [`docs/centinela-v3-design.md`](docs/centinela-v3-design.md) and [`docs/centinela-v3-agent-runners.md`](docs/centinela-v3-agent-runners.md). The v3 experiment requires three preregistered UTC cutoffs (`train_end_at`, `validation_end_at`, `test_end_at`), benign-only training, an explicit validation freeze before test, campaign manifests, and the Supabase migration [`20261117153000_features_v3_without_utc_hour.sql`](supabase/migrations/20261117153000_features_v3_without_utc_hour.sql) before capturing v3 events.

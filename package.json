@@ -1,12 +1,14 @@
 {
   "name": "centinela-bruteforce-detector",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "tsc && vite build",
     "start": "node server.ts",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "lab:agent": "tsx scripts/centinela-lab-agent.ts",
+    "test": "tsx --test scripts/*.test.ts"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

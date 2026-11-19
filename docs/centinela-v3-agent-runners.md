@@ -1,0 +1,96 @@
+# Centinela v3 — configuración de agentes automatizados
+
+Este documento describe cómo registrar runners de laboratorio para **un único testbed autorizado**. No ejecuta pruebas al instalarse.
+
+## Componentes
+
+- Detector y coordinador: `https://bruteforce-detector-2uv4.onrender.com`.
+- Portal de autenticación del testbed: `https://centinela-auth-lab.onrender.com`.
+- Los agentes consultan tareas al detector y realizan solicitudes HTTP a `POST /agent/login` en el portal.
+- El portal valida las credenciales localmente, obtiene la IP de origen observada por el edge y transmite al detector el resultado y los metadatos mediante `/registrar_intento`.
+- El detector valida token de ingesta, tarea asignada, índice de intento, cuenta, resultado esperado, campaña y HMAC de la IP antes de persistir.
+- El detector almacena inicialmente `ground_truth_label=unknown`. Las etiquetas se aplican después de que la tarea completa, a partir del manifiesto independiente persistido en el experimento.
+
+## Secretos requeridos
+
+Generar un token de agente aleatorio con al menos 32 caracteres y guardarlo en el gestor de secretos; no subirlo a Git. El mismo valor se configura en:
+
+1. Servicio detector/coordinador: `CENTINELA_LAB_AGENT_TOKEN`.
+2. Servicio portal `centinela-auth-lab`: `CENTINELA_LAB_AGENT_TOKEN`.
+3. Cada runner autorizado: `CENTINELA_LAB_AGENT_TOKEN`.
+
+Este token es distinto de `CENTINELA_INGEST_TOKEN`, utilizado por el portal para hablar con el detector.
+
+Cada runner también requiere:
+- `CENTINELA_LAB_AGENT_ID`: identificador único y estable, por ejemplo `runner-a`.
+- `CENTINELA_LAB_CREDENTIALS_JSON`: objeto JSON con las contraseñas de las tres cuentas del testbed. Deben ser las mismas que usa el portal, con los secretos copiados manualmente desde el gestor de contraseñas de Render; nunca se guardan en Git.
+- `CENTINELA_LAB_COORDINATOR_URL=https://bruteforce-detector-2uv4.onrender.com`.
+- `CENTINELA_LAB_PORTAL_URL=https://centinela-auth-lab.onrender.com`.
+- `CENTINELA_LAB_INVALID_PASSWORD`: cadena aleatoria que no coincida con ninguna contraseña real del testbed. El runner añadirá un sufijo por intento.
+
+## Ejecutar un runner
+
+Requisitos: Node.js 22 o superior, conectividad HTTPS hacia el portal y el detector.
+
+En un checkout de la rama `feature/centinela-v3-automated-lab`:
+
+```bash
+npm install
+npm run lab:agent
+```
+
+El proceso registra el identificador de agente y la IP observada por el coordinador, consulta tareas, espera al tiempo programado, ejecuta hasta 12 solicitudes por tarea y confirma cada `event_id`. Los logs no imprimen contraseñas ni direcciones IP en claro.
+
+El agente benigno utiliza credenciales válidas únicamente en los pasos correctos del escenario benigno. Los intentos fallidos utilizan una credencial no válida. Los escenarios de ataque solo realizan intentos fallidos contra cuentas de laboratorio. No existe soporte para objetivos arbitrarios ni listas de credenciales externas.
+
+## Direcciones IP independientes
+
+Para probar el umbral distribuido de cuatro IP, el coordinador necesita cuatro runners activos cuyo `CF-Connecting-IP` observado por Render sea diferente.
+
+- Cuatro procesos en una misma computadora o varios runners detrás de una misma NAT cuentan como **un solo origen**.
+- Cuatro servicios Render en Oregon no garantizan cuatro IP distintas: Render publica rangos de salida compartidos por los servicios de la región. Cada registro se validará por la IP real observada; no se inferirá por el número de procesos.
+- No se permite falsificar `X-Forwarded-For`, suplantar IP, usar cabeceras personalizadas como sustituto de origen ni utilizar proxies públicos.
+- Si no se consiguen cuatro IP de salida reales, se puede estudiar el escenario de uno o varios orígenes disponibles, pero no se afirmará que se probó la detección distribuida de cuatro IP.
+
+Render ofrece IP de salida dedicadas únicamente en planes Pro o superiores; la documentación indica un coste adicional de USD 100/mes por cada conjunto de tres direcciones IPv4 dedicadas. Esta opción no se activa automáticamente y requiere una decisión presupuestaria explícita. Para la fase inicial se priorizarán runners en redes independientes ya disponibles y se comprobarán sus IP antes de crear campañas.
+
+## Límites operativos
+
+- El catálogo actual fija: 7 solicitudes para benigno mixto, 6 para ráfaga, 8 para baja frecuencia y 2 por cada runner del escenario distribuido.
+- Máximo 5 repeticiones por escenario y 12 solicitudes por tarea.
+- Límite por IP del portal: 60 solicitudes/minuto.
+- El escenario de baja frecuencia dura aproximadamente 9 minutos por ejecución.
+- Las campañas no pueden solaparse dentro del mismo experimento.
+- Detener una campaña no elimina los eventos ya capturados; los trabajos incompletos no se etiquetan automáticamente.
+- El coordinador persiste en `centinela_experiments.metadata.lab_coordinator_state` las campañas, tareas, progreso y `event_id` confirmados. Al reiniciar, restaura las tareas activas y las deja disponibles para que el mismo runner vuelva a registrarse y continúe. Cada intento usa una clave `request_id` determinista para que un reintento posterior a un timeout no duplique el evento.
+- La migración `20261117162222_centinela_lab_agent_request_idempotency.sql` ya está aplicada en Supabase. Antes de aplicarla se verificó que la columna `request_id` existía y que no había valores no nulos; los 376 eventos históricos permanecieron intactos. La migración solo añadió un índice único parcial para valores no nulos y un comentario de columna; no reescribió datos.
+- Reversión DDL de esta migración (no restaura ni borra datos):
+  ```sql
+  drop index if exists public.idx_centinela_auth_events_request_id_unique;
+  comment on column public.centinela_auth_events.request_id is null;
+  ```
+- El proyecto Supabase está en Free y no tiene backups diarios automáticos. Esta migración aditiva se puede revertir con el DDL anterior; antes de cualquier migración futura que modifique datos o esquema de forma no trivial, exportar una copia lógica fuera de Supabase.
+- Antes de una captura definitiva deben probarse reinicio, recuperación del coordinador, reanudación del mismo runner y replay idempotente; no desplegar durante una campaña.
+- La interfaz muestra las IP solo como prefijos HMAC y los eventos que el detector persiste. El canal Socket.IO exige sesión administrativa.
+
+## Operación en Render Free
+
+El detector y el portal están en instancias Free. Render apaga una web service Free tras 15 minutos sin tráfico entrante y la vuelve a iniciar cuando recibe una nueva petición HTTP; la documentación indica que el arranque puede tardar aproximadamente un minuto. Render también puede reiniciar instancias Free en cualquier momento.
+
+Antes de iniciar un runner, visita `https://bruteforce-detector-2uv4.onrender.com/health` y espera hasta obtener la respuesta JSON del detector. Después comprueba el health del portal. Un HTTP 502 durante el primer arranque no debe interpretarse como un evento capturado ni como un fallo del detector; si continúa tras el arranque, detén el piloto y revisa el despliegue y los logs de Render.
+
+Para una campaña experimental desatendida y de larga duración, una instancia que no se apague por inactividad es operativamente más fiable. No se recomienda usar pings externos como sustituto de una arquitectura estable: cualquier reinicio puede interrumpir una tarea, aunque la cola y el progreso estén persistidos en Supabase.
+
+## Verificación previa
+
+Antes de crear una campaña:
+
+1. Confirmar `/health` del portal y del detector; el portal debe informar `centinela_configured=true` y el detector debe estar listo para captura.
+2. Confirmar que el experimento v3 está activo y las fechas temporales fueron preregistradas.
+3. Registrar los runners y confirmar al menos cuatro prefijos HMAC distintos para un test distribuido.
+4. En cada runner confirmar que la versión de Node y las credenciales del testbed son válidas, sin registrar las contraseñas.
+5. Ejecutar un único login benigno de prueba y confirmar un `event_id` persistido en el experimento correcto con `campaign_id`, `run_id`, `agent_id`, `scenario_id`, `actor_type` y `generation_method`.
+6. Comprobar que la IP HMAC registrada por el agente coincide con el hash de IP del evento de autenticación y que el portal rechazó una petición con `X-Forwarded-For` falsificada si no coincide con `CF-Connecting-IP`.
+7. Solo después de estas comprobaciones iniciar campañas controladas.
+
+No generar miles de solicitudes hasta que el piloto demuestre captura completa, ausencia de duplicados, asignación temporal correcta, control de parada y persistencia de los manifiestos.
