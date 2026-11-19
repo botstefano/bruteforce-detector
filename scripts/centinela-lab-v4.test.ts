@@ -134,16 +134,24 @@ test('resume after three failed sessions schedules a bounded replacement batch',
   });
   activateLabCampaign(campaign.campaignId);
 
-  for (const agentId of ['runner-recovery-01', 'runner-recovery-02', 'runner-recovery-03']) {
-    const task = claimNextLabJob(agentId);
-    assert.ok(task);
-    completeLabJob({
-      agentId,
-      jobId: String(task.job_id),
-      status: 'failed',
-      attemptsCompleted: 0,
-      summary: { event_ids: [] },
-    });
+  const realNow = Date.now;
+  try {
+    // Campaign sessions start 25 seconds in the future; advance into the
+    // permitted final-minute claim window for this deterministic unit test.
+    Date.now = () => realNow() + 60_000;
+    for (const agentId of ['runner-recovery-01', 'runner-recovery-02', 'runner-recovery-03']) {
+      const task = claimNextLabJob(agentId);
+      assert.ok(task);
+      completeLabJob({
+        agentId,
+        jobId: String(task.job_id),
+        status: 'failed',
+        attemptsCompleted: 0,
+        summary: { event_ids: [] },
+      });
+    }
+  } finally {
+    Date.now = realNow;
   }
 
   assert.equal(getNextLabAutomationBatch('experiment-v4-recovery', 'train'), null);
