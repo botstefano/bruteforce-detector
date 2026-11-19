@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  activateLabCampaign,
+  claimNextLabJob,
+  completeLabJob,
   configureLabAutomation,
   createLabCampaign,
   getNextLabAutomationBatch,
@@ -102,6 +105,58 @@ test('automation plan persists and only schedules benign activity during trainin
   assert.equal(getNextLabAutomationBatch('experiment-v4-test', 'train')?.scenarioId, 'benign_mixed');
 });
 
+
+
+test('resume after three failed sessions schedules a bounded replacement batch', () => {
+  resetLabCoordinatorForTesting();
+  registerRunner('runner-recovery-01');
+  registerRunner('runner-recovery-02');
+  registerRunner('runner-recovery-03');
+
+  configureLabAutomation({
+    experimentId: 'experiment-v4-recovery',
+    batchSize: 5,
+    accounts: ['ronan', 'andy', 'stefano'],
+    targets: {
+      train: { benign_mixed: 12 },
+      validation: { benign_mixed: 10, attack_rapid: 5, attack_low_frequency: 5, attack_distributed: 0 },
+      test: { benign_mixed: 20, attack_rapid: 10, attack_low_frequency: 10, attack_distributed: 0 },
+    },
+  });
+
+  const { campaign } = createLabCampaign({
+    experimentId: 'experiment-v4-recovery',
+    targetAccount: 'ronan',
+    scenarioIds: ['benign_mixed'],
+    phase: 'train',
+    repetitions: 3,
+    scheduledByAutomation: true,
+  });
+  activateLabCampaign(campaign.campaignId);
+
+  for (const agentId of ['runner-recovery-01', 'runner-recovery-02', 'runner-recovery-03']) {
+    const task = claimNextLabJob(agentId);
+    assert.ok(task);
+    completeLabJob({
+      agentId,
+      jobId: String(task.job_id),
+      status: 'failed',
+      attemptsCompleted: 0,
+      summary: { event_ids: [] },
+    });
+  }
+
+  assert.equal(getNextLabAutomationBatch('experiment-v4-recovery', 'train'), null);
+  assert.equal(getLabAutomationPlan()?.status, 'paused');
+
+  const resumed = resumeLabAutomation('experiment-v4-recovery');
+  assert.equal(resumed.recoveryPending, true);
+
+  const recoveryBatch = getNextLabAutomationBatch('experiment-v4-recovery', 'train');
+  assert.equal(recoveryBatch?.repetitions, 3);
+  assert.equal(recoveryBatch?.scenarioId, 'benign_mixed');
+  assert.equal(getLabAutomationPlan()?.targets.train.benign_mixed, 12);
+});
 
 test('legacy manual campaigns remain on the original V3 fixed profile', () => {
   resetLabCoordinatorForTesting();
