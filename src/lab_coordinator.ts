@@ -57,6 +57,8 @@ export interface LabAutomationPlan {
   status: 'running' | 'paused' | 'completed';
   updatedAt: string;
   lastError: string | null;
+  // Explicit operator recovery after the three-failure circuit breaker.
+  recoveryPending?: boolean;
 }
 
 interface LabCampaign {
@@ -740,6 +742,7 @@ export function updateLabAutomationStatus(input: {
   status?: LabAutomationPlan['status'];
   enabled?: boolean;
   lastError?: string | null;
+  recoveryPending?: boolean;
 }): LabAutomationPlan | null {
   if (!labAutomationPlan) return null;
   labAutomationPlan = {
@@ -747,6 +750,7 @@ export function updateLabAutomationStatus(input: {
     ...(input.status ? { status: input.status } : {}),
     ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
     ...(input.lastError !== undefined ? { lastError: input.lastError } : {}),
+    ...(input.recoveryPending !== undefined ? { recoveryPending: input.recoveryPending } : {}),
     updatedAt: new Date().toISOString(),
   };
   return { ...labAutomationPlan, accounts: [...labAutomationPlan.accounts], targets: structuredClone(labAutomationPlan.targets) };
@@ -760,11 +764,13 @@ export function resumeLabAutomation(experimentId: string): LabAutomationPlan {
   if (labAutomationPlan.status === 'completed') {
     throw new Error('El plan V4 ya completó todas sus cuotas y no puede reanudarse.');
   }
+  const recoveringFailedRuns = /acumula tres ejecuciones fallidas/i.test(labAutomationPlan.lastError || '');
   labAutomationPlan = {
     ...labAutomationPlan,
     enabled: true,
     status: 'running',
     lastError: null,
+    recoveryPending: recoveringFailedRuns,
     updatedAt: new Date().toISOString(),
   };
   return {
@@ -797,7 +803,9 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
   );
   const counts = new Map<LabScenarioId, { completed: number; failed: number }>();
   for (const scenarioId of Object.keys(phaseTargets) as LabScenarioId[]) counts.set(scenarioId, { completed: 0, failed: 0 });
-  for (const campaign of phaseCampaigns) {
+  // The circuit breaker measures consecutive failed sessions, not lifetime
+  // failures. A later successful replacement session clears the failure streak.
+  for (const campaign of [...phaseCampaigns].sort((a, b) => a.createdAt - b.createdAt)) {
     const runs = new Map<string, LabJob[]>();
     for (const jobId of campaign.jobIds) {
       const job = jobs.get(jobId);
@@ -810,8 +818,12 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
       const scenarioId = runJobs[0]?.scenarioId;
       const count = scenarioId ? counts.get(scenarioId) : undefined;
       if (!count) continue;
-      if (runJobs.every((job) => job.status === 'completed')) count.completed += 1;
-      if (runJobs.some((job) => job.status === 'failed' || job.status === 'cancelled')) count.failed += 1;
+      if (runJobs.length > 0 && runJobs.every((job) => job.status === 'completed')) {
+        count.completed += 1;
+        count.failed = 0;
+      } else if (runJobs.some((job) => job.status === 'failed' || job.status === 'cancelled')) {
+        count.failed += 1;
+      }
     }
   }
 
@@ -821,16 +833,17 @@ export function getNextLabAutomationBatch(experimentId: string, phase: Experimen
     const target = phaseTargets[scenarioId] ?? 0;
     const count = counts.get(scenarioId) ?? { completed: 0, failed: 0 };
     if (count.completed >= target) continue;
-    if (count.failed >= 3) {
+    if (count.failed >= 3 && !plan.recoveryPending) {
       updateLabAutomationStatus({ status: 'paused', enabled: false, lastError: `Se pausó la automatización: ${scenarioId} acumula tres ejecuciones fallidas.` });
       return null;
     }
     const remaining = target - count.completed;
+    const recoveryBatchSize = plan.recoveryPending ? Math.min(plan.batchSize, count.failed) : plan.batchSize;
     const startAccountIndex = (count.completed + count.failed) % plan.accounts.length;
     const orderedAccounts = plan.accounts.map((_, index) => plan.accounts[(startAccountIndex + index) % plan.accounts.length]);
     return {
       scenarioId,
-      repetitions: Math.min(plan.batchSize, remaining),
+      repetitions: Math.min(recoveryBatchSize, remaining),
       targetAccount: orderedAccounts[0],
       targetAccounts: orderedAccounts,
       completed: count.completed,
