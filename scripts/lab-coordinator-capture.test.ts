@@ -181,3 +181,60 @@ test('an active job without an explicit pause still expires after runner loss', 
   assert.equal(expireStaleLabJobs(Date.now() + 10 * 60_000), 1);
   resetLabCoordinatorForTesting();
 });
+test('a runner does not reserve the next session during the long preregistered rest', () => {
+  resetLabCoordinatorForTesting();
+  const agentId = 'runner-wait-window-01';
+  registerLabAgent({ agentId, egressIpHash: 'f'.repeat(64), version: 'test' });
+  const { campaign } = createLabCampaign({
+    experimentId: 'experiment-wait-window',
+    targetAccount: 'andy',
+    scenarioIds: ['benign_mixed'],
+    phase: 'train',
+    repetitions: 2,
+  });
+  activateLabCampaign(campaign.campaignId);
+
+  const firstTask = claimNextLabJob(agentId);
+  assert.ok(firstTask);
+  const firstJobId = String(firstTask.job_id);
+  const firstEventIds = (firstTask.outcomes as boolean[]).map((_, index) =>
+    `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`
+  );
+  firstEventIds.forEach((eventId, index) => reportLabJobProgress(agentId, firstJobId, index + 1, eventId));
+  completeLabJob({
+    agentId,
+    jobId: firstJobId,
+    status: 'completed',
+    attemptsCompleted: firstEventIds.length,
+    summary: { event_ids: firstEventIds },
+  });
+
+  const persisted = serializeLabCoordinatorState('experiment-wait-window');
+  const jobs = persisted.jobs as Array<Record<string, unknown>>;
+  const agents = persisted.agents as Array<Record<string, unknown>>;
+  const nextJob = jobs.find((job) => job.jobId !== firstJobId);
+  assert.ok(nextJob);
+  const nextAgent = agents.find((agent) => agent.agentId === agentId);
+  assert.ok(nextAgent);
+  const effectiveStart = Math.max(
+    Number(nextJob.startAt),
+    Number(nextAgent.nextJobAvailableAt),
+  );
+
+  const realNow = Date.now;
+  let fakeNow = realNow();
+  try {
+    Date.now = () => fakeNow;
+    assert.equal(claimNextLabJob(agentId), null);
+
+    // The same queued job becomes claimable inside the final minute.
+    fakeNow = effectiveStart - 30_000;
+    const secondTask = claimNextLabJob(agentId);
+    assert.ok(secondTask);
+    assert.equal(secondTask.job_id, nextJob.jobId);
+  } finally {
+    Date.now = realNow;
+    resetLabCoordinatorForTesting();
+  }
+});
+
