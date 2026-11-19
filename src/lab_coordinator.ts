@@ -923,6 +923,15 @@ export function claimNextLabJob(agentId: string): Record<string, unknown> | null
     return null;
   }
 
+  // Do not reserve a runner during the long 8–25 minute inter-session rest.
+  // A laptop may sleep during that interval; queued jobs have no heartbeat
+  // lease to expire. Assign only shortly before the preregistered start.
+  const effectiveStartAt = Math.max(job.startAt, agent.nextJobAvailableAt || 0);
+  if (effectiveStartAt > Date.now() + 60_000) {
+    if (agent.status === 'offline' || agent.status === 'error') agent.status = 'ready';
+    return null;
+  }
+
   if (job.scenarioId === 'attack_distributed') {
     const matching = [...agents.values()].filter((item) =>
       item.egressIpHash === agent.egressIpHash && Date.now() - item.lastSeenAt <= AGENT_STALE_MS
@@ -1117,9 +1126,17 @@ export function getLabCampaignForLabeling(campaignId: string): {
 } {
   const campaign = campaigns.get(campaignId);
   if (!campaign) throw new Error('Campaña no encontrada en esta instancia.');
-  const campaignJobs = campaign.jobIds.map((id) => jobs.get(id)).filter((job): job is LabJob => Boolean(job));
-  if (!campaignJobs.length || campaignJobs.some((job) => job.status !== 'completed')) {
-    throw new Error('Solo se pueden etiquetar campañas cuyas tareas hayan finalizado correctamente.');
+  if (!['completed', 'failed'].includes(campaign.status)) {
+    throw new Error('Solo se pueden etiquetar campañas finalizadas sin trabajos activos.');
+  }
+  // A failed campaign may still contain complete, independently verified
+  // sessions. Label only those complete jobs; partial/failed/cancelled jobs
+  // remain unknown and are excluded from the labeled dataset.
+  const campaignJobs = campaign.jobIds
+    .map((id) => jobs.get(id))
+    .filter((job): job is LabJob => Boolean(job) && job!.status === 'completed');
+  if (!campaignJobs.length) {
+    throw new Error('Solo se pueden etiquetar campañas que tengan al menos una tarea completada correctamente.');
   }
   const normalizedJobs = campaignJobs.map((job) => ({
     jobId: job.jobId,

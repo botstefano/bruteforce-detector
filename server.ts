@@ -852,7 +852,9 @@ async function tickLabAutomation(): Promise<void> {
       campaigns: Array<{ campaign_id: string; status: string; scheduled_by_automation?: boolean; labels_applied_at?: string | null }>;
     };
     for (const campaign of labelSnapshot.campaigns) {
-      if (campaign.scheduled_by_automation && campaign.status === 'completed' && !campaign.labels_applied_at) {
+      if (campaign.scheduled_by_automation &&
+          ['completed', 'failed'].includes(campaign.status) &&
+          !campaign.labels_applied_at) {
         await labelLabCampaignFromManifest(campaign.campaign_id);
         markLabCampaignLabeled(campaign.campaign_id);
         await persistLabAutomationState(experiment.id);
@@ -882,7 +884,9 @@ async function tickLabAutomation(): Promise<void> {
     // Automatic labeling is part of collection, not a manual operator step.
     // Only completed campaigns created by this plan are eligible.
     for (const campaign of snapshot.campaigns) {
-      if (campaign.scheduled_by_automation && campaign.status === 'completed' && !campaign.labels_applied_at) {
+      if (campaign.scheduled_by_automation &&
+          ['completed', 'failed'].includes(campaign.status) &&
+          !campaign.labels_applied_at) {
         await labelLabCampaignFromManifest(campaign.campaign_id);
         markLabCampaignLabeled(campaign.campaign_id);
         await persistLabAutomationState(experiment.id);
@@ -1416,6 +1420,10 @@ app.post('/api/lab/agent/complete', requiereAgenteLab, async (req: Request, res:
       http_statuses: Array.isArray(rawSummary.http_statuses)
         ? rawSummary.http_statuses.filter((value: unknown): value is number => typeof value === 'number').slice(0, 40)
         : [],
+      // Preserve bounded diagnostic context from the runner for future failures.
+      failure_reason: typeof rawSummary.failure_reason === 'string'
+        ? rawSummary.failure_reason.replace(/Bearer\\s+\\S+/gi, 'Bearer [redacted]').slice(0, 240)
+        : null,
     };
     const job = completeLabJob({
       agentId,
