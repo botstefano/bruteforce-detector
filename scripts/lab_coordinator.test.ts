@@ -79,7 +79,7 @@ test('el manifiesto no se filtra al agente y el etiquetado exige eventos complet
 
 test('una campaña fallida solo expone sesiones completas para etiquetado', () => {
   const prefix = unique();
-  const agentIds = registerAgents(prefix, 2);
+  const [agentId] = registerAgents(prefix, 1);
   const { campaign } = createLabCampaign({
     experimentId: unique(),
     targetAccount: 'andy',
@@ -89,26 +89,35 @@ test('una campaña fallida solo expone sesiones completas para etiquetado', () =
   });
   activateLabCampaign(campaign.campaignId);
 
-  const completedTask = claimNextLabJob(agentIds[0]);
+  const completedTask = claimNextLabJob(agentId);
   assert.ok(completedTask);
   const completedJobId = String(completedTask.job_id);
   const completedEventIds = (completedTask.outcomes as boolean[]).map(() => randomUUID());
-  completedEventIds.forEach((eventId, index) => reportLabJobProgress(agentIds[0], completedJobId, index + 1, eventId));
+  completedEventIds.forEach((eventId, index) => reportLabJobProgress(agentId, completedJobId, index + 1, eventId));
   completeLabJob({
-    agentId: agentIds[0],
+    agentId,
     jobId: completedJobId,
     status: 'completed',
     attemptsCompleted: completedEventIds.length,
     summary: { event_ids: completedEventIds },
   });
 
-  const failedTask = claimNextLabJob(agentIds[1]);
+  // The next session is intentionally unclaimable during its long rest.
+  // Advance the test clock to the final minute of its scheduled start window.
+  const realNow = Date.now;
+  let failedTask;
+  try {
+    Date.now = () => realNow() + 60 * 60_000;
+    failedTask = claimNextLabJob(agentId);
+  } finally {
+    Date.now = realNow;
+  }
   assert.ok(failedTask);
   const failedJobId = String(failedTask.job_id);
   const partialEventIds = [randomUUID()];
-  reportLabJobProgress(agentIds[1], failedJobId, 1, partialEventIds[0]);
+  reportLabJobProgress(agentId, failedJobId, 1, partialEventIds[0]);
   completeLabJob({
-    agentId: agentIds[1],
+    agentId,
     jobId: failedJobId,
     status: 'failed',
     attemptsCompleted: 1,
