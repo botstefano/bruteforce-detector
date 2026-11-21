@@ -869,7 +869,7 @@ export function isLabAutomationPhaseComplete(experimentId: string, phase: Experi
         campaign.phase === phase && campaign.scheduledByAutomation
     );
     for (const campaign of phaseCampaigns) {
-      if (!campaign.labelsAppliedAt || campaign.status !== 'completed') continue;
+      if (!campaign.labelsAppliedAt || !['completed', 'failed'].includes(campaign.status)) continue;
       const runs = new Map<string, LabJob[]>();
       for (const jobId of campaign.jobIds) {
         const job = jobs.get(jobId);
@@ -1190,7 +1190,7 @@ export function getLabAutomationProgress(experimentId: string): Record<string, R
     const phaseCampaigns = [...campaigns.values()].filter(
       (campaign) => campaign.experimentId === experimentId &&
         campaign.phase === phase && campaign.scheduledByAutomation &&
-        campaign.status === 'completed' && Boolean(campaign.labelsAppliedAt)
+        ['completed', 'failed'].includes(campaign.status) && Boolean(campaign.labelsAppliedAt)
     );
     for (const [scenarioId, target] of Object.entries(targets) as Array<[LabScenarioId, number]>) {
       const runIds = new Set<string>();
