@@ -861,8 +861,24 @@ async function tickLabAutomation(): Promise<void> {
       }
     }
 
-    // A paused plan may finish post-processing, but must never schedule a new batch.
-    if (!schedulerEnabled) return;
+    // Recover only the exact false-negative pause raised by the old quota
+    // check. This must run before the paused-plan early return; otherwise the
+    // corrected completion gate can never reach the training-freeze block.
+    if (!schedulerEnabled) {
+      const currentPlan = getLabAutomationPlan();
+      const staleQuotaError = 'No se congeló el entrenamiento: no se alcanzó la cuota de sesiones benignas antes del corte preregistrado. No se moverán las fechas.';
+      if (currentPlan?.experimentId === experiment.id &&
+          currentPlan.status === 'paused' &&
+          currentPlan.lastError === staleQuotaError &&
+          isLabAutomationPhaseComplete(experiment.id, 'train') &&
+          Date.now() < experiment.validationEndMs) {
+        resumeLabAutomation(experiment.id);
+        await persistLabAutomationState(experiment.id);
+        console.log('Plan V4 reanudado tras verificar la cuota de entrenamiento; se conservan los cortes preregistrados.');
+      } else {
+        return;
+      }
+    }
 
     if (eventCapturePaused) {
       updateLabAutomationStatus({ lastError: eventCapturePauseReason || 'Captura pausada por el estado del almacén.' });
@@ -922,20 +938,6 @@ async function tickLabAutomation(): Promise<void> {
       await entrenarModeloDesdeCapturasBenignas();
       const updated = await getExperimentMetadata(experiment.id);
       metadata = (updated.metadata ?? {}) as Record<string, unknown>;
-
-      // If a previous run paused only because the old quota check ignored
-      // successful sessions in a labelled partial campaign, resume safely
-      // after the corrected check has allowed the baseline to freeze.
-      const automationPlan = getLabAutomationPlan();
-      const staleQuotaError = 'No se congeló el entrenamiento: no se alcanzó la cuota de sesiones benignas antes del corte preregistrado. No se moverán las fechas.';
-      if (metadata.training_frozen === true &&
-          automationPlan?.experimentId === experiment.id &&
-          automationPlan.status === 'paused' &&
-          automationPlan.lastError === staleQuotaError) {
-        resumeLabAutomation(experiment.id);
-        await persistLabAutomationState(experiment.id);
-        console.log('Plan V4 reanudado automáticamente tras congelar el baseline; se mantienen las cuotas y los cortes preregistrados.');
-      }
 
       console.log('Baseline V4 entrenado y congelado automáticamente con eventos benignos etiquetados.');
     }
