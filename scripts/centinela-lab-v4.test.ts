@@ -9,6 +9,9 @@ import {
   createLabCampaign,
   getNextLabAutomationBatch,
   getLabAutomationPlan,
+  getLabSnapshot,
+  isLabAutomationPhaseComplete,
+  markLabCampaignLabeled,
   registerLabAgent,
   reportLabJobProgress,
   resetLabCoordinatorForTesting,
@@ -255,3 +258,81 @@ test('a preregistered plan cannot be reconfigured; it can only be paused and res
   assert.equal(resumed.batchSize, 5);
   assert.equal(resumed.targets.train.benign_mixed, 12);
 });
+
+test('labelled failed campaign still contributes fully completed independent sessions to quota', () => {
+  resetLabCoordinatorForTesting();
+  registerRunner('runner-complete-01');
+  registerRunner('runner-failed-02');
+
+  configureLabAutomation({
+    experimentId: 'experiment-v4-partial-campaign',
+    batchSize: 5,
+    accounts: ['ronan', 'andy', 'stefano'],
+    targets: {
+      train: { benign_mixed: 1 },
+      validation: {},
+      test: {},
+    },
+  });
+
+  const { campaign } = createLabCampaign({
+    experimentId: 'experiment-v4-partial-campaign',
+    targetAccount: 'ronan',
+    scenarioIds: ['benign_mixed'],
+    phase: 'train',
+    repetitions: 2,
+    scheduledByAutomation: true,
+  });
+  activateLabCampaign(campaign.campaignId);
+
+  const realNow = Date.now;
+  let fakeNow = realNow() + 60_000;
+  try {
+    Date.now = () => fakeNow;
+    const completedTask = claimNextLabJob('runner-complete-01');
+    assert.ok(completedTask);
+    const outcomes = completedTask.outcomes as boolean[];
+    const eventIds = outcomes.map((_, index) =>
+      `20000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`
+    );
+    eventIds.forEach((eventId, index) =>
+      reportLabJobProgress('runner-complete-01', String(completedTask.job_id), index + 1, eventId)
+    );
+    completeLabJob({
+      agentId: 'runner-complete-01',
+      jobId: String(completedTask.job_id),
+      status: 'completed',
+      attemptsCompleted: outcomes.length,
+      summary: { event_ids: eventIds },
+    });
+
+    // The second run is scheduled after the first run's active duration and rest.
+    fakeNow += 60 * 60_000;
+    const failedTask = claimNextLabJob('runner-failed-02');
+    assert.ok(failedTask);
+    completeLabJob({
+      agentId: 'runner-failed-02',
+      jobId: String(failedTask.job_id),
+      status: 'failed',
+      attemptsCompleted: 0,
+      summary: { event_ids: [] },
+    });
+
+    assert.equal(isLabAutomationPhaseComplete('experiment-v4-partial-campaign', 'train'), false);
+    markLabCampaignLabeled(campaign.campaignId);
+    assert.equal(isLabAutomationPhaseComplete('experiment-v4-partial-campaign', 'train'), true);
+
+    const snapshot = getLabSnapshot('experiment-v4-partial-campaign') as {
+      automation_progress: Record<string, Record<string, { completed: number; target: number }>>;
+      campaigns: Array<{ status: string }>;
+    };
+    assert.equal(snapshot.campaigns[0].status, 'failed');
+    assert.deepEqual(snapshot.automation_progress.train.benign_mixed, {
+      completed: 1,
+      target: 1,
+    });
+  } finally {
+    Date.now = realNow;
+  }
+});
+
