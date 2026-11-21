@@ -922,6 +922,21 @@ async function tickLabAutomation(): Promise<void> {
       await entrenarModeloDesdeCapturasBenignas();
       const updated = await getExperimentMetadata(experiment.id);
       metadata = (updated.metadata ?? {}) as Record<string, unknown>;
+
+      // If a previous run paused only because the old quota check ignored
+      // successful sessions in a labelled partial campaign, resume safely
+      // after the corrected check has allowed the baseline to freeze.
+      const automationPlan = getLabAutomationPlan();
+      const staleQuotaError = 'No se congeló el entrenamiento: no se alcanzó la cuota de sesiones benignas antes del corte preregistrado. No se moverán las fechas.';
+      if (metadata.training_frozen === true &&
+          automationPlan?.experimentId === experiment.id &&
+          automationPlan.status === 'paused' &&
+          automationPlan.lastError === staleQuotaError) {
+        resumeLabAutomation(experiment.id);
+        await persistLabAutomationState(experiment.id);
+        console.log('Plan V4 reanudado automáticamente tras congelar el baseline; se mantienen las cuotas y los cortes preregistrados.');
+      }
+
       console.log('Baseline V4 entrenado y congelado automáticamente con eventos benignos etiquetados.');
     }
 
