@@ -270,8 +270,8 @@ test('labelled failed campaign still contributes fully completed independent ses
     accounts: ['ronan', 'andy', 'stefano'],
     targets: {
       train: { benign_mixed: 1 },
-      validation: {},
-      test: {},
+      validation: { benign_mixed: 1, attack_rapid: 1, attack_low_frequency: 1, attack_distributed: 0 },
+      test: { benign_mixed: 1, attack_rapid: 1, attack_low_frequency: 1, attack_distributed: 0 },
     },
   });
 
