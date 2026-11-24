@@ -45,8 +45,11 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import OneClassSVM
 
 
-FEATURE_SCHEMA = "centinela-auth-features-v2"
-FEATURE_COUNT = 5
+FEATURE_SCHEMA_COUNTS = {
+    "centinela-auth-features-v2": 5,
+    "centinela-auth-features-v3": 4,
+}
+WINDOW_SECONDS = 120.0
 WINDOW_SECONDS = 120.0
 
 
@@ -64,7 +67,7 @@ def parse_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes", "y"}
 
 
-def parse_features(value: Any) -> np.ndarray:
+def parse_features(value: Any, expected_count: int) -> np.ndarray:
     """Parse the Postgres float8[] CSV representation, e.g. {1,2,3,4,5}."""
     if isinstance(value, (list, tuple, np.ndarray)):
         raw = list(value)
@@ -76,8 +79,8 @@ def parse_features(value: Any) -> np.ndarray:
             text = text[1:-1]
         raw = [part.strip().strip('"') for part in text.split(",") if part.strip()]
     vector = np.asarray([float(item) for item in raw], dtype=np.float64)
-    if vector.shape != (FEATURE_COUNT,) or not np.isfinite(vector).all():
-        raise ValueError(f"Vector de características inválido: se esperaban {FEATURE_COUNT} números finitos.")
+    if vector.shape != (expected_count,) or not np.isfinite(vector).all():
+        raise ValueError(f"Vector de características inválido: se esperaban {expected_count} números finitos.")
     return vector
 
 
@@ -130,13 +133,17 @@ def build_benign_training_baseline(rows: list[dict[str, Any]]) -> np.ndarray:
             interval_mean = float(np.mean(intervals))
             interval_std = float(np.std(intervals, ddof=0))
 
-        vectors.append([
+        vector = [
             float(len(timestamps)),
             float(unique_users),
             js_round_two(interval_mean),
             js_round_two(interval_std),
-            float(row["_timestamp"].hour),
-        ])
+        ]
+        # v2 retains the historical UTC-hour feature for reproducibility.
+        # v3 deliberately omits hour-of-day to avoid midnight/day-boundary drift.
+        if int(row["_feature_count"]) == 5:
+            vector.append(float(row["_timestamp"].hour))
+        vectors.append(vector)
 
     return np.asarray(vectors, dtype=np.float64)
 
@@ -207,6 +214,41 @@ def cluster_bootstrap_f1(
     }
 
 
+def scenario_metrics(
+    rows: list[dict[str, Any]],
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    groups: np.ndarray,
+    seed: int,
+    iterations: int,
+    scores: np.ndarray | None = None,
+) -> dict[str, Any]:
+    """Report test performance by preregistered scenario without event-level pseudoreplication."""
+    scenario_names = [
+        str(row.get("scenario") or row.get("origin") or "unknown")
+        for row in rows
+    ]
+    output: dict[str, Any] = {}
+    for scenario in sorted(set(scenario_names)):
+        indexes = np.asarray([i for i, name in enumerate(scenario_names) if name == scenario], dtype=np.int64)
+        scenario_scores = scores[indexes] if scores is not None else None
+        metrics = binary_metrics(y_true[indexes], y_pred[indexes], scenario_scores)
+        scenario_groups = groups[indexes]
+        metrics["independent_campaigns"] = int(len(np.unique(scenario_groups)))
+        metrics["unique_observed_sources"] = int(len({
+            str(rows[int(i)].get("source_ip_hash") or "")
+            for i in indexes
+            if rows[int(i)].get("source_ip_hash")
+        }))
+        metrics["benign_events"] = int(np.sum(y_true[indexes] == 0))
+        metrics["attack_events"] = int(np.sum(y_true[indexes] == 1))
+        metrics["f1_cluster_bootstrap_95ci"] = cluster_bootstrap_f1(
+            y_true[indexes], y_pred[indexes], scenario_groups, seed, iterations
+        )
+        output[scenario] = metrics
+    return output
+
+
 def latency_summary(values: list[Any]) -> dict[str, Any]:
     numeric = np.asarray(
         [float(value) for value in values if value not in (None, "") and math.isfinite(float(value))],
@@ -245,18 +287,26 @@ def load_capture_csv(path: Path) -> list[dict[str, Any]]:
     if len(experiment_ids) > 1:
         raise ValueError("El CSV mezcla varios experiment_id. Exporta un experimento cada vez.")
 
+    schemas = {row.get("feature_schema_version", "") for row in rows}
+    if len(schemas) != 1:
+        raise ValueError("El CSV mezcla esquemas de características. Exporta y evalúa un solo esquema por experimento.")
+    feature_schema = next(iter(schemas))
+    feature_count = FEATURE_SCHEMA_COUNTS.get(feature_schema)
+    if feature_count is None:
+        raise ValueError(
+            f"Esquema de características no soportado: {feature_schema!r}. "
+            f"Esquemas admitidos: {', '.join(sorted(FEATURE_SCHEMA_COUNTS))}."
+        )
+
     for row in rows:
-        if row["feature_schema_version"] != FEATURE_SCHEMA:
-            raise ValueError(
-                f"Se encontró {row['feature_schema_version']!r}; se requiere {FEATURE_SCHEMA!r}. "
-                "Reinicia la captura con la versión actual del detector."
-            )
         if row["dataset_split"] not in {"train", "validation", "test"}:
             raise ValueError("Hay eventos sin división temporal asignada. No se pueden usar en este protocolo.")
         if row["ground_truth_label"] not in {"unknown", "benign", "attack"}:
             raise ValueError("Se encontró una etiqueta de referencia desconocida.")
         row["_timestamp"] = parse_timestamp(row["occurred_at"])
-        row["_features"] = parse_features(row["features"])
+        row["_feature_count"] = feature_count
+        row["_feature_schema"] = feature_schema
+        row["_features"] = parse_features(row["features"], feature_count)
     return rows
 
 
@@ -354,6 +404,7 @@ def main() -> int:
         "event_id": [r["event_id"] for r in test_labeled_rows],
         "occurred_at": [r["occurred_at"] for r in test_labeled_rows],
         "campaign_id": [r.get("campaign_id", "") for r in test_labeled_rows],
+        "scenario": [r.get("scenario", "") for r in test_labeled_rows],
         "ground_truth_label": [r["ground_truth_label"] for r in test_labeled_rows],
     }
 
@@ -368,6 +419,9 @@ def main() -> int:
             y_test, test_pred, test_groups, args.seed, args.bootstrap
         )
         metrics["f1_cluster_bootstrap_95ci"] = bootstrap
+        metrics["by_scenario"] = scenario_metrics(
+            test_labeled_rows, y_test, test_pred, test_groups, args.seed, args.bootstrap, test_scores
+        )
         metrics["threshold_selected_on_validation"] = threshold
         metrics["validation_f1_at_selected_threshold"] = float(
             f1_score(y_val, (val_scores >= threshold).astype(np.int8), zero_division=0)
@@ -392,6 +446,9 @@ def main() -> int:
         metrics["f1_cluster_bootstrap_95ci"] = cluster_bootstrap_f1(
             y_test, predictions, test_groups, args.seed, args.bootstrap
         )
+        metrics["by_scenario"] = scenario_metrics(
+            test_labeled_rows, y_test, predictions, test_groups, args.seed, args.bootstrap
+        )
         runtime_metrics[name] = metrics
         prediction_frame[f"{name}_predicted_attack"] = predictions
 
@@ -411,6 +468,18 @@ def main() -> int:
         "test_labeled": len(test_rows),
         "test_benign": sum(r["ground_truth_label"] == "benign" for r in test_rows),
         "test_attack": sum(r["ground_truth_label"] == "attack" for r in test_rows),
+        "test_independent_campaigns": len({r.get("campaign_id") for r in test_labeled_rows if r.get("campaign_id")}),
+        "test_unique_observed_sources": len({r.get("source_ip_hash") for r in test_labeled_rows if r.get("source_ip_hash")}),
+        "test_by_scenario": {
+            scenario: {
+                "events": sum(str(r.get("scenario") or r.get("origin") or "unknown") == scenario for r in test_labeled_rows),
+                "benign": sum(str(r.get("scenario") or r.get("origin") or "unknown") == scenario and r["ground_truth_label"] == "benign" for r in test_labeled_rows),
+                "attack": sum(str(r.get("scenario") or r.get("origin") or "unknown") == scenario and r["ground_truth_label"] == "attack" for r in test_labeled_rows),
+                "campaigns": len({r.get("campaign_id") for r in test_labeled_rows if str(r.get("scenario") or r.get("origin") or "unknown") == scenario and r.get("campaign_id")}),
+                "observed_sources": len({r.get("source_ip_hash") for r in test_labeled_rows if str(r.get("scenario") or r.get("origin") or "unknown") == scenario and r.get("source_ip_hash")}),
+            }
+            for scenario in sorted({str(r.get("scenario") or r.get("origin") or "unknown") for r in test_labeled_rows})
+        },
     }
 
     input_hash = sha256_file(input_path)
@@ -423,14 +492,16 @@ def main() -> int:
         "study": "centinela_observed_authentication_events",
         "data_source": "Authentication requests captured by Centinela and persisted in Supabase",
         "synthetic_rows_allowed": False,
-        "feature_schema": FEATURE_SCHEMA,
-        "feature_names": [
-            "failed_attempts_in_120s",
-            "distinct_user_keys_in_120s",
-            "mean_interarrival_seconds",
-            "std_interarrival_seconds",
-            "utc_hour",
-        ],
+        "feature_schema": rows[0]["_feature_schema"],
+        "feature_names": (
+            [
+                "failed_attempts_in_120s",
+                "distinct_user_keys_in_120s",
+                "mean_interarrival_seconds",
+                "std_interarrival_seconds",
+            ]
+            + (["utc_hour"] if rows[0]["_feature_schema"] == "centinela-auth-features-v2" else [])
+        ),
         "experiment_ids": experiment_ids,
         "code_versions": code_versions,
         "config_versions": config_versions,

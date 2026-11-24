@@ -27,12 +27,14 @@ services:
         sync: false
       - key: CENTINELA_INGEST_TOKEN
         sync: false
+      - key: CENTINELA_LAB_AGENT_TOKEN
+        sync: false
       - key: CENTINELA_DEMO_CREDENTIALS_JSON
         sync: false
       - key: CENTINELA_VERSION
-        value: "research-capture-v1"
+        value: "centinela-v3.0.0"
       - key: CENTINELA_CONFIG_VERSION
-        value: "1"
+        value: "3"
       - key: TRUST_PROXY_HOPS
         value: 1
       - key: DURACION_BLOQUEO_SEGUNDOS

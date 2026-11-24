@@ -43,6 +43,7 @@ import { CicidsDatasetView } from './CicidsDatasetView';
 import { ReporteAcademicoView } from './ReporteAcademicoView';
 import { EmpiricalStudyPanel } from './EmpiricalStudyPanel';
 import { CentinelaWorkspace } from './CentinelaWorkspace';
+import { LabExperimentPanel } from './LabExperimentPanel';
 import { CicidsEvaluationSummary } from './cicids_parser';
 
 interface Intento {
@@ -116,7 +117,7 @@ interface EstadoModelo {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'home' | 'monitor' | 'analytics' | 'cycle_ml' | 'docs' | 'dashboard' | 'simulator' | 'dataset_cicids' | 'empirical' | 'report' | 'demos' | 'training'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'monitor' | 'analytics' | 'cycle_ml' | 'docs' | 'lab_v3' | 'dashboard' | 'simulator' | 'dataset_cicids' | 'empirical' | 'report' | 'demos' | 'training'>('home');
   const [eventos, setEventos] = useState<Intento[]>([]);
   const [metricas, setMetricas] = useState<MetricasResumen | null>(null);
   const [ipsBloqueadas, setIpsBloqueadas] = useState<Record<string, number>>({});
@@ -717,6 +718,7 @@ export default function App() {
                   { id: 'monitor', label: 'Monitor', icon: Radio },
                   { id: 'analytics', label: 'Analítica', icon: BarChart2 },
                   { id: 'cycle_ml', label: 'Ciclo de ML', icon: Cpu },
+                  { id: 'lab_v3', label: 'Laboratorio v3', icon: Server },
                   { id: 'docs', label: 'Documentación', icon: FileText },
                 ] as const).map((item) => {
                   const Icon = item.icon;
@@ -762,6 +764,7 @@ export default function App() {
         {activeTab === 'monitor' && <CentinelaWorkspace section="monitor" />}
         {activeTab === 'analytics' && <CentinelaWorkspace section="analytics" />}
         {activeTab === 'cycle_ml' && <CentinelaWorkspace section="cycle" />}
+        {activeTab === 'lab_v3' && <LabExperimentPanel />}
         {activeTab === 'docs' && <CentinelaWorkspace section="docs" />}
 
         {activeTab === 'dashboard' && (
