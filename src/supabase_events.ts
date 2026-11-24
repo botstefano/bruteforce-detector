@@ -76,6 +76,7 @@ let activeExperimentMetadata: Record<string, unknown> = {};
 let activeSplitBoundaries: { trainEndMs: number; validationEndMs: number; testEndMs: number | null } | null = null;
 let activeTrainingFrozen = false;
 let activeValidationFrozen = false;
+let activeTestExtension: Record<string, unknown> | null = null;
 
 function splitForTimestamp(timestampSeconds: number): 'unassigned' | 'train' | 'validation' | 'test' {
   if (!activeSplitBoundaries) return 'unassigned';
@@ -109,6 +110,7 @@ export function getActiveExperimentState() {
     testEndMs: activeSplitBoundaries.testEndMs,
     trainingFrozen: activeTrainingFrozen,
     validationFrozen: activeValidationFrozen,
+    testExtension: activeTestExtension ? { ...activeTestExtension } : null,
   };
 }
 
@@ -214,7 +216,8 @@ export async function persistObservedEvent(event: CapturedAuthEvent): Promise<vo
     experiment_id: activeExperimentId,
     scenario: typeof event.metadata?.scenario_id === 'string' ? event.metadata.scenario_id : event.origen,
     campaign_id: event.campaign_id ?? null,
-    dataset_split: splitForTimestamp(event.timestamp),
+    // Keep supplementary extension observations outside the immutable primary split.
+    dataset_split: typeof event.metadata?.extension_id === 'string' ? 'unassigned' : splitForTimestamp(event.timestamp),
     request_id: event.request_id ?? null,
     alerta_reglas: event.alerta_reglas,
     razon_reglas: event.razon_reglas,
@@ -374,6 +377,9 @@ export async function restoreActiveExperimentRecord() {
   activeExperimentMetadata = metadata;
   activeTrainingFrozen = metadata.training_frozen === true;
   activeValidationFrozen = metadata.validation_frozen === true;
+  activeTestExtension = metadata.test_extension && typeof metadata.test_extension === 'object' && !Array.isArray(metadata.test_extension)
+    ? { ...(metadata.test_extension as Record<string, unknown>) }
+    : null;
   const trainEndMs = typeof metadata.train_end_at === 'string' ? Date.parse(metadata.train_end_at) : NaN;
   const validationEndMs = typeof metadata.validation_end_at === 'string' ? Date.parse(metadata.validation_end_at) : NaN;
   const testEndMs = typeof metadata.test_end_at === 'string' ? Date.parse(metadata.test_end_at) : NaN;
@@ -451,6 +457,7 @@ export async function createExperimentRecord(input: {
   activeSplitBoundaries = { trainEndMs, validationEndMs, testEndMs: Number.isFinite(testEndMs) ? testEndMs : null };
   activeTrainingFrozen = false;
   activeValidationFrozen = false;
+  activeTestExtension = null;
   return data;
 }
 
@@ -650,6 +657,7 @@ export async function finishExperimentRecord(experimentId: string) {
     activeSplitBoundaries = null;
     activeTrainingFrozen = false;
     activeValidationFrozen = false;
+    activeTestExtension = null;
   }
   return data;
 }
@@ -767,6 +775,7 @@ export async function abortExperimentRecord(experimentId: string, reason: string
     activeSplitBoundaries = null;
     activeTrainingFrozen = false;
     activeValidationFrozen = false;
+    activeTestExtension = null;
   }
   return data;
 }
@@ -908,5 +917,101 @@ export async function calculateObservedMetrics(experimentId?: string | null) {
         : !bothClassesPresent
           ? 'El test aún no contiene ambas clases (benign y attack); no se publican métricas de clasificación.'
           : 'Las métricas se calculan exclusivamente sobre eventos capturados, etiquetados y reservados para el periodo de prueba.'
+  };
+}
+
+
+export async function configureActiveTestExtension(input: {
+  experimentId: string;
+  extensionId: string;
+  startAt: string;
+  endAt: string;
+  targets: { attack_rapid: number; attack_low_frequency: number };
+  rationale: string;
+}) {
+  if (!client || !hashSecret || !activeExperimentId || !activeSplitBoundaries) {
+    throw new Error('No hay un experimento activo con almacenamiento y cortes temporales válidos.');
+  }
+  if (activeExperimentId !== input.experimentId) throw new Error('El experimento solicitado no es el activo.');
+  if (!activeTrainingFrozen || !activeValidationFrozen) {
+    throw new Error('La extensión solo se admite después de congelar el entrenamiento y la validación.');
+  }
+  const originalCutoff = activeSplitBoundaries.testEndMs;
+  if (!originalCutoff || Date.now() < originalCutoff) {
+    throw new Error('La ventana original de test todavía está abierta; no se puede crear una extensión.');
+  }
+  if (activeTestExtension) throw new Error('Este experimento ya tiene una extensión complementaria registrada.');
+  const startMs = Date.parse(input.startAt);
+  const endMs = Date.parse(input.endAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) ||
+      startMs <= Date.now() || startMs < originalCutoff || endMs <= startMs) {
+    throw new Error('La ventana complementaria debe comenzar en el futuro, después del corte original, y terminar después de su inicio.');
+  }
+  if (!/^[a-f0-9-]{36}$/i.test(input.extensionId) ||
+      input.targets.attack_rapid !== 5 || input.targets.attack_low_frequency !== 4 ||
+      !input.rationale.trim()) {
+    throw new Error('El identificador, cuotas o justificación de la extensión no son válidos.');
+  }
+  const extension = {
+    extension_id: input.extensionId,
+    start_at: new Date(startMs).toISOString(),
+    end_at: new Date(endMs).toISOString(),
+    original_test_end_at: new Date(originalCutoff).toISOString(),
+    targets: { ...input.targets },
+    rationale: input.rationale.trim(),
+    collection_scope: 'supplementary_controlled_testbed_campaigns',
+    preserve_primary_test_split: true,
+    baseline_reused: true,
+    created_at: new Date().toISOString(),
+    status: 'scheduled',
+  };
+  const metadata = { ...activeExperimentMetadata, test_extension: extension };
+  const { data, error } = await client
+    .from('centinela_experiments')
+    .update({ metadata })
+    .eq('id', input.experimentId)
+    .eq('status', 'running')
+    .select('id, metadata')
+    .maybeSingle();
+  if (error) throw new Error(`No se pudo registrar la extensión complementaria: ${error.message}`);
+  if (!data) throw new Error('El experimento dejó de estar activo antes de registrar la extensión.');
+  activeExperimentMetadata = metadata;
+  activeTestExtension = extension;
+  return extension;
+}
+
+export async function calculateObservedExtensionMetrics(experimentId: string, extensionId: string) {
+  if (!experimentId || !extensionId) throw new Error('Indica experiment_id y extension_id para evaluar la extensión.');
+  const all = await fetchObservedEvents(experimentId);
+  const extensionEvents = all.filter((event) => event.metadata?.extension_id === extensionId);
+  if (!extensionEvents.length) throw new Error('No hay eventos persistidos para la extensión complementaria solicitada.');
+  const labeled = extensionEvents.filter((event) => event.ground_truth_label !== 'unknown');
+  const benign = labeled.filter((event) => event.ground_truth_label === 'benign').length;
+  const attacks = labeled.filter((event) => event.ground_truth_label === 'attack').length;
+  const mean = (values: number[]) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  return {
+    source: 'centinela_supabase_observed_events',
+    metric_scope: 'supplementary_test_extension_only',
+    experiment_id: experimentId,
+    extension_id: extensionId,
+    primary_test_split_unchanged: true,
+    primary_test_metrics_include_extension: false,
+    total_extension_events: extensionEvents.length,
+    labeled_events: labeled.length,
+    unknown_events: extensionEvents.length - labeled.length,
+    benign_events: benign,
+    attack_events: attacks,
+    methods: {
+      rules: calculateMetrics(labeled, (event) => event.alerta_reglas),
+      ml_ensemble: calculateMetrics(labeled, (event) => event.alerta_ml),
+      isolation_forest: calculateMetrics(labeled, (event) => event.alerta_iforest),
+      one_class_svm: calculateMetrics(labeled, (event) => event.alerta_ocsvm),
+      lof: calculateMetrics(labeled, (event) => event.alerta_lof),
+    },
+    mean_latency_ms: {
+      rules: mean(extensionEvents.map((event) => event.latency_rules_ms).filter(Number.isFinite)),
+      ml: mean(extensionEvents.map((event) => event.latency_ml_ms).filter(Number.isFinite)),
+      total: mean(extensionEvents.map((event) => event.latency_total_ms).filter(Number.isFinite)),
+    },
   };
 }
