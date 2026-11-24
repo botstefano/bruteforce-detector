@@ -120,12 +120,12 @@ export function LabExperimentPanel() {
   const [liveEvents, setLiveEvents] = useState<LiveEvent[]>([]);
   const [agentLogs, setAgentLogs] = useState<Array<{ agent_id: string; message: string; timestamp: string }>>([]);
   const [connected, setConnected] = useState(false);
-  const [protocolName, setProtocolName] = useState('centinela-auth-study-v4');
-  const [scenario, setScenario] = useState('automated-authentication-testbed-v4');
-  const [description, setDescription] = useState('Evaluación experimental reproducible mediante agentes automatizados en el portal autorizado de autenticación HTTP.');
-  const [trainEndAt, setTrainEndAt] = useState('2026-11-20T17:00');
-  const [validationEndAt, setValidationEndAt] = useState('2026-11-22T17:00');
-  const [testEndAt, setTestEndAt] = useState('2026-11-23T17:00');
+  const [protocolName, setProtocolName] = useState('centinela-auth-study-v5-independent');
+  const [scenario, setScenario] = useState('controlled-authentication-testbed-v5');
+  const [description, setDescription] = useState('Estudio prospectivo independiente de V4. Entrenamiento solo benigno; validación mixta para fijar criterios; test final temporalmente retenido con sesiones benignas y ataques rápidos/de baja frecuencia. Captura HTTP automatizada exclusivamente en centinela-auth-lab, un testbed autorizado. Cada experimento usa baseline, manifiestos y eventos propios; no se reutilizan eventos ni etiquetas de V4. Sin IPs suplantadas ni escenario distribuido.');
+  const [trainEndAt, setTrainEndAt] = useState('2026-11-27T22:00');
+  const [validationEndAt, setValidationEndAt] = useState('2026-11-30T22:00');
+  const [testEndAt, setTestEndAt] = useState('2026-12-04T22:00');
 
   const refresh = useCallback(async () => {
     try {
@@ -213,22 +213,28 @@ export function LabExperimentPanel() {
           validation_end_at: new Date(validationMs).toISOString(),
           test_end_at: new Date(testMs).toISOString(),
           metadata: {
-            protocol_revision: 4,
-            collection_design: 'variable_reproducible_sessions_with_phase_scheduler_v1',
+            protocol_revision: 5,
+            collection_design: 'independent_balanced_temporal_testbed_v1',
+            preregistered_target_sessions: {
+              train: { benign_mixed: 55 },
+              validation: { benign_mixed: 20, attack_rapid: 8, attack_low_frequency: 7, attack_distributed: 0 },
+              test: { benign_mixed: 30, attack_rapid: 10, attack_low_frequency: 10, attack_distributed: 0 },
+            },
+            evaluation_policy: 'validation_for_calibration_test_held_out_no_v4_event_reuse',
             generation_profile_version: 2,
             independent_campaign_manifest: true,
             generation_method: 'automated_http_agent',
             actor_type: 'automated_agent',
             testbed_scope: 'centinela-auth-lab-only',
-            phase_policy: 'train-benign-only_validation-freeze_before_test',
+            phase_policy: 'train-benign-only_validation-mixed-freeze-before-test_test-held-out',
           },
         }),
       });
       const data = await readJson(response);
-      setNotice(`Experimento V4 creado: ${data.experiment?.id || 'registrado'}. Los cortes quedaron guardados en UTC.`);
+      setNotice(`Experimento V5 creado: ${data.experiment?.id || 'registrado'}. Los tres cortes quedaron preregistrados en UTC.`);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo crear el experimento V4.');
+      setError(err instanceof Error ? err.message : 'No se pudo crear el experimento V5.');
     } finally {
       setBusy(false);
     }
@@ -269,10 +275,18 @@ export function LabExperimentPanel() {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ batch_size: 5, accounts: ['ronan', 'andy', 'stefano'] }),
+        body: JSON.stringify({
+          batch_size: 2,
+          accounts: ['ronan', 'andy', 'stefano'],
+          targets: {
+            train: { benign_mixed: 55 },
+            validation: { benign_mixed: 20, attack_rapid: 8, attack_low_frequency: 7, attack_distributed: 0 },
+            test: { benign_mixed: 30, attack_rapid: 10, attack_low_frequency: 10, attack_distributed: 0 },
+          },
+        }),
       });
       const data = await readJson(response);
-      setNotice('Recolección automática activada. El coordinador programará lotes variables y guardará el manifiesto antes de habilitar cada lote.');
+      setNotice('Plan V5 preregistrado: 55 sesiones benignas de entrenamiento; 20 benignas y 15 de ataque en validación; 30 benignas y 20 de ataque en test. Lotes de dos sesiones; cada campaña conserva su manifiesto independiente.');
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo iniciar la recolección automática.');
@@ -291,7 +305,7 @@ export function LabExperimentPanel() {
         method: 'POST',
         credentials: 'same-origin',
       }));
-      setNotice('Recolección V4 reanudada con las mismas cuotas, cuentas y parámetros preregistrados.');
+      setNotice('Recolección reanudada con las cuotas, cuentas y parámetros ya preregistrados.');
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo reanudar la recolección automática.');
@@ -402,7 +416,7 @@ export function LabExperimentPanel() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-bold text-white">Laboratorio experimental Centinela V4</h2>
+          <h2 className="text-lg font-bold text-white">Laboratorio experimental Centinela V5</h2>
           <p className="mt-1 text-xs text-slate-400">Sesiones variables reproducibles, campañas HTTP y recolección automática por fases.</p>
         </div>
         <Pill tone={connected ? 'good' : 'warning'}>{connected ? 'Socket conectado' : 'Conexión en recuperación'}</Pill>
@@ -413,8 +427,8 @@ export function LabExperimentPanel() {
 
       {!snapshot?.experiment_id && (
         <div className={card}>
-          <h3 className="text-sm font-bold text-white">Crear experimento Centinela V4</h3>
-          <p className="text-xs text-slate-400">Define y preregistra los tres cortes temporales. Las fechas se guardarán en UTC; el horario de los campos corresponde al navegador.</p>
+          <h3 className="text-sm font-bold text-white">Crear experimento independiente Centinela V5</h3>
+          <p className="text-xs text-slate-400">V5 no reutiliza eventos de V4. Define los tres cortes temporales antes de iniciar; las fechas se guardan en UTC y los campos usan la hora local del navegador.</p>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="space-y-1 text-xs text-slate-300">
               <span className="font-semibold">Nombre del protocolo</span>
@@ -441,7 +455,7 @@ export function LabExperimentPanel() {
             <span className="font-semibold">Descripción y alcance</span>
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={2} maxLength={1000} className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white"/>
           </label>
-          <p className="text-[11px] text-amber-300">Cortes del protocolo V4: entrenamiento 20 nov., validación 22 nov. y test 23 nov. de 2026, a las 17:00 (hora de Perú). Son los límites originales registrados; no se deben mover.</p>
+          <p className="text-[11px] text-amber-300">Cortes propuestos para V5 (hora de Perú): entrenamiento 27 nov. 2026, 22:00; validación 30 nov. 2026, 22:00; test 4 dic. 2026, 22:00. Revisa estos valores antes de crear el protocolo; después no se deben mover.</p>
           <button type="button" onClick={() => void createExperiment()} disabled={busy || !protocolName.trim() || !scenario.trim()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">
             {busy ? 'Creando…' : 'Crear protocolo y habilitar laboratorio'}
           </button>
@@ -497,7 +511,7 @@ export function LabExperimentPanel() {
               {snapshot.automation?.enabled ? 'Automatización activa' : snapshot.automation?.status === 'completed' ? 'Objetivos completados' : 'Automatización detenida'}
             </Pill>
           </div>
-          <p className="text-xs text-slate-300">Protocolo actual: V{snapshot.protocol_revision ?? '—'}. Cuotas V4 ajustadas al plazo: entrenamiento 55 benignas; validación 8 benignas, 8 rápidas y 7 de baja frecuencia; test 5 benignas, 5 rápidas y 4 de baja frecuencia. El escenario distribuido queda excluido explícitamente por ahora: solo hay una IP de salida verificada.</p>
+          <p className="text-xs text-slate-300">Protocolo actual: V{snapshot.protocol_revision ?? '—'}. Cuotas V5: entrenamiento 55 benignas; validación 20 benignas, 8 rápidas y 7 de baja frecuencia; test 30 benignas, 10 rápidas y 10 de baja frecuencia. Lotes de dos sesiones para conservar más campañas independientes. El escenario distribuido queda excluido: solo hay una IP de salida verificada.</p>
           {snapshot.automation_progress && (
             <div className="mt-3 grid gap-2 md:grid-cols-3">
               {Object.entries(snapshot.automation_progress).map(([phase, scenarios]) => (
