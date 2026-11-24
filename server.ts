@@ -22,6 +22,7 @@ import {
   getExperimentMetadata,
   persistLabCollectionPlan,
   calculateObservedMetrics,
+  calculateObservedExtensionMetrics,
   checkSupabaseConnection,
   createExperimentRecord,
   finishExperimentRecord,
@@ -492,8 +493,13 @@ async function procesarIntentoCapturado(
   if (experimentState && Date.now() >= experimentState.validationEndMs && !experimentState.validationFrozen) {
     throw new Error('La captura del test está bloqueada hasta congelar la configuración después de la validación.');
   }
-  if (experimentState?.testEndMs && Date.now() >= experimentState.testEndMs) {
-    throw new Error('Se alcanzó el corte final preregistrado del experimento; no se aceptan nuevos eventos.');
+  const extension = experimentState?.testExtension as Record<string, unknown> | null;
+  const extensionStart = extension && typeof extension.start_at === 'string' ? Date.parse(extension.start_at) : NaN;
+  const extensionEnd = extension && typeof extension.end_at === 'string' ? Date.parse(extension.end_at) : NaN;
+  const extensionWindowActive = Number.isFinite(extensionStart) && Number.isFinite(extensionEnd) &&
+    Date.now() >= extensionStart && Date.now() < extensionEnd;
+  if (experimentState?.testEndMs && Date.now() >= experimentState.testEndMs && !extensionWindowActive) {
+    throw new Error('Se alcanzó el corte final del test original; solo se admiten capturas dentro de una extensión complementaria preregistrada.');
   }
   if (isIP(ip) === 0) throw new Error('No se pudo determinar una IP de origen válida y confiable.');
   const { ipKey, userKey } = getAnalyticsIdentifiers(ip, usuario);
@@ -686,6 +692,11 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
   }
 
   const requireV4Fields = Number(savedManifest.generation_profile_version) >= 2;
+  const isExtensionCampaign = campaign.phase === 'test_extension';
+  const manifestExtensionId = typeof savedManifest.extension_id === 'string' ? savedManifest.extension_id : null;
+  if (isExtensionCampaign && (!manifestExtensionId || campaign.extensionId !== manifestExtensionId || !/^[a-f0-9-]{36}$/i.test(manifestExtensionId))) {
+    throw new Error('La extensión no coincide con el identificador independiente almacenado en su manifiesto.');
+  }
   const labelByRun = new Map<string, {
     label: 'benign' | 'attack';
     scenarioId: string;
@@ -761,8 +772,12 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
       }
       const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
       if (requireV4Fields) {
-        if (event.is_simulated || event.dataset_split !== campaign.phase) {
-          throw new Error(`El evento ${eventId} es simulado o quedó fuera de la fase temporal de su campaña.`);
+        const expectedSplit = isExtensionCampaign ? 'unassigned' : campaign.phase;
+        if (event.is_simulated || event.dataset_split !== expectedSplit) {
+          throw new Error(`El evento ${eventId} es simulado o quedó fuera de la partición permitida para su campaña.`);
+        }
+        if (isExtensionCampaign && (eventMetadata.extension_id !== manifestExtensionId || eventMetadata.campaign_phase !== 'test_extension')) {
+          throw new Error(`El evento ${eventId} no tiene la procedencia de extensión complementaria esperada.`);
         }
         if (eventMetadata.run_id !== job.runId ||
             eventMetadata.scenario_id !== job.scenarioId ||
@@ -910,9 +925,37 @@ async function tickLabAutomation(): Promise<void> {
     }
 
     const now = Date.now();
-    let phase: 'train' | 'validation' | 'test' =
-      now < experiment.trainEndMs ? 'train' :
-      now < experiment.validationEndMs ? 'validation' : 'test';
+    const extension = metadata.test_extension && typeof metadata.test_extension === 'object' && !Array.isArray(metadata.test_extension)
+      ? metadata.test_extension as Record<string, unknown>
+      : null;
+    const extensionId = typeof extension?.extension_id === 'string' ? extension.extension_id : null;
+    const extensionStartMs = typeof extension?.start_at === 'string' ? Date.parse(extension.start_at) : NaN;
+    const extensionEndMs = typeof extension?.end_at === 'string' ? Date.parse(extension.end_at) : NaN;
+    if (extension && (!extensionId || !Number.isFinite(extensionStartMs) || !Number.isFinite(extensionEndMs) || extensionEndMs <= extensionStartMs)) {
+      updateLabAutomationStatus({ enabled: false, status: 'paused', lastError: 'La extensión complementaria tiene metadatos de ventana inválidos; no se programarán tareas.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+    if (extension && now < extensionStartMs) {
+      updateLabAutomationStatus({ lastError: 'Esperando el inicio preregistrado de la extensión complementaria; el test original permanece cerrado.' });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+    if (extension && now >= extensionEndMs) {
+      const extensionComplete = isLabAutomationPhaseComplete(experiment.id, 'test_extension');
+      updateLabAutomationStatus({
+        enabled: false,
+        status: extensionComplete ? 'completed' : 'paused',
+        lastError: extensionComplete ? null : 'La ventana complementaria terminó sin completar todas sus cuotas; no se moverán sus fechas.',
+      });
+      await persistLabAutomationState(experiment.id);
+      return;
+    }
+    const extensionActive = Boolean(extension && now >= extensionStartMs && now < extensionEndMs);
+    let phase: 'train' | 'validation' | 'test' | 'test_extension' = extensionActive
+      ? 'test_extension'
+      : now < experiment.trainEndMs ? 'train'
+      : now < experiment.validationEndMs ? 'validation' : 'test';
 
     // Freeze the benign-only baseline automatically at the training cutoff,
     // but only if the preregistered training session target was completed and labeled.
@@ -961,7 +1004,7 @@ async function tickLabAutomation(): Promise<void> {
 
     // Test cutoff is final: never schedule work beyond it, and mark the plan
     // complete only if every independent test target was met and labeled.
-    if (experiment.testEndMs && now >= experiment.testEndMs) {
+    if (!extension && experiment.testEndMs && now >= experiment.testEndMs) {
       if (metadata.training_frozen === true && metadata.validation_frozen === true &&
           isLabAutomationPhaseComplete(experiment.id, 'test')) {
         completeLabAutomation();
@@ -981,7 +1024,7 @@ async function tickLabAutomation(): Promise<void> {
       await persistLabAutomationState(experiment.id);
       return;
     }
-    if (phase === 'test' && metadata.validation_frozen !== true) {
+    if ((phase === 'test' || phase === 'test_extension') && metadata.validation_frozen !== true) {
       updateLabAutomationStatus({ lastError: 'En espera: la validación debe congelarse antes de iniciar el test independiente.' });
       await persistLabAutomationState(experiment.id);
       return;
@@ -1019,7 +1062,9 @@ async function tickLabAutomation(): Promise<void> {
       ? experiment.trainEndMs
       : phase === 'validation'
         ? experiment.validationEndMs
-        : experiment.testEndMs;
+        : phase === 'test_extension'
+          ? extensionEndMs
+          : experiment.testEndMs;
 
     const { campaign, manifest } = createLabCampaign({
       experimentId: experiment.id,
@@ -1030,6 +1075,7 @@ async function tickLabAutomation(): Promise<void> {
       phase,
       phaseEndAtMs,
       scheduledByAutomation: true,
+      ...(phase === 'test_extension' && extensionId ? { extensionId } : {}),
     });
     const plannedJobs = (getLabSnapshot(experiment.id).campaigns as Array<Record<string, unknown>>)
       .find((item) => item.campaign_id === campaign.campaignId)?.jobs as Array<Record<string, unknown>>;
@@ -1061,7 +1107,7 @@ async function tickLabAutomation(): Promise<void> {
       await saveLabCoordinatorState(experiment.id, () => serializeLabCoordinatorState(experiment.id));
       updateLabAutomationStatus({ lastError: null, recoveryPending: false });
       await persistLabAutomationState(experiment.id);
-      console.log(`Recolección automática: campaña ${campaign.campaignId}, fase ${phase}, escenario ${batch.scenarioId}, ${batch.repetitions} sesiones.`);
+      console.log(`Recolección automática: campaña ${campaign.campaignId}, fase ${phase}, escenario ${batch.scenarioId}, ${batch.repetitions} sesiones${phase === 'test_extension' ? `, extensión ${extensionId}` : ''}.`);
     } catch (error) {
       updateLabCampaign(campaign.campaignId, 'stop');
       throw error;
@@ -1595,6 +1641,10 @@ app.post('/registrar_intento', async (req: Request, res: Response) => {
       ...(actorType ? { actor_type: actorType } : {}),
       ...(generationMethod ? { generation_method: generationMethod } : {}),
       ...(jobId ? { job_id: jobId, attempt_index: attemptIndex } : {}),
+      ...(hasLabMetadata ? { campaign_phase: (getLabJobCaptureContext(agentId, jobId, attemptIndex).phase) } : {}),
+      ...(hasLabMetadata && getLabJobCaptureContext(agentId, jobId, attemptIndex).extensionId
+        ? { extension_id: getLabJobCaptureContext(agentId, jobId, attemptIndex).extensionId }
+        : {}),
     } : {};
     const evento = hasLabMetadata && labRequestId
       ? await procesarIntentoCapturadoIdempotente(
@@ -2020,6 +2070,18 @@ app.get('/api/dataset/capturado', requiereAdmin, async (req: Request, res: Respo
   } catch (error) {
     const message = error instanceof Error ? error.message : 'No se pudo exportar el conjunto de datos.';
     return res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/experimentos/metricas_extension', requiereAdmin, async (req: Request, res: Response) => {
+  try {
+    const experimentId = typeof req.query.experiment_id === 'string' ? req.query.experiment_id : '';
+    const extensionId = typeof req.query.extension_id === 'string' ? req.query.extension_id : '';
+    if (!experimentId || !extensionId) return res.status(400).json({ error: 'Se requieren experiment_id y extension_id.' });
+    return res.json(await calculateObservedExtensionMetrics(experimentId, extensionId));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'No se pudieron calcular las métricas de la extensión.';
+    return res.status(400).json({ error: message });
   }
 });
 
