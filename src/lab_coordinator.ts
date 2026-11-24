@@ -1241,7 +1241,7 @@ export function getLabAutomationProgress(experimentId: string): Record<string, R
   if (!plan || plan.experimentId !== experimentId) return null;
 
   const result: Record<string, Record<string, { completed: number; target: number }>> = {};
-  for (const phase of ['train', 'validation', 'test', 'test_extension'] as const {
+  for (const phase of ['train', 'validation', 'test', 'test_extension'] as const) {
     result[phase] = {};
     const targets = plan.targets[phase] ?? {};
     const phaseCampaigns = [...campaigns.values()].filter(
