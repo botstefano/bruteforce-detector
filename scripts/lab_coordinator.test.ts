@@ -4,6 +4,9 @@ import assert from 'node:assert/strict';
 import {
   activateLabCampaign,
   claimNextLabJob,
+  configureLabAutomation,
+  configureLabTestExtension,
+  getLabJobCaptureContext,
   completeLabJob,
   createLabCampaign,
   getLabCampaignForLabeling,
@@ -166,4 +169,62 @@ test('no acepta repeticiones fuera del rango preregistrado', () => {
     phase: 'train',
     repetitions: 0,
   }), /repetitions debe ser un entero entre 1 y 5/);
+});
+
+
+test('la extensión complementaria conserva una fase y un manifiesto independientes', () => {
+  const prefix = unique();
+  const [agentId] = registerAgents(prefix, 1);
+  const experimentId = unique();
+  const extensionId = randomUUID();
+  const { campaign, manifest } = createLabCampaign({
+    experimentId,
+    targetAccount: 'ronan',
+    scenarioIds: ['attack_rapid'],
+    phase: 'test_extension',
+    extensionId,
+    scheduledByAutomation: true,
+    repetitions: 1,
+    phaseEndAtMs: Date.now() + 6 * 60 * 60_000,
+  });
+  assert.equal(campaign.phase, 'test_extension');
+  assert.equal(campaign.extensionId, extensionId);
+  assert.equal(manifest.phase, 'test_extension');
+  assert.equal(manifest.extension_id, extensionId);
+  assert.equal(manifest.protocol, 'centinela-auth-study-v4-supplementary-test-extension');
+
+  activateLabCampaign(campaign.campaignId);
+  const task = claimNextLabJob(agentId);
+  assert.ok(task);
+  const context = getLabJobCaptureContext(agentId, String(task.job_id), 0);
+  assert.equal(context.phase, 'test_extension');
+  assert.equal(context.extensionId, extensionId);
+});
+
+test('la configuración de extensión añade cuotas separadas sin cambiar objetivos originales', () => {
+  const experimentId = unique();
+  const originalPlan = configureLabAutomation({
+    experimentId,
+    batchSize: 5,
+    targets: {
+      train: { benign_mixed: 55 },
+      validation: { benign_mixed: 8, attack_rapid: 8, attack_low_frequency: 7, attack_distributed: 0 },
+      test: { benign_mixed: 5, attack_rapid: 5, attack_low_frequency: 4, attack_distributed: 0 },
+    },
+  });
+  const extensionId = randomUUID();
+  const plan = configureLabTestExtension({
+    experimentId,
+    extensionId,
+    targets: { attack_rapid: 5, attack_low_frequency: 4 },
+  });
+  assert.equal(plan.enabled, true);
+  assert.equal(plan.status, 'running');
+  assert.deepEqual(plan.targets.test, originalPlan.targets.test);
+  assert.deepEqual(plan.targets.test_extension, { attack_rapid: 5, attack_low_frequency: 4 });
+  assert.throws(() => configureLabTestExtension({
+    experimentId,
+    extensionId: randomUUID(),
+    targets: { attack_rapid: 5, attack_low_frequency: 4 },
+  }), /Ya existe un plan de extensión/);
 });
