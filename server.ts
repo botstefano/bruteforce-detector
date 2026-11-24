@@ -692,6 +692,11 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
   }
 
   const requireV4Fields = Number(savedManifest.generation_profile_version) >= 2;
+  const isExtensionCampaign = campaign.phase === 'test_extension';
+  const manifestExtensionId = typeof savedManifest.extension_id === 'string' ? savedManifest.extension_id : null;
+  if (isExtensionCampaign && (!manifestExtensionId || campaign.extensionId !== manifestExtensionId || !/^[a-f0-9-]{36}$/i.test(manifestExtensionId))) {
+    throw new Error('La extensión no coincide con el identificador independiente almacenado en su manifiesto.');
+  }
   const labelByRun = new Map<string, {
     label: 'benign' | 'attack';
     scenarioId: string;
@@ -767,8 +772,12 @@ async function labelLabCampaignFromManifest(campaignId: string): Promise<{ label
       }
       const eventMetadata = (event.metadata ?? {}) as Record<string, unknown>;
       if (requireV4Fields) {
-        if (event.is_simulated || event.dataset_split !== campaign.phase) {
-          throw new Error(`El evento ${eventId} es simulado o quedó fuera de la fase temporal de su campaña.`);
+        const expectedSplit = isExtensionCampaign ? 'unassigned' : campaign.phase;
+        if (event.is_simulated || event.dataset_split !== expectedSplit) {
+          throw new Error(`El evento ${eventId} es simulado o quedó fuera de la partición permitida para su campaña.`);
+        }
+        if (isExtensionCampaign && (eventMetadata.extension_id !== manifestExtensionId || eventMetadata.campaign_phase !== 'test_extension')) {
+          throw new Error(`El evento ${eventId} no tiene la procedencia de extensión complementaria esperada.`);
         }
         if (eventMetadata.run_id !== job.runId ||
             eventMetadata.scenario_id !== job.scenarioId ||
