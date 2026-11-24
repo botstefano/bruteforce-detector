@@ -490,7 +490,7 @@ export function LabExperimentPanel() {
               <button type="button" disabled={busy} onClick={() => void finishExperiment()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">Finalizar experimento</button>
             </div>
           )}
-          {snapshot.protocol_revision !== 4 && Date.now() >= snapshot.experiment.validationEndMs && snapshot.experiment.trainingFrozen && !snapshot.experiment.validationFrozen && (
+          {snapshot.protocol_revision !== null && snapshot.protocol_revision < 4 && Date.now() >= snapshot.experiment.validationEndMs && snapshot.experiment.trainingFrozen && !snapshot.experiment.validationFrozen && (
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-[11px] text-amber-300">Revisa las métricas y etiquetas de validación. Al congelar, el sistema registrará el código y versión de configuración antes de permitir campañas de test.</p>
               <button type="button" disabled={busy} onClick={() => void freezeValidation()} className="rounded-xl bg-amber-600 px-4 py-3 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-40">Congelar configuración de validación</button>
@@ -505,7 +505,7 @@ export function LabExperimentPanel() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-bold text-white">Recolección científica automática</h3>
-              <p className="mt-1 text-xs text-slate-400">El planificador crea lotes de hasta cinco sesiones, rota las cuentas de laboratorio, distribuye horarios, deja pausas aleatorias de 8–25 minutos entre sesiones y espera a que cada campaña termine antes de continuar.</p>
+              <p className="mt-1 text-xs text-slate-400">El planificador V5 crea lotes de hasta dos sesiones, rota las cuentas de laboratorio, distribuye horarios, deja pausas aleatorias de 8–25 minutos entre sesiones y espera a que cada campaña termine antes de continuar.</p>
             </div>
             <Pill tone={snapshot.automation?.enabled ? 'good' : snapshot.automation?.status === 'completed' ? 'good' : 'warning'}>
               {snapshot.automation?.enabled ? 'Automatización activa' : snapshot.automation?.status === 'completed' ? 'Objetivos completados' : 'Automatización detenida'}
@@ -531,13 +531,13 @@ export function LabExperimentPanel() {
           )}
           {snapshot.automation?.lastError && <p role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">{snapshot.automation.lastError}</p>}
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={busy || snapshot.protocol_revision !== 4 || snapshot.automation !== null && snapshot.automation !== undefined} onClick={() => void startAutomation()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">Configurar y empezar V4</button>
+            <button type="button" disabled={busy || !snapshot.protocol_revision || snapshot.protocol_revision < 4 || snapshot.automation !== null && snapshot.automation !== undefined} onClick={() => void startAutomation()} className="rounded-xl bg-cyan-600 px-4 py-3 text-xs font-bold text-white hover:bg-cyan-500 disabled:opacity-40">Configurar y empezar V5</button>
             {snapshot.automation?.status === 'paused' && !snapshot.automation.enabled && (
-              <button type="button" disabled={busy} onClick={() => void resumeAutomation()} className="rounded-xl bg-amber-600 px-4 py-3 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-40">Reanudar plan V4</button>
+              <button type="button" disabled={busy} onClick={() => void resumeAutomation()} className="rounded-xl bg-amber-600 px-4 py-3 text-xs font-bold text-white hover:bg-amber-500 disabled:opacity-40">Reanudar plan V5</button>
             )}
             <button type="button" disabled={busy || snapshot.automation?.enabled !== true} onClick={() => void stopAutomation()} className="rounded-xl border border-rose-500/30 px-4 py-3 text-xs font-bold text-rose-300 disabled:opacity-40">Pausar planificación</button>
           </div>
-          {snapshot.protocol_revision !== 4 && <p className="text-[11px] text-amber-300">El V3 fue descartado como piloto y sus eventos no se reutilizarán. El nuevo protocolo V4 debe crearse desde cero.</p>}
+          {snapshot.protocol_revision !== null && snapshot.protocol_revision < 4 && <p className="text-[11px] text-amber-300">Los protocolos anteriores a V4 no admiten esta automatización. Crea el protocolo V5 desde cero; no se reutilizarán eventos anteriores.</p>}
         </div>
       )}
 
