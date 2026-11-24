@@ -7,7 +7,7 @@ export type LabScenarioId =
   | 'attack_distributed';
 
 type JobStatus = 'queued' | 'assigned' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
-export type ExperimentPhase = 'train' | 'validation' | 'test';
+export type ExperimentPhase = 'train' | 'validation' | 'test' | 'test_extension';
 
 interface LabAgent {
   agentId: string;
@@ -70,6 +70,7 @@ interface LabCampaign {
   scenarioIds: LabScenarioId[];
   repetitions: number;
   phase: ExperimentPhase;
+  extensionId?: string;
   jobIds: string[];
   manifestPersisted: boolean;
   manifest: Record<string, unknown>;
@@ -361,6 +362,8 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
   egressIpHash: string;
   deadlineAt: number | null;
   deadlineExpired: boolean;
+  phase: ExperimentPhase;
+  extensionId: string | null;
 } {
   const job = jobs.get(jobId);
   const agent = agents.get(agentId);
@@ -375,6 +378,8 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
       attemptIndex < 0 || attemptIndex >= job.outcomes.length) {
     throw new Error('El índice de intento no coincide con el progreso confirmado de la tarea.');
   }
+  const campaign = campaigns.get(job.campaignId);
+  if (!campaign) throw new Error('La campaña de la tarea no existe.');
   return {
     campaignId: job.campaignId,
     runId: job.runId,
@@ -384,6 +389,8 @@ export function getLabJobCaptureContext(agentId: string, jobId: string, attemptI
     egressIpHash: agent.egressIpHash,
     deadlineAt: job.deadlineAt,
     deadlineExpired: job.deadlineAt !== null && Date.now() >= job.deadlineAt,
+    phase: campaign.phase,
+    extensionId: campaign.extensionId ?? null,
   };
 }
 
@@ -468,6 +475,7 @@ export function createLabCampaign(input: {
   repetitions?: number;
   scheduledByAutomation?: boolean;
   phaseEndAtMs?: number | null;
+  extensionId?: string;
 }): { campaign: LabCampaign; manifest: Record<string, unknown> } {
   const now = Date.now();
   const scenarioIds = [...new Set(input.scenarioIds.filter(isScenarioId))];
@@ -483,8 +491,11 @@ export function createLabCampaign(input: {
   if (scenarioIds.length === 0 || scenarioIds.length !== input.scenarioIds.length) {
     throw new Error('Selecciona uno o más escenarios válidos del catálogo experimental.');
   }
-  if (!['train', 'validation', 'test'].includes(input.phase)) {
+  if (!['train', 'validation', 'test', 'test_extension'].includes(input.phase)) {
     throw new Error('La fase experimental no es válida.');
+  }
+  if (input.phase === 'test_extension' && !/^[a-f0-9-]{36}$/i.test(input.extensionId || '')) {
+    throw new Error('La extensión de test requiere un extension_id UUID válido.');
   }
   if (input.phase === 'train' && scenarioIds.some((scenarioId) => scenarioId !== 'benign_mixed')) {
     throw new Error('Durante entrenamiento solo se permite el escenario benigno mixto.');
@@ -614,15 +625,19 @@ export function createLabCampaign(input: {
     scenarioIds,
     repetitions,
     phase: input.phase,
+    ...(input.extensionId ? { extensionId: input.extensionId } : {}),
     jobIds,
     manifestPersisted: false,
     scheduledByAutomation: input.scheduledByAutomation === true,
     labelsAppliedAt: null,
     manifest: {
-      protocol: input.scheduledByAutomation ? 'centinela-auth-study-v4-empirical' : 'centinela-auth-study-v3-compatible',
+      protocol: input.phase === 'test_extension'
+        ? 'centinela-auth-study-v4-supplementary-test-extension'
+        : input.scheduledByAutomation ? 'centinela-auth-study-v4-empirical' : 'centinela-auth-study-v3-compatible',
       campaign_id: campaignId,
       experiment_id: input.experimentId,
       phase: input.phase,
+      ...(input.extensionId ? { extension_id: input.extensionId } : {}),
       created_at: new Date(now).toISOString(),
       target_account: targetAccounts[0],
       target_accounts: [...targetAccounts],
@@ -630,7 +645,9 @@ export function createLabCampaign(input: {
       truth_source: 'predefined_authorized_campaign_manifest',
       generation_profile_version: input.scheduledByAutomation ? 2 : 1,
       scheduling_mode: input.scheduledByAutomation ? 'automatic_phase_scheduler' : 'manual_campaign',
-      note: 'Cada sesión tiene semilla reproducible, secuencia de resultados e intervalos planificados registrados en este manifiesto. La etiqueta esperada se conserva fuera del detector y nunca se envía en las solicitudes de autenticación. Los eventos son transacciones HTTP ejecutadas por agentes en un testbed controlado, no sesiones humanas espontáneas.',
+      note: input.phase === 'test_extension'
+        ? 'Extensión exploratoria complementaria, con ventana y cuotas propias preregistradas después del cierre del test original. No modifica ni reetiqueta el test original; sus eventos se almacenan sin split primario y se identifican mediante extension_id. Las etiquetas provienen del manifiesto autorizado independiente.'
+        : 'Cada sesión tiene semilla reproducible, secuencia de resultados e intervalos planificados registrados en este manifiesto. La etiqueta esperada se conserva fuera del detector y nunca se envía en las solicitudes de autenticación. Los eventos son transacciones HTTP ejecutadas por agentes en un testbed controlado, no sesiones humanas espontáneas.',
     },
   };
   campaigns.set(campaignId, campaign);
@@ -682,7 +699,7 @@ export function configureLabAutomation(input: {
     (account): account is typeof allowedAccounts[number] => allowedAccounts.includes(account as typeof allowedAccounts[number])
   ))];
   if (!accounts.length) throw new Error('Configura al menos una cuenta de laboratorio autorizada.');
-  const targets: LabAutomationPlan['targets'] = { train: {}, validation: {}, test: {} };
+  const targets: LabAutomationPlan['targets'] = { train: {}, validation: {}, test: {}, test_extension: {} };
   for (const phase of ['train', 'validation', 'test'] as const) {
     const phaseTargets = input.targets[phase] ?? {};
     for (const [scenario, rawCount] of Object.entries(phaseTargets)) {
@@ -778,6 +795,46 @@ export function resumeLabAutomation(experimentId: string): LabAutomationPlan {
     accounts: [...labAutomationPlan.accounts],
     targets: structuredClone(labAutomationPlan.targets),
   };
+}
+
+export function configureLabTestExtension(input: {
+  experimentId: string;
+  extensionId: string;
+  targets: Partial<Record<LabScenarioId, number>>;
+}): LabAutomationPlan {
+  if (!labAutomationPlan || labAutomationPlan.experimentId !== input.experimentId) {
+    throw new Error('No existe un plan V4 persistido para este experimento.');
+  }
+  if (labAutomationPlan.status === 'completed') {
+    throw new Error('El plan original ya está completado y no admite extensiones.');
+  }
+  if (!/^[a-f0-9-]{36}$/i.test(input.extensionId)) {
+    throw new Error('La extensión requiere un identificador UUID válido.');
+  }
+  if (Object.keys(labAutomationPlan.targets.test_extension ?? {}).length > 0) {
+    throw new Error('Ya existe un plan de extensión de test; sus cuotas son inmutables.');
+  }
+  const allowed: LabScenarioId[] = ['attack_rapid', 'attack_low_frequency'];
+  const targets: Partial<Record<LabScenarioId, number>> = {};
+  for (const [scenario, count] of Object.entries(input.targets)) {
+    if (!allowed.includes(scenario as LabScenarioId) || !Number.isInteger(count) || (count ?? -1) < 0 || (count ?? 0) > 10) {
+      throw new Error('La extensión solo permite cuotas enteras acotadas de ataque rápido y baja frecuencia.');
+    }
+    targets[scenario as LabScenarioId] = count;
+  }
+  if (targets.attack_rapid !== 5 || targets.attack_low_frequency !== 4) {
+    throw new Error('La extensión V4 requiere exactamente cinco sesiones rápidas y cuatro de baja frecuencia.');
+  }
+  labAutomationPlan = {
+    ...labAutomationPlan,
+    targets: { ...labAutomationPlan.targets, test_extension: targets },
+    enabled: true,
+    status: 'running',
+    lastError: null,
+    recoveryPending: false,
+    updatedAt: new Date().toISOString(),
+  };
+  return { ...labAutomationPlan, accounts: [...labAutomationPlan.accounts], targets: structuredClone(labAutomationPlan.targets) };
 }
 
 export function getLabAutomationPlan(): LabAutomationPlan | null {
@@ -1184,7 +1241,7 @@ export function getLabAutomationProgress(experimentId: string): Record<string, R
   if (!plan || plan.experimentId !== experimentId) return null;
 
   const result: Record<string, Record<string, { completed: number; target: number }>> = {};
-  for (const phase of ['train', 'validation', 'test'] as const) {
+  for (const phase of ['train', 'validation', 'test', 'test_extension'] as const {
     result[phase] = {};
     const targets = plan.targets[phase] ?? {};
     const phaseCampaigns = [...campaigns.values()].filter(
